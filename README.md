@@ -31,7 +31,7 @@ The output will be under `release/`, including an Apple Silicon `.dmg` and a `.z
 - Interactive 3D orbit and zoom; camera presets and rotation/scale sliders
 - Screenshot replacement from PNG/JPG/WebP via file picker or drag/drop
 - Four device finishes, five background presets, lighting adjustment
-- High-resolution WebGL PNG export: portrait, square, landscape, app store portrait
+- High-resolution WebGL PNG export: TikTok/Shorts, Reels, Instagram Feed, YouTube, Apple App Store, Google Play sizes
 - Save/open local `.mockup.json` project, including screenshot image data
 - Native macOS open/save dialogs in Electron; browser-download fallback
 - Keyboard shortcuts: Cmd/Ctrl+S, Cmd/Ctrl+O, Cmd/Ctrl+E
@@ -76,6 +76,21 @@ mockup-studio/
 - Multiple devices, layers, templates and text overlays
 - Better aspect-aware camera composition and crop controls
 - Automated project recovery / autosave
+
+## Pricing & checkout
+
+Plans and “what you get” live in `shared/pricing.ts` (Free £0 · Pro £49 · Pro Max £99 · Update Pass £29/yr). Website and app both import that file.
+
+To take payments, copy `.env.example` to `.env.local` (and `website/.env.local`) and set Lemon Squeezy / Paddle / Stripe Payment Link URLs:
+
+```bash
+cp .env.example .env.local
+cp .env.example website/.env.local
+# fill VITE_CHECKOUT_PRO_URL, VITE_CHECKOUT_PRO_MAX_URL, VITE_CHECKOUT_UPDATE_PASS_URL
+# fill VITE_DOWNLOAD_MAC_URL with the public .dmg link after npm run dist:mac
+```
+
+Configure the store’s success URL to `/thanks?plan=pro` (or `pro_max`). Deliver license keys as `MS-PRO-…` / `MS-PROMAX-…` so the desktop app can activate them. Until checkout URLs are set, Buy buttons fall back to `mailto:` via `VITE_SALES_EMAIL`. Until `VITE_DOWNLOAD_MAC_URL` is set, Download buttons scroll to the landing `#download` section.
 
 ## Privacy and licensing
 

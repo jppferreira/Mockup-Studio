@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  ChevronDown, ChevronUp, Diamond, Gauge, KeyRound, Pause, Play, Plus,
-  Repeat, SkipBack, Sparkles, Trash2, ZoomIn, ZoomOut,
+  Diamond, Gauge, KeyRound, Music2, PanelBottomClose, PanelBottomOpen, Pause, Play, Plus,
+  Repeat, SkipBack, Sparkles, Trash2, X, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import {
   createTrack,
@@ -40,18 +40,120 @@ interface Props {
   onPlayingChange: (playing: boolean) => void;
   selectedDevice: DeviceInstance;
   devices: DeviceInstance[];
+  soundtrackName?: string | null;
+  soundtrackData?: string | null;
+  soundtrackStart?: number;
+  soundtrackOffset?: number;
+  soundtrackDuration?: number;
+  soundtrackFadeIn?: number;
+  soundtrackFadeOut?: number;
+  onSoundtrackChange?: (next: { name: string; dataUrl: string } | null) => void;
+  onSoundtrackPatch?: (patch: {
+    soundtrackStart?: number;
+    soundtrackOffset?: number;
+    soundtrackDuration?: number;
+    soundtrackFadeIn?: number;
+    soundtrackFadeOut?: number;
+  }) => void;
 }
+
+const MUSIC_MIN_DUR = 0.15;
+const MUSIC_FADE_MAX = 8;
+
+function soundtrackVolumeAt(localTime: number, clipDuration: number, fadeIn: number, fadeOut: number) {
+  let volume = 1;
+  if (fadeIn > 0) volume = Math.min(volume, Math.min(1, Math.max(0, localTime / fadeIn)));
+  if (fadeOut > 0) {
+    const start = Math.max(0, clipDuration - fadeOut);
+    if (localTime >= start) volume = Math.min(volume, Math.max(0, (clipDuration - localTime) / fadeOut));
+  }
+  return Math.max(0, Math.min(1, volume));
+}
+
+function clampMusicPlacement(
+  start: number,
+  offset: number,
+  duration: number,
+  timelineDur: number,
+  sourceDur: number,
+) {
+  const src = sourceDur > 0 ? sourceDur : timelineDur;
+  let off = Math.max(0, offset);
+  let dur = Math.max(MUSIC_MIN_DUR, duration);
+  if (src > 0) {
+    off = Math.min(off, Math.max(0, src - MUSIC_MIN_DUR));
+    dur = Math.min(dur, Math.max(MUSIC_MIN_DUR, src - off));
+  }
+  dur = Math.min(dur, Math.max(MUSIC_MIN_DUR, timelineDur));
+  const st = Math.max(0, Math.min(start, Math.max(0, timelineDur - dur)));
+  return { start: st, offset: off, duration: dur };
+}
+
+function clampMusicFades(fadeIn: number, fadeOut: number, duration: number) {
+  const maxEach = Math.min(MUSIC_FADE_MAX, Math.max(0, duration));
+  let inn = Math.min(maxEach, Math.max(0, fadeIn));
+  let out = Math.min(maxEach, Math.max(0, fadeOut));
+  if (inn + out > duration) {
+    const scale = duration / Math.max(inn + out, 0.0001);
+    inn *= scale;
+    out *= scale;
+  }
+  return { fadeIn: inn, fadeOut: out };
+}
+
+const MUSIC_TRACK_ID = '__soundtrack__';
+
+/** CapCut-style gain envelope in 0–100 viewBox space for the music-bar SVG vector. */
+function musicFadeEnvelopePath(fadeIn: number, fadeOut: number, duration: number) {
+  const dur = Math.max(duration, 0.001);
+  const samples = 36;
+  let curve = '';
+  let area = 'M 0 100';
+  for (let i = 0; i <= samples; i++) {
+    const tNorm = i / samples;
+    const g = soundtrackVolumeAt(tNorm * dur, dur, fadeIn, fadeOut);
+    const x = +(tNorm * 100).toFixed(2);
+    const y = +(8 + (1 - g) * 84).toFixed(2);
+    curve += i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`;
+    area += ` L ${x} ${y}`;
+  }
+  area += ' L 100 100 Z';
+  const fadeInPct = Math.min(50, (Math.max(0, fadeIn) / dur) * 100);
+  const fadeOutPct = Math.min(50, (Math.max(0, fadeOut) / dur) * 100);
+  const inGain = soundtrackVolumeAt(Math.min(dur, Math.max(0, fadeIn)), dur, fadeIn, fadeOut);
+  const outGain = soundtrackVolumeAt(Math.max(0, dur - Math.max(0, fadeOut)), dur, fadeIn, fadeOut);
+  return {
+    curve,
+    area,
+    fadeInPct,
+    fadeOutPct,
+    inX: fadeInPct,
+    outX: 100 - fadeOutPct,
+    inY: 8 + (1 - inGain) * 84,
+    outY: 8 + (1 - outGain) * 84,
+  };
+}
+
+type MusicDrag =
+  | { kind: 'move'; originX: number; start0: number }
+  | { kind: 'trim-left'; originX: number; start0: number; offset0: number; duration0: number; end0: number }
+  | { kind: 'trim-right'; originX: number; duration0: number }
+  | { kind: 'fade-in'; originX: number; fade0: number; barLeftPx: number; barWidthPx: number }
+  | { kind: 'fade-out'; originX: number; fade0: number; barLeftPx: number; barWidthPx: number };
 
 type KeyRef = { trackId: string; keyframeId: string };
 
 const TRACK_COLORS: Record<AnimProperty, string> = {
-  'rotation.x': '#7ec8e3',
-  'rotation.y': '#c5f2b6',
-  'rotation.z': '#e3c17e',
-  'position.x': '#b8a4f0',
-  'position.y': '#f0a4c8',
-  'position.z': '#a4e0f0',
-  scale: '#f0d4a4',
+  'rotation.x': '#ff5a5a',
+  'rotation.y': '#5dff6e',
+  'rotation.z': '#4db8ff',
+  'position.x': '#c9a8ff',
+  'position.y': '#ff8ec8',
+  'position.z': '#7aecff',
+  scale: '#ffb020',
+  'camera.x': '#9ad0ff',
+  'camera.y': '#7ec8ff',
+  'camera.z': '#5ab8ff',
 };
 
 const LONG_PRESS_MS = 280;
@@ -100,16 +202,30 @@ export default function AnimationTimeline({
   onPlayingChange,
   selectedDevice,
   devices,
+  soundtrackName = null,
+  soundtrackData = null,
+  soundtrackStart = 0,
+  soundtrackOffset = 0,
+  soundtrackDuration = 4,
+  soundtrackFadeIn = 0.8,
+  soundtrackFadeOut = 1.2,
+  onSoundtrackChange,
+  onSoundtrackPatch,
 }: Props) {
   const scrubRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const easeWrapRef = useRef<HTMLDivElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
+  const musicBarRef = useRef<HTMLDivElement>(null);
+  const [audioDuration, setAudioDuration] = useState(0);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<KeyRef[]>([]);
   const [hoveredKeyId, setHoveredKeyId] = useState<string | null>(null);
   const [scrubbing, setScrubbing] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [musicDrag, setMusicDrag] = useState<MusicDrag | null>(null);
   const [draggingKeys, setDraggingKeys] = useState<{
     items: { trackId: string; keyframeId: string; startTime: number }[];
     originClientX: number;
@@ -133,6 +249,39 @@ export default function AnimationTimeline({
   const marqueeModeRef = useRef(false);
   const marqueeRef = useRef(marquee);
   marqueeRef.current = marquee;
+
+  const musicSelected = selectedTrackId === MUSIC_TRACK_ID;
+  const musicClip = useMemo(() => {
+    const placed = clampMusicPlacement(
+      soundtrackStart,
+      soundtrackOffset,
+      soundtrackDuration,
+      clip.duration,
+      audioDuration,
+    );
+    const fades = clampMusicFades(soundtrackFadeIn, soundtrackFadeOut, placed.duration);
+    return { ...placed, ...fades };
+  }, [
+    soundtrackStart,
+    soundtrackOffset,
+    soundtrackDuration,
+    soundtrackFadeIn,
+    soundtrackFadeOut,
+    clip.duration,
+    audioDuration,
+  ]);
+  const fadeEnvelope = useMemo(
+    () => musicFadeEnvelopePath(musicClip.fadeIn, musicClip.fadeOut, musicClip.duration),
+    [musicClip.fadeIn, musicClip.fadeOut, musicClip.duration],
+  );
+
+  const beginMusicDrag = (event: ReactPointerEvent, drag: MusicDrag) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedTrackId(MUSIC_TRACK_ID);
+    setSelectedKeys([]);
+    setMusicDrag(drag);
+  };
 
   const deviceTracks = useMemo(
     () => clip.tracks.filter((t) => t.targetId === selectedDevice.id),
@@ -247,6 +396,8 @@ export default function AnimationTimeline({
     setZoom(clamped);
     requestAnimationFrame(() => scrollPlayheadIntoView(anchorTime));
   };
+  const applyZoomRef = useRef(applyZoom);
+  applyZoomRef.current = applyZoom;
 
   const zoomBy = (delta: number) => applyZoom(zoom + delta);
 
@@ -365,7 +516,7 @@ export default function AnimationTimeline({
   };
 
   const beginScrub = (event: ReactPointerEvent, opts?: { fromPlayhead?: boolean }) => {
-    if (draggingKeys || marqueeModeRef.current) return;
+    if (draggingKeys || musicDrag || marqueeModeRef.current) return;
     if ((event.target as HTMLElement | null)?.closest?.('.timeline-key')) return;
     if ((event.target as HTMLElement | null)?.closest?.('.timeline-ease')) return;
     event.preventDefault();
@@ -491,6 +642,115 @@ export default function AnimationTimeline({
     };
   }, [draggingKeys]);
 
+  useEffect(() => {
+    if (!musicDrag || !onSoundtrackPatch) return undefined;
+    const onMove = (event: PointerEvent) => {
+      const timelineDur = clipRef.current.duration;
+      const sourceDur = audioDuration > 0 ? audioDuration : timelineDur;
+      const lanes = scrubRef.current?.getBoundingClientRect();
+      const dt = lanes && lanes.width > 0
+        ? ((event.clientX - musicDrag.originX) / lanes.width) * timelineDur
+        : 0;
+
+      if (musicDrag.kind === 'move') {
+        const next = clampMusicPlacement(
+          musicDrag.start0 + dt,
+          soundtrackOffset,
+          soundtrackDuration,
+          timelineDur,
+          sourceDur,
+        );
+        onSoundtrackPatch({ soundtrackStart: next.start });
+        return;
+      }
+
+      if (musicDrag.kind === 'trim-right') {
+        const maxDur = Math.min(
+          sourceDur - soundtrackOffset,
+          timelineDur - soundtrackStart,
+        );
+        const nextDur = Math.max(MUSIC_MIN_DUR, Math.min(maxDur, musicDrag.duration0 + dt));
+        const fades = clampMusicFades(soundtrackFadeIn, soundtrackFadeOut, nextDur);
+        onSoundtrackPatch({
+          soundtrackDuration: nextDur,
+          soundtrackFadeIn: fades.fadeIn,
+          soundtrackFadeOut: fades.fadeOut,
+        });
+        return;
+      }
+
+      if (musicDrag.kind === 'trim-left') {
+        // Keep timeline end fixed; slide start + source offset together.
+        const end = musicDrag.end0;
+        let nextStart = musicDrag.start0 + dt;
+        nextStart = Math.max(0, Math.min(nextStart, end - MUSIC_MIN_DUR));
+        const startDelta = nextStart - musicDrag.start0;
+        let nextOffset = musicDrag.offset0 + startDelta;
+        nextOffset = Math.max(0, Math.min(nextOffset, sourceDur - MUSIC_MIN_DUR));
+        // Reconcile if offset hit a wall.
+        nextStart = musicDrag.start0 + (nextOffset - musicDrag.offset0);
+        nextStart = Math.max(0, Math.min(nextStart, end - MUSIC_MIN_DUR));
+        const nextDur = Math.max(MUSIC_MIN_DUR, end - nextStart);
+        const maxFromSource = Math.max(MUSIC_MIN_DUR, sourceDur - nextOffset);
+        const duration = Math.min(nextDur, maxFromSource);
+        const fades = clampMusicFades(soundtrackFadeIn, soundtrackFadeOut, duration);
+        onSoundtrackPatch({
+          soundtrackStart: end - duration,
+          soundtrackOffset: nextOffset,
+          soundtrackDuration: duration,
+          soundtrackFadeIn: fades.fadeIn,
+          soundtrackFadeOut: fades.fadeOut,
+        });
+        return;
+      }
+
+      if (musicDrag.kind === 'fade-in') {
+        const localX = event.clientX - musicDrag.barLeftPx;
+        const nextFade = Math.max(
+          0,
+          Math.min(
+            MUSIC_FADE_MAX,
+            musicClip.duration - musicClip.fadeOut,
+            (localX / Math.max(1, musicDrag.barWidthPx)) * musicClip.duration,
+          ),
+        );
+        onSoundtrackPatch({ soundtrackFadeIn: nextFade });
+        return;
+      }
+
+      if (musicDrag.kind === 'fade-out') {
+        const localX = event.clientX - musicDrag.barLeftPx;
+        const fromEnd = musicClip.duration - (localX / Math.max(1, musicDrag.barWidthPx)) * musicClip.duration;
+        const nextFade = Math.max(
+          0,
+          Math.min(MUSIC_FADE_MAX, musicClip.duration - musicClip.fadeIn, fromEnd),
+        );
+        onSoundtrackPatch({ soundtrackFadeOut: nextFade });
+      }
+    };
+    const onUp = () => setMusicDrag(null);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [
+    musicDrag,
+    onSoundtrackPatch,
+    soundtrackOffset,
+    soundtrackDuration,
+    soundtrackStart,
+    soundtrackFadeIn,
+    soundtrackFadeOut,
+    audioDuration,
+    musicClip.duration,
+    musicClip.fadeIn,
+    musicClip.fadeOut,
+  ]);
+
   const deleteSelectedKeyframes = () => {
     if (selectedKeys.length) {
       onChange(removeKeyframes(clip, selectedKeys));
@@ -561,27 +821,163 @@ export default function AnimationTimeline({
     scrollPlayheadIntoView(currentTime);
   }, [currentTime, playing, zoom, scrubbing, draggingKeys, marquee]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+
+  // Scroll over the timeline lanes zooms in/out (anchor under cursor).
+  // Trackpad sideways swipe pans when zoomed; Shift+scroll also pans.
   useEffect(() => {
     const viewport = scrollRef.current;
     if (!viewport) return undefined;
     const onWheel = (event: WheelEvent) => {
-      if (!(event.ctrlKey || event.metaKey)) return;
+      const absX = Math.abs(event.deltaX);
+      const absY = Math.abs(event.deltaY);
+      const wantsPan = event.shiftKey || absX > absY;
+
+      if (wantsPan) {
+        if (zoomRef.current <= 1) return;
+        event.preventDefault();
+        const delta = event.shiftKey && absY >= absX ? event.deltaY : event.deltaX;
+        viewport.scrollLeft += delta;
+        return;
+      }
+
+      if (absY < 0.5) return;
       event.preventDefault();
       const content = scrubRef.current;
       const rect = content?.getBoundingClientRect();
+      const duration = clipRef.current.duration;
       const anchor = rect && rect.width > 0
-        ? ((event.clientX - rect.left) / rect.width) * clip.duration
-        : currentTime;
-      const direction = event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
-      applyZoom(zoom + direction, anchor);
+        ? ((event.clientX - rect.left) / rect.width) * duration
+        : currentTimeRef.current;
+      // Scale step by wheel intensity so trackpads feel smooth and mice stay snappy.
+      const units = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      const steps = Math.max(0.15, Math.min(1.5, Math.abs(units) / 80));
+      const direction = units > 0 ? -1 : 1;
+      applyZoomRef.current(zoomRef.current + direction * ZOOM_STEP * steps, anchor);
     };
     viewport.addEventListener('wheel', onWheel, { passive: false });
     return () => viewport.removeEventListener('wheel', onWheel);
-  }, [zoom, clip.duration, currentTime]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const deviceLabel = (id: string) => {
     const index = devices.findIndex((d) => d.id === id);
     return index >= 0 ? `Device ${index + 1}` : 'Device';
+  };
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (!soundtrackData) {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      setAudioDuration(0);
+      return;
+    }
+    const onMeta = () => {
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        setAudioDuration(audio.duration);
+      }
+    };
+    audio.addEventListener('loadedmetadata', onMeta);
+    if (audio.getAttribute('src') !== soundtrackData) {
+      audio.src = soundtrackData;
+      audio.load();
+    } else {
+      onMeta();
+    }
+    audio.loop = false;
+    return () => audio.removeEventListener('loadedmetadata', onMeta);
+  }, [soundtrackData]);
+
+  // Fit newly loaded audio into the timeline window once metadata arrives.
+  useEffect(() => {
+    if (!soundtrackData || !onSoundtrackPatch || audioDuration <= 0 || musicDrag) return;
+    const fitted = clampMusicPlacement(
+      soundtrackStart,
+      soundtrackOffset,
+      soundtrackDuration > 0 ? soundtrackDuration : Math.min(audioDuration, clip.duration),
+      clip.duration,
+      audioDuration,
+    );
+    const fades = clampMusicFades(soundtrackFadeIn, soundtrackFadeOut, fitted.duration);
+    const needsPatch = Math.abs(fitted.start - soundtrackStart) > 0.001
+      || Math.abs(fitted.offset - soundtrackOffset) > 0.001
+      || Math.abs(fitted.duration - soundtrackDuration) > 0.001
+      || Math.abs(fades.fadeIn - soundtrackFadeIn) > 0.001
+      || Math.abs(fades.fadeOut - soundtrackFadeOut) > 0.001;
+    if (needsPatch) {
+      onSoundtrackPatch({
+        soundtrackStart: fitted.start,
+        soundtrackOffset: fitted.offset,
+        soundtrackDuration: fitted.duration,
+        soundtrackFadeIn: fades.fadeIn,
+        soundtrackFadeOut: fades.fadeOut,
+      });
+    }
+  }, [audioDuration, soundtrackData]); // eslint-disable-line react-hooks/exhaustive-deps -- fit once when source length is known
+
+  const syncMusicAudio = (audio: HTMLAudioElement, play: boolean) => {
+    const local = currentTime - musicClip.start;
+    const inWindow = local >= 0 && local <= musicClip.duration;
+    const sourceTime = musicClip.offset + Math.max(0, Math.min(musicClip.duration, local));
+    audio.volume = inWindow
+      ? soundtrackVolumeAt(local, musicClip.duration, musicClip.fadeIn, musicClip.fadeOut)
+      : 0;
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+    const target = Math.min(Math.max(0, sourceTime), audio.duration);
+    if (!inWindow) {
+      audio.pause();
+      return;
+    }
+    if (Math.abs((audio.currentTime || 0) - target) > 0.08) {
+      audio.currentTime = target;
+    }
+    if (play) {
+      void audio.play().catch(() => { /* autoplay / decode */ });
+    } else {
+      audio.pause();
+    }
+  };
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !soundtrackData) return;
+    syncMusicAudio(audio, playing);
+  }, [playing, soundtrackData]); // eslint-disable-line react-hooks/exhaustive-deps -- seek on play edge only
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !soundtrackData) return;
+    syncMusicAudio(audio, playing);
+  }, [
+    currentTime,
+    playing,
+    soundtrackData,
+    musicClip.start,
+    musicClip.offset,
+    musicClip.duration,
+    musicClip.fadeIn,
+    musicClip.fadeOut,
+  ]);
+
+  const onAudioPicked = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file || !onSoundtrackChange) return;
+    if (!/^audio\//.test(file.type) && !/\.(mp3|wav|ogg|m4a|aac)$/i.test(file.name)) return;
+    if (file.size > 15 * 1024 * 1024) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : null;
+      if (!dataUrl) return;
+      onSoundtrackChange({
+        name: file.name.replace(/\.[^.]+$/, '').slice(0, 80) || 'Soundtrack',
+        dataUrl,
+      });
+    };
+    reader.readAsDataURL(file);
   };
 
   const closePrompt = () => {
@@ -662,35 +1058,29 @@ export default function AnimationTimeline({
 
   return (
     <>
-    <div className={`timeline-collapsed ${open || chromeHidden ? 'is-hidden' : ''}`}>
-      <button type="button" className="timeline-open-btn" onClick={onToggle}>
-        <Gauge size={14} /> Animation timeline <ChevronUp size={14} />
-      </button>
-    </div>
     <div className={`timeline-panel ${panelVisible ? 'is-open' : 'is-closed'}`} ref={panelRef} tabIndex={-1} aria-hidden={!panelVisible}>
-      <div
-        ref={promptShellRef}
-        className={`timeline-prompt ${promptOpen ? 'is-open' : 'is-compact'}`}
-      >
-        <button
-          type="button"
-          className="timeline-prompt-trigger"
-          onClick={openPrompt}
-          aria-expanded={promptOpen}
-          aria-controls="timeline-prompt-panel"
-          aria-hidden={promptOpen}
-          tabIndex={promptOpen ? -1 : 0}
-        >
-          <Sparkles size={14} aria-hidden />
-          <span>AI Animate</span>
-        </button>
+      <div className={`timeline-chrome ${promptOpen ? 'is-prompting' : ''}`}>
         <div
-          id="timeline-prompt-panel"
-          className="timeline-prompt-expand"
-          aria-hidden={!promptOpen}
+          ref={promptShellRef}
+          className={`timeline-prompt ${promptOpen ? 'is-open' : 'is-compact'}`}
         >
-          <div className="timeline-prompt-expand-inner">
-            <form className="timeline-prompt-form" onSubmit={onPromptSubmit}>
+          {!promptOpen ? (
+            <button
+              type="button"
+              className="timeline-prompt-trigger"
+              onClick={openPrompt}
+              aria-expanded={false}
+              aria-controls="timeline-prompt-panel"
+            >
+              <Sparkles size={14} aria-hidden />
+              <span>AI Animate</span>
+            </button>
+          ) : (
+            <form
+              id="timeline-prompt-panel"
+              className="timeline-prompt-form"
+              onSubmit={onPromptSubmit}
+            >
               <div className="timeline-prompt-field">
                 <Sparkles size={14} className="timeline-prompt-icon" aria-hidden />
                 <input
@@ -701,21 +1091,19 @@ export default function AnimationTimeline({
                     setPrompt(e.target.value);
                     if (promptStatus) setPromptStatus(null);
                   }}
-                  placeholder="Describe a motion… e.g. gentle floating turntable"
+                  placeholder="Describe a motion…"
                   aria-label="Animate with prompt"
-                  disabled={promptBusy || !promptOpen}
-                  tabIndex={promptOpen ? 0 : -1}
+                  disabled={promptBusy}
                   autoComplete="off"
                   spellCheck={false}
                 />
                 <button
                   type="submit"
                   className="timeline-prompt-go"
-                  disabled={promptBusy || !prompt.trim() || !promptOpen}
+                  disabled={promptBusy || !prompt.trim()}
                   title="Generate animation"
-                  tabIndex={promptOpen ? 0 : -1}
                 >
-                  Animate
+                  Go
                 </button>
               </div>
               <div className="timeline-prompt-meta">
@@ -731,7 +1119,6 @@ export default function AnimationTimeline({
                         className="timeline-prompt-chip"
                         onClick={() => runPrompt(chip)}
                         title={`Animate: ${chip}`}
-                        tabIndex={promptOpen ? 0 : -1}
                       >
                         {chip}
                       </button>
@@ -740,153 +1127,205 @@ export default function AnimationTimeline({
                 )}
               </div>
             </form>
-          </div>
-        </div>
-      </div>
-      <div className="timeline-transport">
-        <div className="timeline-transport-left">
-          <button type="button" className="timeline-icon-btn" title="Go to start" onClick={() => { onPlayingChange(false); onSeek(0); }}>
-            <SkipBack size={14} />
-          </button>
-          <button
-            type="button"
-            className={`timeline-play-btn ${playing ? 'is-playing' : ''}`}
-            title={playing ? 'Pause (Space)' : 'Play (Space)'}
-            onClick={() => onPlayingChange(!playing)}
-          >
-            {playing ? <Pause size={15} /> : <Play size={15} />}
-          </button>
-          <button
-            type="button"
-            className={`timeline-icon-btn ${clip.loop ? 'is-active' : ''}`}
-            title="Loop"
-            onClick={() => onChange({ ...clip, loop: !clip.loop })}
-          >
-            <Repeat size={14} />
-          </button>
-          <span className="timeline-timecode">
-            {formatTimecode(currentTime, clip.fps)}
-            <span> / {formatTimecode(clip.duration, clip.fps)}</span>
-          </span>
+          )}
         </div>
 
-        <div className="timeline-transport-center">
-          <span className="timeline-target">{deviceLabel(selectedDevice.id)}</span>
-          <button type="button" className="timeline-action" onClick={() => addKeyframeAtPlayhead()} title="Key current transform">
-            <Diamond size={13} /> Keyframe
-          </button>
-          <button type="button" className="timeline-action" onClick={() => addKeyframeAtPlayhead('rotation.y')} title="Key rotate Y">
-            <KeyRound size={13} /> Rot Y
-          </button>
-          <div
-            ref={easeWrapRef}
-            className={`timeline-ease-wrap ${selectedKeys.length ? 'is-armed' : ''} ${easeGraphOpen ? 'is-open' : ''}`}
-          >
-            <label
-              className={`timeline-ease-select ${selectedKeys.length ? 'is-armed' : ''}`}
-              title="Ease from selected keyframe(s) to the next"
-            >
-              <span>Ease</span>
-              <select
-                value={selectedEase === 'mixed' ? '' : (selectedEase ?? 'easeInOut')}
-                disabled={!selectedKeys.length}
-                onChange={(e) => applyEaseToSelection(e.target.value as AnimEase)}
-              >
-                {selectedEase === 'mixed' && <option value="" disabled>Mixed</option>}
-                {ANIM_EASES.map((ease) => (
-                  <option key={ease.id} value={ease.id}>{ease.label}</option>
-                ))}
-              </select>
-            </label>
-            {selectedKeys.length > 0 && (
+        {!promptOpen && (
+          <div className="timeline-transport" aria-hidden={false}>
+            <div className="timeline-transport-cluster" role="group" aria-label="Playback">
+              <button type="button" className="timeline-icon-btn" title="Go to start" onClick={() => { onPlayingChange(false); onSeek(0); }}>
+                <SkipBack size={14} />
+              </button>
               <button
                 type="button"
-                className={`timeline-ease-graph-toggle ${easeGraphOpen ? 'is-open' : ''} ${selectedEase === 'custom' ? 'is-custom' : ''}`}
-                title={easeGraphOpen ? 'Hide ease graph' : 'Edit custom ease curve'}
-                aria-expanded={easeGraphOpen}
-                onClick={() => {
-                  if (selectedEase !== 'custom') {
-                    applyEaseToSelection('custom');
-                    return;
-                  }
-                  setEaseGraphOpen((open) => !open);
-                }}
+                className={`timeline-play-btn ${playing ? 'is-playing' : ''}`}
+                title={playing ? 'Pause (Space)' : 'Play (Space)'}
+                onClick={() => onPlayingChange(!playing)}
               >
-                Graph
+                {playing ? <Pause size={15} /> : <Play size={15} />}
               </button>
-            )}
-            {easeGraphOpen && selectedKeys.length > 0 && (
-              <div
-                className="timeline-ease-popover"
-                role="dialog"
-                aria-label="Custom ease curve"
-                onPointerDown={(e) => e.stopPropagation()}
+              <button
+                type="button"
+                className={`timeline-icon-btn ${clip.loop ? 'is-active' : ''}`}
+                title={clip.loop ? 'Loop on — click to play once' : 'Loop off — click to loop'}
+                aria-label={clip.loop ? 'Disable loop' : 'Enable loop'}
+                aria-pressed={clip.loop}
+                onClick={() => onChange({ ...clip, loop: !clip.loop })}
               >
-                <div className="timeline-ease-popover-head">
-                  <span>Custom ease</span>
-                  <button type="button" className="timeline-ease-popover-close" onClick={() => setEaseGraphOpen(false)} title="Close (Esc)">×</button>
-                </div>
-                <EaseGraphEditor
-                  value={selectedBezier ?? DEFAULT_CUSTOM_BEZIER}
-                  onChange={applyBezierToSelection}
-                />
+                <Repeat size={14} />
+              </button>
+              <span className="timeline-timecode" title={`${deviceLabel(selectedDevice.id)} playhead`}>
+                {formatTimecode(currentTime, clip.fps)}
+                <span>/ {formatTimecode(clip.duration, clip.fps)}</span>
+              </span>
+            </div>
+
+            <span className="timeline-transport-divider" aria-hidden />
+
+            <div className="timeline-transport-cluster" role="group" aria-label="Keyframes">
+              <button type="button" className="timeline-icon-btn" onClick={() => addKeyframeAtPlayhead()} title="Key current transform">
+                <Diamond size={13} />
+              </button>
+              <button type="button" className="timeline-icon-btn" onClick={() => addKeyframeAtPlayhead('rotation.y')} title="Key rotate Y">
+                <KeyRound size={13} />
+              </button>
+              <div
+                ref={easeWrapRef}
+                className={`timeline-ease-wrap ${selectedKeys.length ? 'is-armed' : ''} ${easeGraphOpen ? 'is-open' : ''}`}
+              >
+                <label
+                  className={`timeline-ease-select ${selectedKeys.length ? 'is-armed' : ''}`}
+                  title="Ease from selected keyframe(s) to the next"
+                >
+                  <select
+                    value={selectedEase === 'mixed' ? '' : (selectedEase ?? 'easeInOut')}
+                    disabled={!selectedKeys.length}
+                    aria-label="Keyframe ease"
+                    onChange={(e) => applyEaseToSelection(e.target.value as AnimEase)}
+                  >
+                    {selectedEase === 'mixed' && <option value="" disabled>Mixed</option>}
+                    {ANIM_EASES.map((ease) => (
+                      <option key={ease.id} value={ease.id}>{ease.label}</option>
+                    ))}
+                  </select>
+                </label>
+                {selectedKeys.length > 0 && (
+                  <button
+                    type="button"
+                    className={`timeline-icon-btn timeline-ease-graph-toggle ${easeGraphOpen ? 'is-open' : ''} ${selectedEase === 'custom' ? 'is-custom' : ''}`}
+                    title={easeGraphOpen ? 'Hide ease graph' : 'Edit custom ease curve'}
+                    aria-expanded={easeGraphOpen}
+                    onClick={() => {
+                      if (selectedEase !== 'custom') {
+                        applyEaseToSelection('custom');
+                        return;
+                      }
+                      setEaseGraphOpen((open) => !open);
+                    }}
+                  >
+                    <Gauge size={13} />
+                  </button>
+                )}
+                {easeGraphOpen && selectedKeys.length > 0 && (
+                  <div
+                    className="timeline-ease-popover"
+                    role="dialog"
+                    aria-label="Custom ease curve"
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <div className="timeline-ease-popover-head">
+                      <span>Custom ease</span>
+                      <button type="button" className="timeline-ease-popover-close" onClick={() => setEaseGraphOpen(false)} title="Close (Esc)">×</button>
+                    </div>
+                    <EaseGraphEditor
+                      value={selectedBezier ?? DEFAULT_CUSTOM_BEZIER}
+                      onChange={applyBezierToSelection}
+                    />
+                  </div>
+                )}
               </div>
-            )}
+              <button
+                type="button"
+                className={`timeline-icon-btn timeline-delete-btn ${selectedKeys.length || hoveredKeyId ? 'is-armed' : ''}`}
+                onClick={deleteSelectedKeyframes}
+                title="Delete selected / hovered keyframe (Delete · Backspace · Clear)"
+              >
+                <Trash2 size={13} />
+                {selectedKeys.length > 1 ? <span className="timeline-delete-count">{selectedKeys.length}</span> : null}
+              </button>
+            </div>
+
+            <span className="timeline-transport-divider" aria-hidden />
+
+            <div className="timeline-transport-cluster" role="group" aria-label="Timeline options">
+              {onSoundtrackChange && (
+                <div className={`timeline-music ${soundtrackData ? 'has-track' : ''}`}>
+                  <audio ref={audioRef} preload="metadata" aria-hidden />
+                  <input
+                    ref={audioInputRef}
+                    type="file"
+                    accept="audio/mpeg,audio/mp3,audio/wav,audio/ogg,audio/mp4,audio/x-m4a,audio/aac,.mp3,.wav,.ogg,.m4a,.aac"
+                    hidden
+                    onChange={onAudioPicked}
+                  />
+                  <button
+                    type="button"
+                    className={`timeline-icon-btn ${soundtrackData ? 'is-active' : ''}`}
+                    title={soundtrackData ? `Soundtrack: ${soundtrackName || 'Track'} — click to replace` : 'Add soundtrack'}
+                    aria-label={soundtrackData ? `Soundtrack ${soundtrackName || 'Track'}` : 'Add soundtrack'}
+                    onClick={() => audioInputRef.current?.click()}
+                  >
+                    <Music2 size={13} />
+                  </button>
+                  {soundtrackData && (
+                    <button
+                      type="button"
+                      className="timeline-icon-btn timeline-music-clear"
+                      title="Remove soundtrack"
+                      aria-label="Remove soundtrack"
+                      onClick={() => onSoundtrackChange(null)}
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="timeline-zoom" title="Scroll over the timeline to zoom">
+                <button
+                  type="button"
+                  className="timeline-icon-btn"
+                  title="Zoom out"
+                  disabled={zoom <= ZOOM_MIN}
+                  onClick={() => zoomBy(-ZOOM_STEP)}
+                >
+                  <ZoomOut size={13} />
+                </button>
+                <button
+                  type="button"
+                  className="timeline-zoom-level"
+                  title="Reset zoom"
+                  onClick={() => applyZoom(1)}
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  type="button"
+                  className="timeline-icon-btn"
+                  title="Zoom in"
+                  disabled={zoom >= ZOOM_MAX}
+                  onClick={() => zoomBy(ZOOM_STEP)}
+                >
+                  <ZoomIn size={13} />
+                </button>
+              </div>
+              <label className="timeline-duration" title="Clip duration">
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  step={0.5}
+                  value={clip.duration}
+                  aria-label="Duration in seconds"
+                  onChange={(e) => onChange({ ...clip, duration: Math.min(30, Math.max(1, Number(e.target.value) || 4)) })}
+                />
+                <span>s</span>
+              </label>
+            </div>
           </div>
+        )}
+
+        <div className="timeline-chrome-end">
           <button
             type="button"
-            className={`timeline-action subtle ${selectedKeys.length || hoveredKeyId ? 'is-armed' : ''}`}
-            onClick={deleteSelectedKeyframes}
-            title="Delete selected / hovered keyframe (Delete · Backspace · Clear)"
+            className={`timeline-panel-toggle ${open ? 'is-open' : ''}`}
+            aria-label={open ? 'Collapse timeline' : 'Expand timeline'}
+            aria-expanded={open}
+            title={open ? 'Collapse timeline' : 'Expand timeline'}
+            onClick={onToggle}
           >
-            <Trash2 size={13} />
-            {selectedKeys.length > 1 ? <span>{selectedKeys.length}</span> : null}
-          </button>
-        </div>
-
-        <div className="timeline-transport-right">
-          <div className="timeline-zoom" title="Zoom timeline (⌘/Ctrl + scroll)">
-            <button
-              type="button"
-              className="timeline-icon-btn"
-              title="Zoom out"
-              disabled={zoom <= ZOOM_MIN}
-              onClick={() => zoomBy(-ZOOM_STEP)}
-            >
-              <ZoomOut size={14} />
-            </button>
-            <button
-              type="button"
-              className="timeline-zoom-level"
-              title="Reset zoom"
-              onClick={() => applyZoom(1)}
-            >
-              {Math.round(zoom * 100)}%
-            </button>
-            <button
-              type="button"
-              className="timeline-icon-btn"
-              title="Zoom in"
-              disabled={zoom >= ZOOM_MAX}
-              onClick={() => zoomBy(ZOOM_STEP)}
-            >
-              <ZoomIn size={14} />
-            </button>
-          </div>
-          <label className="timeline-duration">
-            <span>Dur</span>
-            <input
-              type="number"
-              min={1}
-              max={30}
-              step={0.5}
-              value={clip.duration}
-              onChange={(e) => onChange({ ...clip, duration: Math.min(30, Math.max(1, Number(e.target.value) || 4)) })}
-            />
-            <span>s</span>
-          </label>
-          <button type="button" className="timeline-icon-btn" title="Collapse timeline" onClick={onToggle}>
-            <ChevronDown size={14} />
+            {open
+              ? <PanelBottomClose size={15} strokeWidth={2.2} aria-hidden />
+              : <PanelBottomOpen size={15} strokeWidth={2.2} aria-hidden />}
           </button>
         </div>
       </div>
@@ -918,6 +1357,81 @@ export default function AnimationTimeline({
               </div>
             );
           })}
+          {onSoundtrackChange && (
+            <div
+              className={`timeline-label-row timeline-music-label-row ${soundtrackData ? 'has-track' : 'is-empty'} ${musicSelected ? 'selected' : ''}`}
+              onClick={() => {
+                if (!soundtrackData) return;
+                setSelectedTrackId(MUSIC_TRACK_ID);
+                setSelectedKeys([]);
+              }}
+            >
+              <span className="timeline-swatch timeline-music-swatch" />
+              {soundtrackData ? (
+                <>
+                  <span className="timeline-music-label-text" title={soundtrackName || 'Music'}>
+                    {soundtrackName || 'Music'}
+                  </span>
+                  {onSoundtrackPatch && musicSelected && (
+                    <span className="timeline-music-fade-controls" onPointerDown={(e) => e.stopPropagation()}>
+                      <label title="Fade in">
+                        In
+                        <input
+                          type="number"
+                          min={0}
+                          max={8}
+                          step={0.1}
+                          value={Number(musicClip.fadeIn.toFixed(1))}
+                          onChange={(e) => {
+                            const fades = clampMusicFades(
+                              Math.min(MUSIC_FADE_MAX, Math.max(0, Number(e.target.value) || 0)),
+                              musicClip.fadeOut,
+                              musicClip.duration,
+                            );
+                            onSoundtrackPatch({
+                              soundtrackFadeIn: fades.fadeIn,
+                              soundtrackFadeOut: fades.fadeOut,
+                            });
+                          }}
+                        />
+                      </label>
+                      <label title="Fade out">
+                        Out
+                        <input
+                          type="number"
+                          min={0}
+                          max={8}
+                          step={0.1}
+                          value={Number(musicClip.fadeOut.toFixed(1))}
+                          onChange={(e) => {
+                            const fades = clampMusicFades(
+                              musicClip.fadeIn,
+                              Math.min(MUSIC_FADE_MAX, Math.max(0, Number(e.target.value) || 0)),
+                              musicClip.duration,
+                            );
+                            onSoundtrackPatch({
+                              soundtrackFadeIn: fades.fadeIn,
+                              soundtrackFadeOut: fades.fadeOut,
+                            });
+                          }}
+                        />
+                      </label>
+                    </span>
+                  )}
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="timeline-music-add-label"
+                  title="Add soundtrack"
+                  onClick={() => audioInputRef.current?.click()}
+                >
+                  <Music2 size={12} />
+                  Music
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="timeline-lanes-viewport" ref={scrollRef}>
@@ -927,6 +1441,7 @@ export default function AnimationTimeline({
             'timeline-lanes',
             scrubbing ? 'is-scrubbing' : '',
             draggingKeys ? 'is-dragging-key' : '',
+            musicDrag ? 'is-dragging-music' : '',
             marquee ? 'is-marquee' : '',
           ].filter(Boolean).join(' ')}
           style={{ width: `${zoom * 100}%`, minWidth: '100%' }}
@@ -1078,6 +1593,173 @@ export default function AnimationTimeline({
               </div>
             );
           })}
+
+          {onSoundtrackChange && (
+            <div
+              className={`timeline-lane timeline-music-lane ${soundtrackData ? 'has-track' : 'is-empty'} ${musicSelected ? 'selected' : ''}`}
+              aria-label="Music track"
+              onClick={(e) => {
+                if (!soundtrackData) return;
+                e.stopPropagation();
+                setSelectedTrackId(MUSIC_TRACK_ID);
+                setSelectedKeys([]);
+              }}
+            >
+              {soundtrackData ? (
+                <div
+                  ref={musicBarRef}
+                  className={`timeline-music-bar ${musicSelected ? 'is-selected' : ''} ${musicDrag ? `is-dragging-${musicDrag.kind}` : ''}`}
+                  style={{
+                    left: `${(musicClip.start / Math.max(clip.duration, 0.001)) * 100}%`,
+                    width: `${Math.min(100, (musicClip.duration / Math.max(clip.duration, 0.001)) * 100)}%`,
+                    ['--music-fade-in' as string]: `${fadeEnvelope.fadeInPct}%`,
+                    ['--music-fade-out' as string]: `${fadeEnvelope.fadeOutPct}%`,
+                  }}
+                  title={`${soundtrackName || 'Music'} · ${musicClip.duration.toFixed(1)}s — drag to move, edges to trim`}
+                  onPointerDown={(e) => {
+                    if (!onSoundtrackPatch) {
+                      e.stopPropagation();
+                      return;
+                    }
+                    beginMusicDrag(e, {
+                      kind: 'move',
+                      originX: e.clientX,
+                      start0: musicClip.start,
+                    });
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedTrackId(MUSIC_TRACK_ID);
+                    setSelectedKeys([]);
+                  }}
+                >
+                  <svg
+                    className="timeline-music-fade-vector"
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                    aria-hidden
+                  >
+                    {fadeEnvelope.fadeInPct > 0.5 && (
+                      <path
+                        className="timeline-music-fade-wedge"
+                        d={`M 0 0 L ${fadeEnvelope.fadeInPct.toFixed(2)} 0 L 0 100 Z`}
+                      />
+                    )}
+                    {fadeEnvelope.fadeOutPct > 0.5 && (
+                      <path
+                        className="timeline-music-fade-wedge"
+                        d={`M 100 0 L ${(100 - fadeEnvelope.fadeOutPct).toFixed(2)} 0 L 100 100 Z`}
+                      />
+                    )}
+                    <path className="timeline-music-fade-area" d={fadeEnvelope.area} />
+                    <path className="timeline-music-fade-curve" d={fadeEnvelope.curve} />
+                    {musicSelected && (
+                      <>
+                        <line
+                          className="timeline-music-fade-marker"
+                          x1={fadeEnvelope.inX}
+                          y1={0}
+                          x2={fadeEnvelope.inX}
+                          y2={100}
+                        />
+                        <line
+                          className="timeline-music-fade-marker"
+                          x1={fadeEnvelope.outX}
+                          y1={0}
+                          x2={fadeEnvelope.outX}
+                          y2={100}
+                        />
+                      </>
+                    )}
+                  </svg>
+                  {musicSelected && onSoundtrackPatch && (
+                    <>
+                      <button
+                        type="button"
+                        className="timeline-music-fade-handle is-in"
+                        style={{ left: `${fadeEnvelope.inX}%`, top: `${fadeEnvelope.inY}%` }}
+                        title="Drag fade in"
+                        aria-label="Drag fade in"
+                        onPointerDown={(e) => {
+                          const rect = musicBarRef.current?.getBoundingClientRect();
+                          beginMusicDrag(e, {
+                            kind: 'fade-in',
+                            originX: e.clientX,
+                            fade0: musicClip.fadeIn,
+                            barLeftPx: rect?.left ?? 0,
+                            barWidthPx: rect?.width ?? 1,
+                          });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="timeline-music-fade-handle is-out"
+                        style={{ left: `${fadeEnvelope.outX}%`, top: `${fadeEnvelope.outY}%` }}
+                        title="Drag fade out"
+                        aria-label="Drag fade out"
+                        onPointerDown={(e) => {
+                          const rect = musicBarRef.current?.getBoundingClientRect();
+                          beginMusicDrag(e, {
+                            kind: 'fade-out',
+                            originX: e.clientX,
+                            fade0: musicClip.fadeOut,
+                            barLeftPx: rect?.left ?? 0,
+                            barWidthPx: rect?.width ?? 1,
+                          });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="timeline-music-trim-handle is-left"
+                        title="Trim start"
+                        aria-label="Trim music start"
+                        onPointerDown={(e) => {
+                          beginMusicDrag(e, {
+                            kind: 'trim-left',
+                            originX: e.clientX,
+                            start0: musicClip.start,
+                            offset0: musicClip.offset,
+                            duration0: musicClip.duration,
+                            end0: musicClip.start + musicClip.duration,
+                          });
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="timeline-music-trim-handle is-right"
+                        title="Trim end"
+                        aria-label="Trim music end"
+                        onPointerDown={(e) => {
+                          beginMusicDrag(e, {
+                            kind: 'trim-right',
+                            originX: e.clientX,
+                            duration0: musicClip.duration,
+                          });
+                        }}
+                      />
+                    </>
+                  )}
+                  <span className="timeline-music-bar-label">
+                    {musicClip.duration.toFixed(1)}s
+                  </span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="timeline-music-empty"
+                  title="Add soundtrack"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    audioInputRef.current?.click();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <Music2 size={12} />
+                  Add music
+                </button>
+              )}
+            </div>
+          )}
 
           {marqueeStyle && (
             <div

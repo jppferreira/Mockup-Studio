@@ -1,10 +1,12 @@
 import type { DeviceId } from './lib/devices';
+import type { SceneOverlay } from './lib/overlays';
 
 export type BuiltinBackgroundId = 'midnight' | 'studio' | 'mint' | 'sunset' | 'transparent';
 /** Built-in id, `'custom'`, or a saved custom preset id (`custom-…`). */
 export type BackgroundPreset = BuiltinBackgroundId | 'custom' | (string & {});
-export type DeviceColor = 'graphite' | 'titanium' | 'silver' | 'rose';
+export type DeviceColor = 'graphite' | 'titanium' | 'silver' | 'rose' | 'clay';
 export type CameraView = 'front' | 'left' | 'right' | 'top';
+export type { SceneOverlay };
 /** Procedural / preset reflection environments for glass (Cinema 4D–style). */
 export type ReflectionMapId =
   | 'match_background'
@@ -88,7 +90,10 @@ export function createSceneProp(partial: Partial<SceneProp> & { kind: ScenePropK
   };
 }
 
-/** Spline-style animatable channels on a device instance */
+/** Reserved animation target for camera position tracks */
+export const CAMERA_TARGET_ID = '__camera__';
+
+/** Spline-style animatable channels on a device instance or the camera */
 export type AnimProperty =
   | 'rotation.x'
   | 'rotation.y'
@@ -96,7 +101,10 @@ export type AnimProperty =
   | 'position.x'
   | 'position.y'
   | 'position.z'
-  | 'scale';
+  | 'scale'
+  | 'camera.x'
+  | 'camera.y'
+  | 'camera.z';
 
 /** Easing applied when interpolating from this keyframe to the next */
 export type AnimEase = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut' | 'custom';
@@ -150,10 +158,16 @@ export interface AnimationClip {
 export interface MockupProject {
   version: 1;
   name: string;
+  /** Still image or video data URL shown on device screens */
   screenshot: string | null;
   /** @deprecated mirrored from selected device — kept for older saves */
   deviceId: DeviceId;
+  /** Device finish — `clay` forces a matte abstract look */
   deviceColor: DeviceColor;
+  /** Matte clay finish (also set when deviceColor === 'clay') */
+  clayMode: boolean;
+  /** 2D text / image overlays composited on export and preview */
+  overlays: SceneOverlay[];
   background: BackgroundPreset;
   /** Active gradient colours when background is not transparent. */
   gradientColors: GradientColors;
@@ -171,10 +185,17 @@ export interface MockupProject {
   shadowSoftness: number;
   /** Contact shadow darkness */
   shadowOpacity: number;
-  /** Soft progressive blur along the top & bottom of the frame */
-  edgeBlurEnabled: boolean;
+  /** Soft progressive blur along the top of the frame */
+  edgeBlurTop: boolean;
+  /** Soft progressive blur along the bottom of the frame */
+  edgeBlurBottom: boolean;
   /** Peak blur strength at the frame edges (px) */
   edgeBlurAmount: number;
+  /**
+   * @deprecated Prefer edgeBlurTop / edgeBlurBottom. Kept so older saves still load;
+   * treated as “both edges” when the new flags are absent.
+   */
+  edgeBlurEnabled?: boolean;
   cameraView: CameraView;
   compositionMode: CompositionMode;
   devices: DeviceInstance[];
@@ -182,6 +203,20 @@ export interface MockupProject {
   /** Optional scenic set pieces (clay shapes, walls, pedestals) */
   sceneProps: SceneProp[];
   animation: AnimationClip;
+  /** Optional soundtrack that plays with the animation timeline */
+  soundtrackName: string | null;
+  /** Data-URL audio when a soundtrack is attached (mp3/wav/ogg/m4a). */
+  soundtrackData: string | null;
+  /** Timeline start of the music clip (seconds). */
+  soundtrackStart: number;
+  /** Offset into the source audio (trim-in, seconds). */
+  soundtrackOffset: number;
+  /** Length of the music clip on the timeline (seconds). */
+  soundtrackDuration: number;
+  /** Seconds to ease music volume in from the start of the music clip */
+  soundtrackFadeIn: number;
+  /** Seconds to ease music volume out before the music clip ends */
+  soundtrackFadeOut: number;
 }
 
 export function createDeviceInstance(partial?: Partial<DeviceInstance>): DeviceInstance {
@@ -239,6 +274,8 @@ export const DEFAULT_PROJECT: MockupProject = {
   screenshot: null,
   deviceId: primary.deviceId,
   deviceColor: 'graphite',
+  clayMode: false,
+  overlays: [],
   background: 'midnight',
   gradientColors: { ...DEFAULT_GRADIENT },
   reflectionMap: 'match_background',
@@ -249,7 +286,8 @@ export const DEFAULT_PROJECT: MockupProject = {
   fillIntensity: 0.7,
   shadowSoftness: 2.5,
   shadowOpacity: 0.32,
-  edgeBlurEnabled: false,
+  edgeBlurTop: false,
+  edgeBlurBottom: false,
   edgeBlurAmount: 24,
   cameraView: 'front',
   compositionMode: 'single',
@@ -257,6 +295,13 @@ export const DEFAULT_PROJECT: MockupProject = {
   selectedDeviceId: primary.id,
   sceneProps: [],
   animation: createDefaultAnimation(primary.id),
+  soundtrackName: null,
+  soundtrackData: null,
+  soundtrackStart: 0,
+  soundtrackOffset: 0,
+  soundtrackDuration: 4,
+  soundtrackFadeIn: 0.8,
+  soundtrackFadeOut: 1.2,
 };
 
 export const ANIM_PROPERTIES: { id: AnimProperty; label: string; unit: string }[] = [
@@ -267,6 +312,17 @@ export const ANIM_PROPERTIES: { id: AnimProperty; label: string; unit: string }[
   { id: 'position.y', label: 'Pos Y', unit: '' },
   { id: 'position.z', label: 'Pos Z', unit: '' },
   { id: 'scale', label: 'Scale', unit: '×' },
+  { id: 'camera.x', label: 'Camera X', unit: '' },
+  { id: 'camera.y', label: 'Camera Y', unit: '' },
+  { id: 'camera.z', label: 'Camera Z', unit: '' },
+];
+
+export const CAMERA_ANIM_PROPERTIES: AnimProperty[] = ['camera.x', 'camera.y', 'camera.z'];
+
+export const DEVICE_ANIM_PROPERTIES: AnimProperty[] = [
+  'rotation.x', 'rotation.y', 'rotation.z',
+  'position.x', 'position.y', 'position.z',
+  'scale',
 ];
 
 export const IOS_DEVICE_ID: DeviceId = 'iphone_15_pro_max';
@@ -365,18 +421,70 @@ export const DEVICE_COLORS: { id: DeviceColor; label: string; hex: string }[] = 
   { id: 'titanium', label: 'Titanium', hex: '#9a9285' },
   { id: 'silver', label: 'Silver', hex: '#c6c9c9' },
   { id: 'rose', label: 'Rose', hex: '#be8f98' },
+  { id: 'clay', label: 'Clay', hex: '#d8d2c8' },
 ];
 
-/** Aspect / framing presets. Pair with EXPORT_RESOLUTIONS for final pixel size. */
+export const EXPORT_FPS_OPTIONS = [24, 30, 60] as const;
+
+
+export type ExportAspectGroup = 'social' | 'store' | 'other';
+
+/** Platform / framing presets. Pair with EXPORT_RESOLUTIONS for final pixel size. */
 export const EXPORT_ASPECTS = [
-  { id: 'portrait', label: 'Story / TikTok', hint: '9:16', ratio: 9 / 16 },
-  { id: 'square', label: 'Square social', hint: '1:1', ratio: 1 },
-  { id: 'landscape', label: 'Presentation / YouTube', hint: '16:9', ratio: 16 / 9 },
-  { id: 'twitter', label: 'X / LinkedIn', hint: '1.91:1', ratio: 1.91 },
-  { id: 'appstore', label: 'App Store', hint: 'iPhone', ratio: 1290 / 2796, fixed: { width: 1290, height: 2796 } },
-  { id: 'custom', label: 'Custom', hint: 'Free', ratio: 9 / 16 },
+  { id: 'tiktok', label: 'TikTok / Shorts', shortLabel: 'TikTok', hint: '9:16', ratio: 9 / 16, group: 'social' as const },
+  { id: 'reels', label: 'IG Reels / Story', shortLabel: 'Reels', hint: '9:16', ratio: 9 / 16, group: 'social' as const },
+  { id: 'ig_feed', label: 'Instagram Feed', shortLabel: 'IG Feed', hint: '4:5', ratio: 4 / 5, group: 'social' as const },
+  { id: 'square', label: 'Square', shortLabel: 'Square', hint: '1:1', ratio: 1, group: 'social' as const },
+  { id: 'youtube', label: 'YouTube', shortLabel: 'YouTube', hint: '16:9', ratio: 16 / 9, group: 'social' as const },
+  { id: 'twitter', label: 'X / LinkedIn', shortLabel: 'X', hint: '1.91:1', ratio: 1.91, group: 'social' as const },
+  {
+    id: 'appstore',
+    label: 'Apple App Store',
+    shortLabel: 'App Store',
+    hint: 'iPhone 6.7″',
+    ratio: 1290 / 2796,
+    fixed: { width: 1290, height: 2796 },
+    group: 'store' as const,
+  },
+  {
+    id: 'playstore',
+    label: 'Google Play',
+    shortLabel: 'Play',
+    hint: 'Phone',
+    ratio: 1080 / 1920,
+    fixed: { width: 1080, height: 1920 },
+    group: 'store' as const,
+  },
+  {
+    id: 'play_feature',
+    label: 'Play Feature',
+    shortLabel: 'Feature',
+    hint: '1024×500',
+    ratio: 1024 / 500,
+    fixed: { width: 1024, height: 500 },
+    group: 'store' as const,
+  },
+  { id: 'custom', label: 'Custom', shortLabel: 'Custom', hint: 'Free', ratio: 9 / 16, group: 'other' as const },
 ] as const;
 export type ExportAspectId = (typeof EXPORT_ASPECTS)[number]['id'];
+
+export const EXPORT_ASPECT_GROUPS: { id: ExportAspectGroup; label: string }[] = [
+  { id: 'social', label: 'Social & video' },
+  { id: 'store', label: 'App stores' },
+  { id: 'other', label: 'Custom' },
+];
+
+/** True when the aspect locks to a store / console pixel size. */
+export function exportAspectHasFixed(aspectId: ExportAspectId): boolean {
+  const aspect = EXPORT_ASPECTS.find((item) => item.id === aspectId);
+  return Boolean(aspect && 'fixed' in aspect && aspect.fixed);
+}
+
+export function exportAspectFixedSize(aspectId: ExportAspectId): { width: number; height: number } | null {
+  const aspect = EXPORT_ASPECTS.find((item) => item.id === aspectId);
+  if (!aspect || !('fixed' in aspect) || !aspect.fixed) return null;
+  return aspect.fixed;
+}
 
 /** Output resolution tiers (applied to the selected aspect). */
 export const EXPORT_RESOLUTIONS = [
@@ -384,17 +492,18 @@ export const EXPORT_RESOLUTIONS = [
   { id: 'fhd', label: 'Full HD', detail: '1080', longEdge: 1920 },
   { id: 'qhd', label: '2K', detail: '1440', longEdge: 2560 },
   { id: 'uhd', label: '4K', detail: '2160', longEdge: 3840 },
-  { id: 'native', label: 'App native', detail: 'Fixed', longEdge: 0 },
+  { id: 'native', label: 'Platform size', detail: 'Fixed', longEdge: 0 },
   { id: 'custom', label: 'Custom px', detail: 'Manual', longEdge: 0 },
 ] as const;
 export type ExportResolutionId = (typeof EXPORT_RESOLUTIONS)[number]['id'];
 
 /** @deprecated kept for older references — use EXPORT_ASPECTS + EXPORT_RESOLUTIONS */
 export const EXPORT_PRESETS = [
-  { id: 'portrait', label: 'Story / TikTok', dimensions: '1080 × 1920', width: 1080, height: 1920 },
-  { id: 'square', label: 'Square social', dimensions: '1080 × 1080', width: 1080, height: 1080 },
-  { id: 'landscape', label: 'Presentation', dimensions: '1920 × 1080', width: 1920, height: 1080 },
-  { id: 'appstore', label: 'App store portrait', dimensions: '1290 × 2796', width: 1290, height: 2796 },
+  { id: 'tiktok', label: 'TikTok / Shorts', dimensions: '1080 × 1920', width: 1080, height: 1920 },
+  { id: 'square', label: 'Square', dimensions: '1080 × 1080', width: 1080, height: 1080 },
+  { id: 'youtube', label: 'YouTube', dimensions: '1920 × 1080', width: 1920, height: 1080 },
+  { id: 'appstore', label: 'Apple App Store', dimensions: '1290 × 2796', width: 1290, height: 2796 },
+  { id: 'playstore', label: 'Google Play', dimensions: '1080 × 1920', width: 1080, height: 1920 },
   { id: 'custom', label: 'Custom size', dimensions: 'Custom', width: 1080, height: 1920 },
 ] as const;
 export type ExportPresetId = (typeof EXPORT_PRESETS)[number]['id'];
@@ -413,21 +522,28 @@ export function resolveExportDimensions(
   custom?: { width: number; height: number },
 ): { width: number; height: number; label: string } {
   const aspect = EXPORT_ASPECTS.find((item) => item.id === aspectId) ?? EXPORT_ASPECTS[0];
+  const fixed = exportAspectFixedSize(aspect.id);
 
   if (aspectId === 'custom' || resolutionId === 'custom') {
-    const width = evenSize(custom?.width ?? 1080);
-    const height = evenSize(custom?.height ?? 1920);
+    const width = evenSize(custom?.width ?? fixed?.width ?? 1080);
+    const height = evenSize(custom?.height ?? fixed?.height ?? 1920);
     return { width, height, label: `${width} × ${height}` };
   }
 
-  if (aspectId === 'appstore' || resolutionId === 'native') {
-    const fixed = 'fixed' in aspect && aspect.fixed
-      ? aspect.fixed
-      : { width: 1290, height: 2796 };
+  if (fixed && (resolutionId === 'native' || exportAspectHasFixed(aspectId))) {
     return {
       width: fixed.width,
       height: fixed.height,
       label: `${fixed.width} × ${fixed.height}`,
+    };
+  }
+
+  if (resolutionId === 'native') {
+    const fallback = fixed ?? { width: 1290, height: 2796 };
+    return {
+      width: fallback.width,
+      height: fallback.height,
+      label: `${fallback.width} × ${fallback.height}`,
     };
   }
 

@@ -1,6 +1,7 @@
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
+import { encodeSoundtrackAac, renderSoundtrackPcm, type SoundtrackClip } from './soundtrack';
 
 export type VideoFormatId = 'webm' | 'mp4' | 'gif';
 export type StillFormatId = 'png' | 'webp';
@@ -232,6 +233,8 @@ export interface EncodeVideoOptions {
   duration: number;
   renderFrame: (time: number, ctx: CanvasRenderingContext2D, width: number, height: number) => Promise<void> | void;
   onProgress?: (ratio: number, label: string) => void;
+  /** Optional soundtrack muxed into MP4 (AAC). Skipped for GIF; best-effort for WebM. */
+  soundtrack?: SoundtrackClip | null;
 }
 
 function createEncoderBridge(muxerAdd: (chunk: EncodedVideoChunk, meta?: EncodedVideoChunkMetadata) => void) {
@@ -278,6 +281,14 @@ export async function encodeAnimationVideo(options: EncodeVideoOptions): Promise
   return encodeWebm({ options, width, height, fps, totalFrames, bitrate, canvas, ctx });
 }
 
+async function prepareMp4Audio(options: EncodeVideoOptions) {
+  if (!options.soundtrack?.dataUrl) return null;
+  options.onProgress?.(0, 'Mixing soundtrack…');
+  const pcm = await renderSoundtrackPcm(options.soundtrack, options.duration, 48_000);
+  if (!pcm) return null;
+  return pcm;
+}
+
 async function encodeMp4({
   options, width, height, fps, totalFrames, bitrate, canvas, ctx,
 }: {
@@ -291,10 +302,20 @@ async function encodeMp4({
   ctx: CanvasRenderingContext2D;
 }) {
   const picked = await pickVideoConfig('mp4', width, height, fps, bitrate);
+  const audioPcm = await prepareMp4Audio(options);
   const target = new Mp4ArrayBufferTarget();
   const muxer = new Mp4Muxer({
     target,
     video: { codec: 'avc', width, height, frameRate: fps },
+    ...(audioPcm
+      ? {
+        audio: {
+          codec: 'aac' as const,
+          numberOfChannels: audioPcm.numberOfChannels,
+          sampleRate: audioPcm.sampleRate,
+        },
+      }
+      : {}),
     fastStart: 'in-memory',
     firstTimestampBehavior: 'offset',
   });
@@ -332,6 +353,17 @@ async function encodeMp4({
         await waitEncoder(encoder);
       }
       await encoder.flush();
+
+      if (audioPcm) {
+        options.onProgress?.(0.96, 'Encoding soundtrack…');
+        const ok = await encodeSoundtrackAac(audioPcm, (chunk, meta) => {
+          muxer.addAudioChunk(chunk, meta);
+        });
+        if (!ok) {
+          console.warn('[export] Soundtrack could not be encoded (AAC unavailable); exporting silent MP4');
+        }
+      }
+
       muxer.finalize();
       options.onProgress?.(1, 'Finishing MP4');
     })(), failure);

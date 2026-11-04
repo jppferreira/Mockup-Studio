@@ -13,7 +13,11 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "types": ["vite/client"],
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["shared/*"]
+    }
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "shared", "vite.config.ts"]
 }

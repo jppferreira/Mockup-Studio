@@ -1,8 +1,10 @@
 import { isKnownDeviceId } from './devices';
+import { createOverlay, type SceneOverlay } from './overlays';
+import { isValidScreenMediaDataUrl } from './screenMedia';
 import { REFLECTION_MAPS } from './reflectionMaps';
 import {
-  ANIM_PROPERTIES, BACKGROUNDS, BUILTIN_GRADIENTS, DEFAULT_GRADIENT, DEFAULT_PROJECT, DEVICE_COLORS,
-  SCENE_PROP_KINDS, createDefaultAnimation, createDeviceInstance, createSceneProp,
+  ANIM_PROPERTIES, BACKGROUNDS, BUILTIN_GRADIENTS, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT,
+  DEVICE_COLORS, SCENE_PROP_KINDS, createDefaultAnimation, createDeviceInstance, createSceneProp,
   getSelectedDevice, normalizeGradientColors, syncProjectFromSelected,
   type AnimKeyframe, type AnimProperty, type AnimTrack, type AnimationClip,
   type DeviceInstance, type MockupProject, type ReflectionMapSetting,
@@ -90,8 +92,8 @@ export function validateProject(value: unknown): MockupProject {
   const input = value as Partial<MockupProject>;
   if (input.version !== 1) throw new Error('Unsupported project version.');
   if (typeof input.name !== 'string') throw new Error('Project name is invalid.');
-  if (input.screenshot != null && (typeof input.screenshot !== 'string' || !/^data:image\/(png|jpeg|webp);base64,/.test(input.screenshot))) {
-    throw new Error('The screenshot in this project is invalid.');
+  if (input.screenshot != null && !isValidScreenMediaDataUrl(input.screenshot)) {
+    throw new Error('The screen media in this project is invalid.');
   }
   const savedPresets = loadCustomScenePresets();
   const backgroundId = typeof input.background === 'string' ? input.background : DEFAULT_PROJECT.background;
@@ -110,6 +112,8 @@ export function validateProject(value: unknown): MockupProject {
     : normalizeGradientColors(input.gradientColors, gradientFallback);
 
   const color = DEVICE_COLORS.some((p) => p.id === input.deviceColor) ? input.deviceColor! : DEFAULT_PROJECT.deviceColor;
+  const clayMode = input.clayMode === true || color === 'clay';
+  const overlays = normalizeOverlays(input);
   const devices = normalizeDevices(input);
   const selectedDeviceId = devices.some((d) => d.id === input.selectedDeviceId)
     ? String(input.selectedDeviceId)
@@ -119,6 +123,37 @@ export function validateProject(value: unknown): MockupProject {
   const compositionMode = input.compositionMode === 'split' ? 'split' : 'single';
   const animation = normalizeAnimation(input.animation, devices);
   const sceneProps = normalizeSceneProps(input);
+
+  const soundtrackData = typeof input.soundtrackData === 'string'
+    && /^data:audio\/(mpeg|mp3|wav|wave|ogg|mp4|x-m4a|aac);base64,/i.test(input.soundtrackData)
+    ? input.soundtrackData
+    : null;
+  const soundtrackName = soundtrackData
+    && typeof input.soundtrackName === 'string'
+    && input.soundtrackName.trim()
+    ? input.soundtrackName.trim().slice(0, 80)
+    : (soundtrackData ? 'Soundtrack' : null);
+  const timelineDur = Math.max(0.15, animation.duration);
+  const soundtrackStart = soundtrackData
+    ? number(input.soundtrackStart, DEFAULT_PROJECT.soundtrackStart, 0, timelineDur)
+    : DEFAULT_PROJECT.soundtrackStart;
+  const soundtrackOffset = soundtrackData
+    ? number(input.soundtrackOffset, DEFAULT_PROJECT.soundtrackOffset, 0, 3600)
+    : DEFAULT_PROJECT.soundtrackOffset;
+  const soundtrackDuration = soundtrackData
+    ? number(
+      input.soundtrackDuration,
+      Math.min(timelineDur, DEFAULT_PROJECT.soundtrackDuration),
+      0.15,
+      timelineDur,
+    )
+    : DEFAULT_PROJECT.soundtrackDuration;
+  const soundtrackFadeIn = soundtrackData
+    ? number(input.soundtrackFadeIn, DEFAULT_PROJECT.soundtrackFadeIn, 0, 8)
+    : DEFAULT_PROJECT.soundtrackFadeIn;
+  const soundtrackFadeOut = soundtrackData
+    ? number(input.soundtrackFadeOut, DEFAULT_PROJECT.soundtrackFadeOut, 0, 8)
+    : DEFAULT_PROJECT.soundtrackFadeOut;
 
   const reflectionMapRaw = typeof input.reflectionMap === 'string' ? input.reflectionMap : DEFAULT_PROJECT.reflectionMap;
   const reflectionMap = REFLECTION_IDS.has(reflectionMapRaw)
@@ -140,13 +175,20 @@ export function validateProject(value: unknown): MockupProject {
     reflectionMapImage,
     deviceId: selected.deviceId,
     deviceColor: color,
+    clayMode,
+    overlays,
     rotation: { ...selected.rotation },
     scale: selected.scale,
     lightIntensity: number(input.lightIntensity, 2.5, 0.5, 5),
     fillIntensity: number(input.fillIntensity, DEFAULT_PROJECT.fillIntensity, 0, 2.5),
     shadowSoftness: number(input.shadowSoftness, DEFAULT_PROJECT.shadowSoftness, 0.2, 8),
     shadowOpacity: number(input.shadowOpacity, DEFAULT_PROJECT.shadowOpacity, 0, 0.85),
-    edgeBlurEnabled: input.edgeBlurEnabled === true,
+    edgeBlurTop: typeof input.edgeBlurTop === 'boolean'
+      ? input.edgeBlurTop
+      : input.edgeBlurEnabled === true,
+    edgeBlurBottom: typeof input.edgeBlurBottom === 'boolean'
+      ? input.edgeBlurBottom
+      : input.edgeBlurEnabled === true,
     edgeBlurAmount: number(input.edgeBlurAmount, DEFAULT_PROJECT.edgeBlurAmount, 4, 64),
     cameraView: ['front', 'left', 'right', 'top'].includes(String(input.cameraView)) ? input.cameraView! : 'front',
     compositionMode,
@@ -154,7 +196,45 @@ export function validateProject(value: unknown): MockupProject {
     selectedDeviceId,
     sceneProps,
     animation,
+    soundtrackName,
+    soundtrackData,
+    soundtrackStart,
+    soundtrackOffset,
+    soundtrackDuration,
+    soundtrackFadeIn,
+    soundtrackFadeOut,
   }, selected);
+}
+
+function normalizeOverlays(input: Partial<MockupProject>): SceneOverlay[] {
+  if (!Array.isArray(input.overlays)) return [];
+  return input.overlays.slice(0, 24).flatMap((raw, index) => {
+    const item = (raw ?? {}) as Partial<SceneOverlay>;
+    const kind = item.kind === 'image' ? 'image' : item.kind === 'text' ? 'text' : null;
+    if (!kind) return [];
+    const imageData = kind === 'image'
+      && typeof item.imageData === 'string'
+      && /^data:image\/(png|jpeg|webp);base64,/i.test(item.imageData)
+      ? item.imageData
+      : null;
+    if (kind === 'image' && !imageData) return [];
+    return [createOverlay({
+      id: typeof item.id === 'string' ? item.id : `overlay-${index}`,
+      kind,
+      x: number(item.x, 0.5, 0, 1),
+      y: number(item.y, 0.18, 0, 1),
+      scale: number(item.scale, 1, 0.2, 4),
+      opacity: number(item.opacity, 1, 0, 1),
+      startTime: number(item.startTime, 0, 0, 60),
+      endTime: number(item.endTime, 30, 0, 60),
+      text: typeof item.text === 'string' ? item.text.slice(0, 160) : undefined,
+      color: typeof item.color === 'string' && /^#([0-9a-fA-F]{6})$/.test(item.color.trim())
+        ? item.color.trim().toLowerCase()
+        : '#ffffff',
+      fontSize: number(item.fontSize, 0.055, 0.02, 0.2),
+      imageData,
+    })];
+  });
 }
 
 function normalizeAnimation(raw: unknown, devices: DeviceInstance[]): AnimationClip {
@@ -163,15 +243,19 @@ function normalizeAnimation(raw: unknown, devices: DeviceInstance[]): AnimationC
   const input = raw as Partial<AnimationClip>;
   const allowed = new Set(ANIM_PROPERTIES.map((p) => p.id));
   const deviceIds = new Set(devices.map((d) => d.id));
+  const isCameraProp = (p: AnimProperty) => p.startsWith('camera.');
 
   const tracks: AnimTrack[] = Array.isArray(input.tracks)
     ? input.tracks.flatMap((item, index) => {
       const track = (item ?? {}) as Partial<AnimTrack>;
       const property = allowed.has(track.property as AnimProperty) ? track.property as AnimProperty : null;
-      const targetId = typeof track.targetId === 'string' && deviceIds.has(track.targetId)
-        ? track.targetId
-        : devices[0]?.id;
-      if (!property || !targetId) return [];
+      if (!property) return [];
+      const targetId = isCameraProp(property)
+        ? CAMERA_TARGET_ID
+        : (typeof track.targetId === 'string' && deviceIds.has(track.targetId)
+          ? track.targetId
+          : devices[0]?.id);
+      if (!targetId) return [];
       const keyframes: AnimKeyframe[] = Array.isArray(track.keyframes)
         ? track.keyframes.slice(0, 64).map((kf, ki) => {
           const key = (kf ?? {}) as Partial<AnimKeyframe>;

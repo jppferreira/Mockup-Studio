@@ -30,8 +30,12 @@ export function applyProgressiveEdgeBlur(
   width: number,
   height: number,
   amount: number,
+  edges: { top?: boolean; bottom?: boolean } = { top: true, bottom: true },
 ): void {
   if (amount <= 0 || width < 2 || height < 2) return;
+  const blurTop = edges.top !== false;
+  const blurBottom = edges.bottom !== false;
+  if (!blurTop && !blurBottom) return;
 
   const source = document.createElement('canvas');
   source.width = width;
@@ -45,8 +49,8 @@ export function applyProgressiveEdgeBlur(
     const band = Math.max(2, Math.ceil(height * layer.frac));
     const pad = Math.ceil(blurPx * 2) + 2;
 
-    compositeBand(dest, source, width, height, band, pad, blurPx, 'top');
-    compositeBand(dest, source, width, height, band, pad, blurPx, 'bottom');
+    if (blurTop) compositeBand(dest, source, width, height, band, pad, blurPx, 'top');
+    if (blurBottom) compositeBand(dest, source, width, height, band, pad, blurPx, 'bottom');
   }
 }
 

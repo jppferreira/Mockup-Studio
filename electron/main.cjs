@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
@@ -92,6 +92,22 @@ app.whenReady().then(() => {
     await fs.writeFile(filePath, Buffer.from(dataBase64, 'base64'));
     return { canceled: false, path: filePath };
   });
+
+  ipcMain.handle('shell:openExternal', async (_event, rawUrl) => {
+    if (typeof rawUrl !== 'string' || rawUrl.length > 2048) throw new Error('Invalid URL');
+    let parsed;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      throw new Error('Invalid URL');
+    }
+    if (!['https:', 'http:', 'mailto:'].includes(parsed.protocol)) {
+      throw new Error('Only http(s) and mailto links are allowed');
+    }
+    await shell.openExternal(parsed.toString());
+    return { ok: true };
+  });
+
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

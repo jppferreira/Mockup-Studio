@@ -28,7 +28,6 @@ export default function ReflectionMapPicker({
   const colorKey = colors ? `${colors.center}-${colors.mid}-${colors.edge}` : '';
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [customPreview, setCustomPreview] = useState<string | null>(null);
-  const [heroPreview, setHeroPreview] = useState<string | null>(null);
 
   const options = useMemo(
     () => ({ background, colors }),
@@ -67,47 +66,8 @@ export default function ReflectionMapPicker({
     return () => { cancelled = true; };
   }, [customImage, options, background, colorKey]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const handle = window.setTimeout(() => {
-      void (async () => {
-        if (value === 'custom' && customImage) {
-          const img = await loadImage(customImage);
-          if (cancelled) return;
-          setHeroPreview(reflectionMapPreviewDataUrl('custom', { ...options, customImage: img }, 140));
-          return;
-        }
-        if (cancelled) return;
-        setHeroPreview(reflectionMapPreviewDataUrl(value === 'custom' ? 'studio' : value, options, 140));
-      })();
-    }, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(handle);
-    };
-  }, [value, customImage, options, background, colorKey]);
-
-  const activeLabel = value === 'custom'
-    ? 'Custom image'
-    : REFLECTION_MAPS.find((m) => m.id === value)?.label ?? 'Reflection';
-
-  const activeDesc = value === 'custom'
-    ? 'Uploaded equirect / panorama'
-    : REFLECTION_MAPS.find((m) => m.id === value)?.description ?? '';
-
   return (
     <div className="reflection-map-picker">
-      <div className="reflection-hero">
-        <div className="reflection-hero-sphere" aria-hidden>
-          {heroPreview && <img src={heroPreview} alt="" />}
-        </div>
-        <div className="reflection-hero-meta">
-          <strong>{activeLabel}</strong>
-          <span>{activeDesc}</span>
-          <p>Chrome ball preview — same environment the device glass samples.</p>
-        </div>
-      </div>
-
       <div className="reflection-sphere-grid" role="listbox" aria-label="Reflection maps">
         {REFLECTION_MAPS.map((map) => (
           <button
@@ -137,7 +97,7 @@ export default function ReflectionMapPicker({
           <span className="reflection-sphere-thumb reflection-sphere-upload">
             {customPreview
               ? <img src={customPreview} alt="" />
-              : <ImagePlus size={22} strokeWidth={1.75} />}
+              : <ImagePlus size={18} strokeWidth={1.75} />}
           </span>
           <span className="reflection-sphere-label">Upload</span>
         </button>
@@ -165,13 +125,4 @@ export default function ReflectionMapPicker({
       />
     </div>
   );
-}
-
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = src;
-  });
 }

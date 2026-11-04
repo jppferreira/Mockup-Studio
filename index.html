@@ -5,8 +5,113 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0c0d0f" />
     <title>Mockup Studio — 3D Mockup Creator</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #0c0d0f;
+        color: #eaedf0;
+      }
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(ellipse 50% 40% at 50% 42%, #1a262088 0%, transparent 70%),
+          #0c0d0f;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        transition: opacity 420ms ease, visibility 420ms ease;
+      }
+      #app-splash.is-done {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      #app-splash .splash-inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+        -webkit-app-region: no-drag;
+      }
+      #app-splash .splash-mark {
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        display: grid;
+        place-items: center;
+        color: #121d15;
+        background: #c5f3b8;
+        box-shadow: 0 0 28px rgba(181, 236, 165, 0.18);
+        animation: splash-pulse 1.6s ease-in-out infinite;
+      }
+      #app-splash .splash-mark svg {
+        width: 28px;
+        height: 28px;
+      }
+      #app-splash .splash-title {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: -0.6px;
+        color: #f4f7f2;
+      }
+      #app-splash .splash-meta {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+      }
+      #app-splash .splash-loader {
+        width: 36px;
+        height: 2px;
+        border-radius: 999px;
+        background: #2a2e33;
+        overflow: hidden;
+      }
+      #app-splash .splash-loader span {
+        display: block;
+        width: 40%;
+        height: 100%;
+        border-radius: inherit;
+        background: #c5f3b8;
+        animation: splash-bar 1.1s ease-in-out infinite;
+      }
+      #app-splash .splash-version {
+        margin: 0;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        color: #7d828a;
+      }
+      @keyframes splash-pulse {
+        0%, 100% { transform: scale(1); box-shadow: 0 0 28px rgba(181, 236, 165, 0.18); }
+        50% { transform: scale(1.04); box-shadow: 0 0 36px rgba(181, 236, 165, 0.28); }
+      }
+      @keyframes splash-bar {
+        0% { transform: translateX(-120%); }
+        100% { transform: translateX(320%); }
+      }
+    </style>
   </head>
   <body>
+    <div id="app-splash" aria-busy="true" aria-live="polite">
+      <div class="splash-inner">
+        <div class="splash-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+            <polyline points="3.29 7 12 12 20.71 7" />
+            <line x1="12" y1="22" x2="12" y2="12" />
+          </svg>
+        </div>
+        <h1 class="splash-title">Mockup Studio</h1>
+        <div class="splash-meta">
+          <div class="splash-loader" aria-hidden="true"><span></span></div>
+          <p class="splash-version">v%APP_VERSION%</p>
+        </div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
