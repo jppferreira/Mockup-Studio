@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Mail, MessageSquarePlus, X } from 'lucide-react';
-import { FEEDBACK_EMAIL, submitFeedbackBrowser } from '@shared/feedbackSubmit';
+import { FEEDBACK_EMAIL, resolveFulfillApiUrl, submitFeedbackBrowser } from '@shared/feedbackSubmit';
 
 export type ContactIntent = 'contact' | 'feedback';
 export type ContactTopic = 'question' | 'bug' | 'idea' | 'praise' | 'licensing' | 'other';
@@ -28,10 +28,13 @@ function topicLabel(topic: ContactTopic) {
 }
 
 function fulfillBase(): string | null {
-  const fromEnv = import.meta.env.VITE_FULFILL_API_URL?.trim();
-  if (fromEnv) return fromEnv.replace(/\/$/, '');
-  if (typeof window !== 'undefined' && /localhost|127\.0\.0\.1/.test(window.location.hostname)) {
-    return 'http://127.0.0.1:8787';
+  const fromEnv = import.meta.env.VITE_FULFILL_API_URL?.trim() || null;
+  // Prefer env when it is reachable from this page (rejects loopback on github.io).
+  const resolved = resolveFulfillApiUrl(fromEnv);
+  if (resolved) return resolved;
+  // Local website dev only — never bake this into production behavior via runtime.
+  if (typeof window !== 'undefined' && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)) {
+    return resolveFulfillApiUrl('http://127.0.0.1:8787');
   }
   return null;
 }

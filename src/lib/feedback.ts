@@ -1,5 +1,6 @@
 import {
   FEEDBACK_EMAIL,
+  resolveFulfillApiUrl,
   submitFeedbackBrowser,
   type FeedbackSubmitResult,
 } from '../../shared/feedbackSubmit';
@@ -18,9 +19,9 @@ export interface FeedbackPayload {
 }
 
 function fulfillBase(): string | null {
-  const fromEnv = (import.meta.env.VITE_FULFILL_API_URL as string | undefined)?.trim();
-  if (!fromEnv) return null;
-  return fromEnv.replace(/\/$/, '');
+  return resolveFulfillApiUrl(
+    (import.meta.env.VITE_FULFILL_API_URL as string | undefined)?.trim() || null,
+  );
 }
 
 async function openMailtoHref(href: string): Promise<void> {
