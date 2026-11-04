@@ -167,3 +167,108 @@ export async function sendRecoverCodeEmail(opts) {
 
   return sendRawEmail({ to: opts.email, subject, text, html });
 }
+
+/**
+ * Forward product feedback / contact form to the inbox.
+ * @param {{
+ *   to?: string,
+ *   replyTo?: string,
+ *   name?: string,
+ *   topic: string,
+ *   intent?: string,
+ *   message: string,
+ *   appVersion?: string,
+ *   platform?: string,
+ *   userAgent?: string,
+ * }} opts
+ */
+export async function sendFeedbackEmail(opts) {
+  const to = (
+    opts.to
+    || process.env.FEEDBACK_INBOX?.trim()
+    || process.env.VITE_SALES_EMAIL?.trim()
+    || 'hello@jppferreira.com'
+  );
+  const intent = opts.intent === 'contact' ? 'contact' : 'feedback';
+  const topic = String(opts.topic || 'Other').trim() || 'Other';
+  const name = String(opts.name || '').trim() || 'Mockup Studio user';
+  const replyTo = String(opts.replyTo || '').trim();
+  const subject = `Mockup Studio ${intent} — ${topic}${replyTo ? ` · ${replyTo}` : ''}`;
+  const text = [
+    `Topic: ${topic}`,
+    `Intent: ${intent}`,
+    `From: ${name}`,
+    replyTo ? `Reply-to: ${replyTo}` : 'Reply-to: (not provided)',
+    opts.appVersion ? `App: Mockup Studio ${opts.appVersion}` : null,
+    opts.platform ? `Platform: ${opts.platform}` : null,
+    opts.userAgent ? `User-Agent: ${opts.userAgent}` : null,
+    '',
+    String(opts.message || '').trim(),
+  ]
+    .filter((line) => line != null)
+    .join('\n');
+
+  const html = `
+    <p><strong>Topic:</strong> ${escapeHtml(topic)} · <strong>Intent:</strong> ${escapeHtml(intent)}</p>
+    <p><strong>From:</strong> ${escapeHtml(name)}${
+      replyTo ? ` &lt;${escapeHtml(replyTo)}&gt;` : ''
+    }</p>
+    ${opts.appVersion ? `<p><strong>App:</strong> Mockup Studio ${escapeHtml(opts.appVersion)}</p>` : ''}
+    ${opts.platform ? `<p><strong>Platform:</strong> ${escapeHtml(opts.platform)}</p>` : ''}
+    <pre style="white-space:pre-wrap;font-family:ui-sans-serif,system-ui,sans-serif;background:#111;color:#e8ecef;padding:14px;border-radius:8px;">${escapeHtml(String(opts.message || '').trim())}</pre>
+  `.trim();
+
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const from = process.env.LICENSE_EMAIL_FROM?.trim() || 'Mockup Studio <onboarding@resend.dev>';
+
+  if (!apiKey) {
+    console.log('\n——— FEEDBACK EMAIL (dry-run — set RESEND_API_KEY to send) ———');
+    console.log('To:', to);
+    console.log('From:', from);
+    if (replyTo) console.log('Reply-To:', replyTo);
+    console.log('Subject:', subject);
+    console.log(text);
+    console.log('——— end dry-run ———\n');
+    return { ok: true, dryRun: true };
+  }
+
+  try {
+    /** @type {Record<string, unknown>} */
+    const payload = {
+      from,
+      to: [to],
+      subject,
+      text,
+      html,
+    };
+    if (replyTo) payload.reply_to = replyTo;
+
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: typeof body?.message === 'string' ? body.message : `Resend HTTP ${res.status}`,
+      };
+    }
+    return { ok: true, id: body.id };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** @param {string} value */
+function escapeHtml(value) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}

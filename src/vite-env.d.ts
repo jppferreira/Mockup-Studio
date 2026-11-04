@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly VITE_DOWNLOAD_MAC_URL?: string;
   readonly VITE_SITE_URL?: string;
   readonly VITE_SALES_EMAIL?: string;
+  /** License + feedback API base (e.g. http://127.0.0.1:8787 or https://license.mockupstudio.app) */
+  readonly VITE_FULFILL_API_URL?: string;
 }
 
 interface ImportMeta {

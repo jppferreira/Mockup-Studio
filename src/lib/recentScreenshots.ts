@@ -3,11 +3,15 @@ export const MAX_RECENT_SCREENSHOTS = 4;
 /** Skip persisting individual shots larger than this (keep in-session only). */
 const MAX_PERSIST_BYTES = 2_500_000;
 
+export type RecentScreenshotPlatform = 'ios' | 'android';
+
 export interface RecentScreenshot {
   id: string;
   addedAt: number;
   name: string;
   dataUrl: string;
+  /** Platform env this shot was captured for — used to filter Recent by publish target. */
+  platform?: RecentScreenshotPlatform;
 }
 
 function canPersist(dataUrl: string) {
@@ -34,6 +38,7 @@ export function loadRecentScreenshots(): RecentScreenshot[] {
         addedAt: row.addedAt,
         name: typeof row.name === 'string' && row.name.trim() ? row.name.trim() : 'Screenshot',
         dataUrl: row.dataUrl,
+        platform: row.platform === 'ios' || row.platform === 'android' ? row.platform : undefined,
       }))
       .slice(0, MAX_RECENT_SCREENSHOTS);
   } catch {
@@ -62,6 +67,7 @@ export function rememberRecentScreenshot(
   current: RecentScreenshot[],
   dataUrl: string,
   name?: string,
+  platform?: RecentScreenshotPlatform,
 ): RecentScreenshot[] {
   if (!dataUrl.startsWith('data:image/')) return current;
   const entry: RecentScreenshot = {
@@ -69,8 +75,17 @@ export function rememberRecentScreenshot(
     addedAt: Date.now(),
     name: (name?.replace(/\.[^.]+$/, '') || 'Screenshot').slice(0, 48),
     dataUrl,
+    platform,
   };
   const next = [entry, ...current.filter((item) => item.dataUrl !== dataUrl)].slice(0, MAX_RECENT_SCREENSHOTS);
   persist(next);
   return next;
+}
+
+/** Prefer shots tagged for this platform; include untagged legacy entries. */
+export function recentForPlatform(
+  entries: RecentScreenshot[],
+  platform: RecentScreenshotPlatform,
+): RecentScreenshot[] {
+  return entries.filter((item) => !item.platform || item.platform === platform);
 }

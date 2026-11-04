@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AppScreenshot } from './components/AppScreenshot';
-import { ContactModal } from './components/ContactModal';
+import { ContactModal, type ContactIntent } from './components/ContactModal';
 import { Logo } from './components/Logo';
 import { Reveal } from './components/Reveal';
 import { PLANS, PRICING_TAGLINE, UPDATE_PASS } from '@shared/pricing';
@@ -18,6 +18,11 @@ export function Landing() {
   const parallax = useParallax();
   const activeCopy = HEADLINE_OPTIONS[0];
   const [contactOpen, setContactOpen] = useState(false);
+  const [contactIntent, setContactIntent] = useState<ContactIntent>('contact');
+  const openContact = (intent: ContactIntent = 'contact') => {
+    setContactIntent(intent);
+    setContactOpen(true);
+  };
   const [heroLayout, setHeroLayout] = useState<HeroLayout>('stack');
   const [illoStyle, setIlloStyle] = useState<FeatureIlloStyle>('charcoal');
 
@@ -39,7 +44,10 @@ export function Landing() {
             <Link to="/pricing">Pricing</Link>
             <Link to="/privacy">Privacy</Link>
             <Link to="/terms">Terms</Link>
-            <button type="button" className="nav-text-btn" onClick={() => setContactOpen(true)}>
+            <button type="button" className="nav-text-btn" onClick={() => openContact('feedback')}>
+              Feedback
+            </button>
+            <button type="button" className="nav-text-btn" onClick={() => openContact('contact')}>
               Contact
             </button>
           </nav>
@@ -256,14 +264,21 @@ export function Landing() {
           <Link to="/terms">Terms</Link>
           <Link to="/credits">Credits</Link>
           <Link to="/recover">Recover key</Link>
-          <button type="button" className="footer-text-btn" onClick={() => setContactOpen(true)}>
+          <button type="button" className="footer-text-btn" onClick={() => openContact('feedback')}>
+            Feedback
+          </button>
+          <button type="button" className="footer-text-btn" onClick={() => openContact('contact')}>
             Contact
           </button>
         </nav>
         <p>Local-first 3D device mockups for macOS.</p>
       </footer>
 
-      <ContactModal open={contactOpen} onClose={() => setContactOpen(false)} />
+      <ContactModal
+        open={contactOpen}
+        intent={contactIntent}
+        onClose={() => setContactOpen(false)}
+      />
     </div>
   );
 }

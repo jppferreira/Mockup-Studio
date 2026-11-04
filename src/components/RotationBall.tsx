@@ -10,7 +10,7 @@ interface Props {
   object: THREE.Object3D | null;
   active: boolean;
   mode: GizmoMode;
-  onRotate: (rotation: Vec3) => void;
+  onRotate: (rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
   onMove: (position: Vec3, opts?: { recordKeys?: boolean }) => void;
   onDraggingChange?: (dragging: boolean) => void;
 }
@@ -205,8 +205,8 @@ export default function RotationBall({
     } else {
       const lock = poseLockRef.current;
       if (lock) object.position.copy(lock.position);
-      // Single commit after quaternion drag — avoids mid-drag Euler snap/axis flips.
-      onRotate(readRotation(object));
+      // Final commit after quaternion drag (keys recorded here, not on every frame).
+      onRotate(readRotation(object), { recordKeys: true });
     }
     dragToolRef.current = null;
     poseLockRef.current = null;
@@ -240,9 +240,10 @@ export default function RotationBall({
         onMouseUp={() => endDrag('rotate')}
         onObjectChange={() => {
           if (dragToolRef.current !== 'rotate') return;
-          // Keep position pinned; do not push Euler to React until pointer-up.
+          // Keep position pinned; live-push Euler so linked dual panes stay in sync mid-drag.
           const lock = poseLockRef.current;
           if (lock) object.position.copy(lock.position);
+          onRotate(readRotation(object), { recordKeys: false });
         }}
       />
       <TransformControls

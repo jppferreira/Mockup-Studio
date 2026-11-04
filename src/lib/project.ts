@@ -1,14 +1,16 @@
-import { isKnownDeviceId } from './devices';
+import { getDevice, isKnownDeviceId } from './devices';
+import { ensureCompositionLayers } from './layers';
 import { createOverlay, type SceneOverlay } from './overlays';
 import { isValidScreenMediaDataUrl } from './screenMedia';
 import { REFLECTION_MAPS } from './reflectionMaps';
 import {
   ANIM_PROPERTIES, BACKGROUNDS, BUILTIN_GRADIENTS, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT,
-  DEVICE_COLORS, SCENE_PROP_KINDS, createDefaultAnimation, createDeviceInstance, createSceneProp,
-  getSelectedDevice, normalizeGradientColors, syncProjectFromSelected,
+  DEVICE_COLORS, MAX_COMPOSITION_SCENES, SCENE_PROP_KINDS, createCompositionScene, createDefaultAnimation,
+  createDeviceInstance, createSceneProp, ensureCompositionScenes, getSelectedDevice,
+  normalizeGradientColors, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimKeyframe, type AnimProperty, type AnimTrack, type AnimationClip,
-  type DeviceInstance, type MockupProject, type ReflectionMapSetting,
-  type SceneProp, type ScenePropKind, type Vec3,
+  type CompositionScene, type DeviceColor, type DeviceInstance, type MockupProject,
+  type PublishTarget, type ReflectionMapSetting, type SceneProp, type ScenePropKind, type Vec3,
 } from '../types';
 import { loadCustomScenePresets } from './scenePresets';
 
@@ -61,10 +63,28 @@ function normalizeSceneProps(input: Partial<MockupProject>): SceneProp[] {
   });
 }
 
+function normalizeDeviceColor(input: unknown, fallback?: DeviceColor): DeviceColor | undefined {
+  if (typeof input === 'string' && DEVICE_COLORS.some((c) => c.id === input)) {
+    return input as DeviceColor;
+  }
+  return fallback;
+}
+
 function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
+  const projectShot = typeof input.screenshot === 'string' ? input.screenshot : null;
+  const projectColor = normalizeDeviceColor(input.deviceColor, DEFAULT_PROJECT.deviceColor)!;
+  const projectClay = input.clayMode === true || projectColor === 'clay';
+
   if (Array.isArray(input.devices) && input.devices.length > 0) {
     return input.devices.slice(0, 6).map((raw, index) => {
       const item = (raw ?? {}) as Partial<DeviceInstance>;
+      const hasOwnShot = Object.prototype.hasOwnProperty.call(item, 'screenshot');
+      // Legacy projects shared one project.screenshot across all devices — preserve that on migrate.
+      const shot = hasOwnShot
+        ? (typeof item.screenshot === 'string' && isValidScreenMediaDataUrl(item.screenshot)
+          ? item.screenshot
+          : item.screenshot === null ? null : projectShot)
+        : projectShot;
       return createDeviceInstance({
         id: typeof item.id === 'string' ? item.id : `device-${index}`,
         deviceId: isKnownDeviceId(item.deviceId) ? item.deviceId! : DEFAULT_PROJECT.deviceId,
@@ -72,6 +92,9 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
         scale: number(item.scale, 1, 0.6, 1.3),
         position: vec3(item.position, { x: 0, y: 0, z: 0 }),
         glassReflection: number(item.glassReflection, 0.55, 0, 1),
+        screenshot: shot,
+        deviceColor: normalizeDeviceColor(item.deviceColor, projectColor),
+        clayMode: typeof item.clayMode === 'boolean' ? item.clayMode : projectClay,
       });
     });
   }
@@ -83,6 +106,9 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
       rotation: vec3(input.rotation, DEFAULT_PROJECT.rotation),
       scale: number(input.scale, 1, 0.6, 1.3),
       position: { x: 0, y: 0, z: 0 },
+      screenshot: projectShot,
+      deviceColor: projectColor,
+      clayMode: projectClay,
     }),
   ];
 }
@@ -121,8 +147,22 @@ export function validateProject(value: unknown): MockupProject {
   const selected = devices.find((d) => d.id === selectedDeviceId) ?? devices[0];
 
   const compositionMode = input.compositionMode === 'split' ? 'split' : 'single';
+  const selectedPlatform = getDevice(selected.deviceId).platform;
+  const publishTarget: PublishTarget = input.publishTarget === 'ios' || input.publishTarget === 'android'
+    ? input.publishTarget
+    : selectedPlatform;
+  const linkSplitTransform = input.linkSplitTransform !== false;
   const animation = normalizeAnimation(input.animation, devices);
   const sceneProps = normalizeSceneProps(input);
+  const scenes = normalizeCompositionScenes(input, bg, gradientColors);
+  const activeSceneId = scenes.some((scene) => scene.id === input.activeSceneId)
+    ? String(input.activeSceneId)
+    : scenes[0].id;
+  const activeScene = scenes.find((scene) => scene.id === activeSceneId) ?? scenes[0];
+  const publishDevice = devices.find((d) => getDevice(d.deviceId).platform === publishTarget) ?? selected;
+  const publishShot = publishDevice.screenshot !== undefined ? publishDevice.screenshot : (input.screenshot || null);
+  const publishColor = publishDevice.deviceColor ?? color;
+  const publishClay = publishDevice.clayMode ?? clayMode;
 
   const soundtrackData = typeof input.soundtrackData === 'string'
     && /^data:audio\/(mpeg|mp3|wav|wave|ogg|mp4|x-m4a|aac);base64,/i.test(input.soundtrackData)
@@ -165,17 +205,21 @@ export function validateProject(value: unknown): MockupProject {
     ? input.reflectionMapImage
     : null;
 
-  return syncProjectFromSelected({
+  return syncProjectFromActiveScene(syncProjectFromSelected({
     version: 1,
     name: input.name.slice(0, 100) || DEFAULT_PROJECT.name,
-    screenshot: input.screenshot || null,
-    background: bg,
-    gradientColors,
+    screenshot: publishShot,
+    scenes,
+    activeSceneId: activeScene.id,
+    background: activeScene.background,
+    gradientColors: { ...activeScene.gradientColors },
     reflectionMap: reflectionMapImage ? 'custom' : (reflectionMap === 'custom' ? 'match_background' : reflectionMap),
     reflectionMapImage,
     deviceId: selected.deviceId,
-    deviceColor: color,
-    clayMode,
+    deviceColor: publishColor,
+    clayMode: publishClay,
+    publishTarget,
+    linkSplitTransform,
     overlays,
     rotation: { ...selected.rotation },
     scale: selected.scale,
@@ -198,6 +242,12 @@ export function validateProject(value: unknown): MockupProject {
     devices,
     selectedDeviceId,
     sceneProps,
+    layers: ensureCompositionLayers({
+      devices,
+      sceneProps,
+      overlays,
+      layers: Array.isArray(input.layers) ? input.layers : undefined,
+    }),
     animation,
     soundtrackName,
     soundtrackData,
@@ -206,7 +256,47 @@ export function validateProject(value: unknown): MockupProject {
     soundtrackDuration,
     soundtrackFadeIn,
     soundtrackFadeOut,
-  }, selected);
+  }, selected));
+}
+
+function normalizeCompositionScenes(
+  input: Partial<MockupProject>,
+  fallbackBackground: MockupProject['background'],
+  fallbackGradient: MockupProject['gradientColors'],
+): CompositionScene[] {
+  const savedPresets = loadCustomScenePresets();
+  const isKnownBackground = (id: string) => BACKGROUNDS.some((p) => p.id === id)
+    || id === 'custom'
+    || savedPresets.some((p) => p.id === id);
+
+  if (!Array.isArray(input.scenes) || input.scenes.length === 0) {
+    return ensureCompositionScenes({
+      background: fallbackBackground,
+      gradientColors: fallbackGradient,
+    });
+  }
+
+  return input.scenes.slice(0, MAX_COMPOSITION_SCENES).map((raw, index) => {
+    const item = (raw ?? {}) as Partial<CompositionScene>;
+    const backgroundId = typeof item.background === 'string' && isKnownBackground(item.background)
+      ? item.background
+      : fallbackBackground;
+    const builtinGradient = backgroundId in BUILTIN_GRADIENTS
+      ? BUILTIN_GRADIENTS[backgroundId as keyof typeof BUILTIN_GRADIENTS]
+      : undefined;
+    const savedGradient = savedPresets.find((p) => p.id === backgroundId)?.gradient;
+    const gradientFallback = backgroundId === 'transparent'
+      ? DEFAULT_GRADIENT
+      : (builtinGradient ?? savedGradient ?? fallbackGradient);
+    return createCompositionScene({
+      id: typeof item.id === 'string' && item.id ? item.id : `scene-${index + 1}`,
+      name: typeof item.name === 'string' && item.name.trim() ? item.name : `Scene ${index + 1}`,
+      background: backgroundId,
+      gradientColors: backgroundId === 'transparent'
+        ? { ...DEFAULT_GRADIENT }
+        : normalizeGradientColors(item.gradientColors, gradientFallback),
+    });
+  });
 }
 
 function normalizeOverlays(input: Partial<MockupProject>): SceneOverlay[] {

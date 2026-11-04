@@ -9,12 +9,14 @@
  *   POST /dev/fulfill             — local test (no store signature); requires FULFILL_DEV_SECRET
  *   POST /recover/request         — email a 6-digit recovery code
  *   POST /recover/confirm         — verify code + email a fresh signed key
+ *   POST /feedback                — product feedback / contact form → inbox (Resend)
  *
  * Env: see server/.env.example and root .env.example
  */
 import { createServer } from 'node:http';
 import { config as loadEnv } from './load-env.mjs';
 import { applyCors, handleOptions } from './cors.mjs';
+import { sendFeedbackEmail } from './email.mjs';
 import { fulfillPurchase } from './fulfill.mjs';
 import { confirmRecover, requestRecover } from './recover.mjs';
 import { storePath } from './store.mjs';
@@ -128,6 +130,52 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (method === 'POST' && url.pathname === '/feedback') {
+      const raw = await readRawBody(req);
+      let body;
+      try {
+        body = JSON.parse(raw.toString('utf8') || '{}');
+      } catch {
+        sendJson(req, res, 400, { ok: false, error: 'Invalid JSON' });
+        return;
+      }
+      const message = String(body.message || '').trim();
+      if (!message || message.length < 2) {
+        sendJson(req, res, 400, { ok: false, error: 'Message is required' });
+        return;
+      }
+      if (message.length > 8000) {
+        sendJson(req, res, 400, { ok: false, error: 'Message is too long' });
+        return;
+      }
+      const replyTo = String(body.email || body.replyTo || '').trim();
+      if (replyTo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo)) {
+        sendJson(req, res, 400, { ok: false, error: 'Invalid email' });
+        return;
+      }
+      // Honeypot — bots fill hidden `_gotcha` / `company` fields.
+      if (String(body._gotcha || body.company || '').trim()) {
+        sendJson(req, res, 200, { ok: true });
+        return;
+      }
+      const result = await sendFeedbackEmail({
+        name: String(body.name || '').trim() || undefined,
+        replyTo: replyTo || undefined,
+        topic: String(body.topic || 'Other'),
+        intent: String(body.intent || 'feedback'),
+        message,
+        appVersion: body.appVersion ? String(body.appVersion) : undefined,
+        platform: body.platform ? String(body.platform) : undefined,
+        userAgent: body.userAgent ? String(body.userAgent) : undefined,
+      });
+      if (!result.ok) {
+        sendJson(req, res, 502, { ok: false, error: result.error || 'Failed to send' });
+        return;
+      }
+      sendJson(req, res, 200, { ok: true, dryRun: Boolean(result.dryRun) });
+      return;
+    }
+
     if (method === 'POST' && url.pathname === '/dev/fulfill') {
       const expected = process.env.FULFILL_DEV_SECRET || 'dev-secret';
       const headers = headerMap(req);
@@ -176,6 +224,7 @@ server.listen(PORT, HOST, () => {
   console.log('  POST /webhooks/paddle');
   console.log('  POST /recover/request');
   console.log('  POST /recover/confirm');
+  console.log('  POST /feedback');
   console.log('  POST /dev/fulfill  (X-Fulfill-Secret)');
   console.log('Store:', storePath());
   if (!process.env.RESEND_API_KEY) {

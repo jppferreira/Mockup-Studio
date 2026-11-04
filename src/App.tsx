@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import {
   Aperture, ArrowDownToLine, ArrowLeftRight, Box, Camera, Check, ChevronDown, CircleHelp,
-  Clock3, Columns2, Command, Copy, Download, FileCode2, FileImage, Film, FolderOpen, Gauge, ImagePlus, KeyRound, Layers3,
-  LayoutTemplate, Lock, Minus, MonitorSmartphone, MoreHorizontal, MousePointer2, Plus, RotateCcw, Rotate3D, Save,
-  Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Trash2, Upload, X,
+  Clock3, Columns2, Command, Copy, Download, FileImage, Film, FolderOpen, Gauge, ImagePlus, KeyRound, Layers3,
+  LayoutTemplate, Lock, MessageSquarePlus, Minus, MonitorSmartphone, MoreHorizontal, MousePointer2, PanelLeftClose, PanelLeftOpen,
+  Plus, RotateCcw, Rotate3D, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Trash2, Upload, X,
 } from 'lucide-react';
 import AnimationTimeline from './components/AnimationTimeline';
 import CropFocusOverlay from './components/CropFocusOverlay';
 import CustomDevicePanel from './components/CustomDevicePanel';
 import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload } from './components/DeviceCanvas';
+import DualCanvasLayout from './components/DualCanvasLayout';
+import FeedbackModal from './components/FeedbackModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
 import LicenseModal from './components/LicenseModal';
 import SvgExplodeModal from './components/SvgExplodeModal';
@@ -53,6 +55,7 @@ import {
   type AndroidDeviceInfo,
 } from './lib/androidMirror';
 import {
+  LICENSING_DISABLED,
   PLAN_PRICES_GBP,
   canExportVideo,
   formatGbp,
@@ -66,9 +69,16 @@ import {
 } from './lib/license';
 import { downloadBlob, safeFilename, validateProject } from './lib/project';
 import {
-  loadRecentScreenshots, rememberRecentScreenshot,
+  loadRecentScreenshots, recentForPlatform, rememberRecentScreenshot,
   type RecentScreenshot,
 } from './lib/recentScreenshots';
+import {
+  applyDeviceToPlatform, applyFinishToPlatform, applyFinishToPublishEnv,
+  applyLinkedTransformsAfterAnim, applyScreenToPublishEnv,
+  buildPlatformSplitDevices, copyScreenToOtherPlatform, deviceFinish, deviceScreenMedia,
+  getPlatformDevice, getPublishEnvDevice, mirrorLinkedTransforms, platformOfDevice,
+  projectForEnvCanvas, refreshSplitPlaceholders, resolvePublishTarget, setPublishTarget,
+} from './lib/platformEnv';
 import {
   STILL_FORMATS, VIDEO_FORMATS, encodeAnimationVideo, isStillExport, isVideoExport,
   stillFormatById, videoFormatById, videoFormatsForAlpha,
@@ -82,6 +92,7 @@ import {
   formatRecentTime, loadRecentProjects, rememberRecentProject, removeRecentProject,
   type RecentProjectEntry,
 } from './lib/recentProjects';
+import { PROMPT_SUGGESTIONS, promptToAnimation } from './lib/promptAnimate';
 import { deleteCustomScenePreset, loadCustomScenePresets, saveCustomScenePreset } from './lib/scenePresets';
 import {
   projectFromTemplate, templatesByCategory,
@@ -90,15 +101,18 @@ import {
 import {
   BACKGROUNDS, CAMERA_LENSES, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT, DEVICE_COLORS,
   EXPORT_ASPECTS, EXPORT_ASPECT_GROUPS, EXPORT_FPS_OPTIONS, EXPORT_RESOLUTIONS,
-  EXPORT_SIZE_LIMITS, MAX_DEVICES, exportAspectFixedSize, exportAspectHasFixed, resolveExportDimensions,
-  buildSplitDevices, createDefaultAnimation, createDeviceInstance, getSelectedDevice, gradientCss,
-  syncProjectFromSelected,
+  EXPORT_SIZE_LIMITS, MAX_COMPOSITION_SCENES, MAX_DEVICES, exportAspectFixedSize, exportAspectHasFixed,
+  resolveExportDimensions, addCompositionScene, createDefaultAnimation,
+  createDeviceInstance, duplicateCompositionScene, ensureCompositionScenes, getSelectedDevice,
+  gradientCss, patchActiveCompositionScene, removeCompositionScene, renameCompositionScene,
+  switchCompositionScene, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimProperty, type BackgroundPreset, type CameraView, type DeviceColor, type ExportAspectId,
-  type ExportResolutionId, type GradientColors, type MockupProject, type ReflectionMapSetting,
-  type ScenePreset, type Vec3,
+  type ExportResolutionId, type GradientColors, type MockupProject, type PublishTarget,
+  type ReflectionMapSetting, type ScenePreset, type Vec3,
 } from './types';
 
-type LeftTab = 'scenes' | 'assets';
+/** Top-left pinned tabs: Scenes (chips + aspect) vs Assets library. */
+type LeftWorkspaceTab = 'scenes' | 'assets';
 type Workspace = { tabs: ProjectTab[]; activeId: string | null };
 type ExportScale = 0.5 | 1 | 2 | 3 | 4;
 type ExportMediaMode = 'static' | 'animated';
@@ -131,10 +145,19 @@ const ALL_EXPORT_FORMATS: { id: ExportKind; label: string; group: 'still' | 'vid
 ];
 
 function createInitialWorkspace(): Workspace {
+  const shot = placeholderForDevice(DEFAULT_PROJECT.deviceId);
   const tab = createProjectTab({
     ...DEFAULT_PROJECT,
     gradientColors: { ...DEFAULT_GRADIENT },
-    screenshot: placeholderForDevice(DEFAULT_PROJECT.deviceId),
+    screenshot: shot,
+    publishTarget: 'ios',
+    linkSplitTransform: true,
+    devices: [{
+      ...DEFAULT_PROJECT.devices[0],
+      screenshot: shot,
+      deviceColor: DEFAULT_PROJECT.deviceColor,
+      clayMode: DEFAULT_PROJECT.clayMode,
+    }],
   });
   return { tabs: [tab], activeId: tab.id };
 }
@@ -306,19 +329,31 @@ export default function App() {
   const [devicesTick, setDevicesTick] = useState(0);
   const [presetName, setPresetName] = useState('');
   const [savingPreset, setSavingPreset] = useState(false);
-  const [leftTab, setLeftTab] = useState<LeftTab>('scenes');
+  const [leftWorkspaceTab, setLeftWorkspaceTab] = useState<LeftWorkspaceTab>('scenes');
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [licenseOpen, setLicenseOpen] = useState(false);
   const [figmaExploreOpen, setFigmaExploreOpen] = useState(false);
+  const [figmaLinkDraft, setFigmaLinkDraft] = useState('');
+  const [assetsDropActive, setAssetsDropActive] = useState(false);
+  const [studioAiOpen, setStudioAiOpen] = useState(false);
+  const [studioAiPrompt, setStudioAiPrompt] = useState('');
+  const [studioAiStatus, setStudioAiStatus] = useState<string | null>(null);
+  const [studioAiBusy, setStudioAiBusy] = useState(false);
+  const studioAiInputRef = useRef<HTMLInputElement>(null);
+  const studioAiShellRef = useRef<HTMLDivElement>(null);
   const [svgExplodeModel, setSvgExplodeModel] = useState<SvgDocumentModel | null>(null);
   const [license, setLicense] = useState<LicenseState>(() => loadLicense());
+  useEffect(() => {
+    if (LICENSING_DISABLED) setLicense(loadLicense());
+  }, []);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>('devices');
   /** Platforms queued for export — select multiple to render several sizes at once. */
   const [exportAspectIds, setExportAspectIds] = useState<ExportAspectId[]>(['tiktok']);
-  /** Live canvas crop frame — `free` hides the overlay. */
-  const [previewFrame, setPreviewFrame] = useState<ExportAspectId | 'free'>('free');
+  /** Live canvas crop frame — defaults to TikTok 9:16; `free` hides the overlay. */
+  const [previewFrame, setPreviewFrame] = useState<ExportAspectId | 'free'>('tiktok');
   const [exportResolution, setExportResolution] = useState<ExportResolutionId>('fhd');
   const [customExportSize, setCustomExportSize] = useState({ width: 1080, height: 1920 });
   const [exportMode, setExportMode] = useState<'combined' | 'separate'>('combined');
@@ -331,10 +366,19 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [deviceMenu, setDeviceMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [gizmoDragging, setGizmoDragging] = useState(false);
+  /** Dual-canvas shared orbit so both panes keep the same viewing angle (offset from device). */
+  const [sharedOrbit, setSharedOrbit] = useState<{ offset: Vec3 } | null>(null);
+  /** Bumped on format/device changes so both panes snap to center instantly. */
+  const [cameraRecenterToken, setCameraRecenterToken] = useState(0);
   const [openSectionId, setOpenSectionId] = useState<string | null>('device');
   const [deviceDropdownOpen, setDeviceDropdownOpen] = useState(false);
+  /** Which platform's device menu is open in split mode (`null` = closed). */
+  const [splitDeviceMenu, setSplitDeviceMenu] = useState<PublishTarget | null>(null);
+  const [aspectDropdownOpen, setAspectDropdownOpen] = useState(false);
+  const aspectDropdownRef = useRef<HTMLDivElement>(null);
   const [deviceChosen, setDeviceChosen] = useState(false);
   const [sidePanelsHidden, setSidePanelsHidden] = useState(false);
+  const [leftPanelHidden, setLeftPanelHidden] = useState(false);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>(() => loadRecentProjects());
@@ -359,6 +403,8 @@ export default function App() {
     setOpenSectionId((current) => (current === id ? null : id));
   }, []);
   const captureRef = useRef<CaptureApi | null>(null);
+  const iosCaptureRef = useRef<CaptureApi | null>(null);
+  const androidCaptureRef = useRef<CaptureApi | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const svgInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
@@ -499,23 +545,75 @@ export default function App() {
   const displayProject = useMemo(() => {
     // While the gizmo is live, feed raw project poses — evaluating keys mid-drag
     // overwrote the drag and fought TransformControls.
-    if (gizmoDragging || !animActive || !hasAnimation(animation)) return project;
+    if (gizmoDragging || !animActive || !hasAnimation(animation)) {
+      if (project.compositionMode === 'split' && project.linkSplitTransform !== false) {
+        const source = getPublishEnvDevice(project);
+        return { ...project, devices: mirrorLinkedTransforms(project.devices, source) };
+      }
+      return project;
+    }
+    const evaluated = evaluateAnimation(project.devices, animation, animTime);
     return {
       ...project,
       animation,
-      devices: evaluateAnimation(project.devices, animation, animTime),
+      devices: applyLinkedTransformsAfterAnim(project, evaluated),
     };
   }, [project, animation, animActive, animTime, gizmoDragging]);
   const displaySelected = getSelectedDevice(displayProject);
+  const activePublishTarget = resolvePublishTarget(project);
+  const activeEnvDevice = getPublishEnvDevice(project);
+  const activeEnvScreenshot = deviceScreenMedia(activeEnvDevice, project.screenshot);
+  const iosEnvDevice = useMemo(() => getPlatformDevice(project, 'ios'), [project]);
+  const androidEnvDevice = useMemo(() => getPlatformDevice(project, 'android'), [project]);
+  const iosEnvFinish = useMemo(() => deviceFinish(iosEnvDevice, project), [iosEnvDevice, project]);
+  const androidEnvFinish = useMemo(() => deviceFinish(androidEnvDevice, project), [androidEnvDevice, project]);
+  const isDualCanvas = project.compositionMode === 'split';
+  const iosDisplayProject = useMemo(() => {
+    if (!isDualCanvas) return null;
+    return projectForEnvCanvas(displayProject, 'ios');
+  }, [isDualCanvas, displayProject]);
+  const androidDisplayProject = useMemo(() => {
+    if (!isDualCanvas) return null;
+    return projectForEnvCanvas(displayProject, 'android');
+  }, [isDualCanvas, displayProject]);
+  const platformRecentScreenshots = useMemo(
+    () => recentForPlatform(recentScreenshots, activePublishTarget),
+    [recentScreenshots, activePublishTarget],
+  );
+  const liveStreamDeviceId = useMemo(() => {
+    if (!mirrorStream) return null;
+    const platform = mirrorSource ?? activePublishTarget;
+    return project.devices.find((d) => getDevice(d.deviceId).platform === platform)?.id
+      ?? activeEnvDevice.id;
+  }, [mirrorStream, mirrorSource, activePublishTarget, project.devices, activeEnvDevice.id]);
+  // Dual canvases each use solo framing — never the old wide “two phones in one scene” camera.
   const animatedCamera = useMemo(() => {
     if (!animActive || !hasCameraAnimation(animation)) return null;
     return evaluateCamera(
       animation,
       animTime,
       project.cameraView,
-      project.compositionMode === 'split',
+      false,
     );
-  }, [animActive, animation, animTime, project.cameraView, project.compositionMode]);
+  }, [animActive, animation, animTime, project.cameraView]);
+
+  // Format / camera-preset / composition changes: snap both panes to center.
+  // Per-pane device model/finish swaps must NOT clear sharedOrbit — linked angle stays.
+  useEffect(() => {
+    setSharedOrbit(null);
+    setCameraRecenterToken((n) => n + 1);
+  }, [
+    project.cameraView,
+    project.cameraLens,
+    project.compositionMode,
+    previewFrame,
+  ]);
+
+  // Keep split size-guide plates on the black dimension style for both panes.
+  useEffect(() => {
+    if (project.compositionMode !== 'split') return;
+    setProject((current) => refreshSplitPlaceholders(current));
+  }, [project.compositionMode, iosEnvDevice.deviceId, androidEnvDevice.deviceId]);
 
   const bakeAnimationPose = useCallback((time = animTime) => {
     setProject((current) => {
@@ -537,7 +635,19 @@ export default function App() {
   };
 
   const updateProject = useCallback((patch: Partial<MockupProject>) => {
-    setProject((current) => ({ ...current, ...patch }));
+    setProject((current) => {
+      const merged = { ...current, ...patch };
+      if (patch.background != null || patch.gradientColors != null) {
+        return patchActiveCompositionScene(merged, {
+          background: patch.background ?? merged.background,
+          gradientColors: patch.gradientColors ?? merged.gradientColors,
+        });
+      }
+      if (patch.scenes || patch.activeSceneId) {
+        return syncProjectFromActiveScene(merged);
+      }
+      return merged;
+    });
   }, [setProject]);
 
   const patchOverlay = useCallback((id: string, patch: Partial<SceneOverlay>) => {
@@ -732,11 +842,17 @@ export default function App() {
   const patchSelectedDevice = useCallback((patch: Partial<ReturnType<typeof getSelectedDevice>>) => {
     setProject((current) => {
       const selected = getSelectedDevice(current);
-      const nextSelected = { ...selected, ...patch, rotation: patch.rotation ? { ...patch.rotation } : { ...selected.rotation }, position: patch.position ? { ...patch.position } : { ...selected.position } };
+      const nextSelected = {
+        ...selected,
+        ...patch,
+        rotation: patch.rotation ? { ...patch.rotation } : { ...selected.rotation },
+        position: patch.position ? { ...patch.position } : { ...selected.position },
+      };
+      const linkTransform = current.linkSplitTransform !== false;
       const devices = current.devices.map((device) => {
         if (device.id !== selected.id) {
-          // Keep split partners in sync for transform when in split mode
-          if (current.compositionMode === 'split' && (patch.rotation || patch.scale != null)) {
+          // Optional link: rotation/scale stay mirrored; position stays free
+          if (current.compositionMode === 'split' && linkTransform && (patch.rotation || patch.scale != null)) {
             return {
               ...device,
               rotation: patch.rotation ? { ...patch.rotation } : device.rotation,
@@ -747,21 +863,35 @@ export default function App() {
         }
         return nextSelected;
       });
-      return syncProjectFromSelected({ ...current, devices }, nextSelected);
+      const next = syncProjectFromSelected({ ...current, devices }, nextSelected);
+      // Solo mode: follow the new model's platform. Split mode keeps publishTarget —
+      // per-pane model changes go through applyDeviceToPlatform instead.
+      if (patch.deviceId && current.compositionMode !== 'split') {
+        return {
+          ...next,
+          publishTarget: getDevice(patch.deviceId).platform,
+        };
+      }
+      return next;
     });
   }, []);
 
   const keyPropertyAtPlayhead = (property: AnimProperty, value: number) => {
     setProject((current) => {
       const target = getSelectedDevice(current);
-      const existing = current.animation.tracks.find((t) => t.targetId === target.id && t.property === property);
-      const tracks = existing
-        ? current.animation.tracks.map((t) => (t.id === existing.id ? upsertKeyframe(t, animTime, value) : t))
-        : [...current.animation.tracks, upsertKeyframe(
-          { id: `track-${target.id}-${property}`, targetId: target.id, property, keyframes: [] },
-          animTime,
-          value,
-        )];
+      const linkTransform = current.compositionMode === 'split' && current.linkSplitTransform !== false;
+      const targetIds = linkTransform
+        ? current.devices.map((d) => d.id)
+        : [target.id];
+      let tracks = current.animation.tracks;
+      for (const targetId of targetIds) {
+        const existing = tracks.find((t) => t.targetId === targetId && t.property === property);
+        const base = existing ?? { id: `track-${targetId}-${property}`, targetId, property, keyframes: [] };
+        const updated = upsertKeyframe(base, animTime, value);
+        tracks = existing
+          ? tracks.map((t) => (t.id === existing.id ? updated : t))
+          : [...tracks, updated];
+      }
       return { ...current, animation: { ...current.animation, tracks } };
     });
   };
@@ -770,10 +900,11 @@ export default function App() {
     setProject((current) => {
       const selectedDevice = getSelectedDevice(current);
       const rotation = { ...selectedDevice.rotation, [axis]: value };
+      const linkTransform = current.linkSplitTransform !== false;
       return syncProjectFromSelected({
         ...current,
         devices: current.devices.map((device) => (
-          current.compositionMode === 'split' || device.id === selectedDevice.id
+          (current.compositionMode === 'split' && linkTransform) || device.id === selectedDevice.id
             ? { ...device, rotation: { ...rotation } }
             : device
         )),
@@ -793,10 +924,14 @@ export default function App() {
   }, []);
 
   const applyScreenImage = (dataUrl: string, name: string, message = 'Screenshot added to your device') => {
-    updateProject({ screenshot: dataUrl });
-    if (!isPlaceholderScreenshot(dataUrl)) {
-      setRecentScreenshots((current) => rememberRecentScreenshot(current, dataUrl, name));
-    }
+    setProject((current) => {
+      const next = applyScreenToPublishEnv(current, dataUrl);
+      if (!isPlaceholderScreenshot(dataUrl)) {
+        const platform = resolvePublishTarget(next);
+        setRecentScreenshots((recent) => rememberRecentScreenshot(recent, dataUrl, name, platform));
+      }
+      return next;
+    });
     notify(message);
   };
 
@@ -838,8 +973,7 @@ export default function App() {
     }
     const url = await readFileAsDataUrl(file);
     if (asVideo) {
-      updateProject({ screenshot: url });
-      notify('Screen recording added to your device');
+      applyScreenImage(url, file.name, 'Screen recording added to your device');
       return;
     }
     applyScreenImage(url, file.name);
@@ -861,9 +995,7 @@ export default function App() {
   };
 
   const applyRecentScreenshot = (shot: RecentScreenshot) => {
-    updateProject({ screenshot: shot.dataUrl });
-    setRecentScreenshots((current) => rememberRecentScreenshot(current, shot.dataUrl, shot.name));
-    notify('Screenshot applied');
+    applyScreenImage(shot.dataUrl, shot.name, 'Screenshot applied');
   };
 
   const stopMirroring = useCallback(() => {
@@ -954,11 +1086,11 @@ export default function App() {
       return;
     }
 
-    const scenePlatform = getDevice(project.deviceId).platform;
+    const preferredPlatform = resolvePublishTarget(project);
     let target: 'ios' | 'android' | null = null;
     if (iosReady && !androidReady) target = 'ios';
     else if (androidReady && !iosReady) target = 'android';
-    else if (iosReady && androidReady) target = scenePlatform === 'android' ? 'android' : 'ios';
+    else if (iosReady && androidReady) target = preferredPlatform;
     else if (!isDesktopApp() && iosReady) target = 'ios';
     else {
       // Re-probe once in case lists are stale, then decide.
@@ -970,7 +1102,7 @@ export default function App() {
         const androidList = (androidStatus?.devices || []).filter((d) => d.state === 'device');
         if (iosList.length && !androidList.length) target = 'ios';
         else if (androidList.length && !iosList.length) target = 'android';
-        else if (iosList.length && androidList.length) target = scenePlatform === 'android' ? 'android' : 'ios';
+        else if (iosList.length && androidList.length) target = preferredPlatform;
       } catch {
         /* fall through */
       }
@@ -1032,9 +1164,7 @@ export default function App() {
         dataUrl = await snapshotMirrorStream(mirrorStream);
         name = mirrorDevice ? `${mirrorDevice.label} snapshot` : 'iPhone snapshot';
       }
-      updateProject({ screenshot: dataUrl });
-      setRecentScreenshots((current) => rememberRecentScreenshot(current, dataUrl, name));
-      notify('Snapshot applied to the device screen');
+      applyScreenImage(dataUrl, name, 'Snapshot applied to the active platform screen');
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Snapshot failed');
     } finally {
@@ -1044,7 +1174,7 @@ export default function App() {
 
   const keyCameraAtPlayhead = () => {
     const base = animatedCamera
-      ?? defaultCameraPosition(project.cameraView, project.compositionMode === 'split');
+      ?? defaultCameraPosition(project.cameraView, false);
     setTimelineOpen(true);
     updateProject({
       animation: {
@@ -1086,6 +1216,81 @@ export default function App() {
     setTimelineOpen(true);
     notify(`${preset.label} motion applied`);
   };
+
+  const openStudioAi = () => {
+    setStudioAiOpen(true);
+    setStudioAiStatus(null);
+  };
+
+  const closeStudioAi = useCallback(() => {
+    setStudioAiOpen(false);
+    setStudioAiStatus(null);
+  }, []);
+
+  const runStudioAiPrompt = useCallback((raw: string) => {
+    const text = raw.trim();
+    if (!text || studioAiBusy) return;
+    setStudioAiBusy(true);
+    try {
+      const selected = getSelectedDevice(project);
+      const result = promptToAnimation(text, animation, selected);
+      updateProject({ animation: result.clip });
+      setAnimTime(0);
+      setAnimPlaying(result.label !== 'Clear');
+      setTimelineOpen(true);
+      setStudioAiStatus(result.summary);
+      setStudioAiPrompt('');
+      notify(result.summary);
+    } finally {
+      window.setTimeout(() => setStudioAiBusy(false), 140);
+    }
+  }, [animation, project, studioAiBusy, updateProject, setAnimTime, setAnimPlaying, setTimelineOpen]);
+
+  useEffect(() => {
+    if (!studioAiOpen) return;
+    const focusId = window.requestAnimationFrame(() => {
+      studioAiInputRef.current?.focus();
+    });
+    const onPointerDown = (event: PointerEvent) => {
+      if (!studioAiShellRef.current?.contains(event.target as Node)) {
+        closeStudioAi();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeStudioAi();
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusId);
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [studioAiOpen, closeStudioAi]);
+
+  useEffect(() => {
+    if (!aspectDropdownOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!aspectDropdownRef.current?.contains(event.target as Node)) {
+        setAspectDropdownOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setAspectDropdownOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [aspectDropdownOpen]);
 
   const onImageChange = (event: ChangeEvent<HTMLInputElement>) => {
     void importScreenMedia(event.currentTarget.files?.[0]).catch((e: Error) => notify(e.message));
@@ -1296,14 +1501,48 @@ export default function App() {
     return canvas.toDataURL('image/png');
   };
 
-  const captureStillCanvas = async (width: number, height: number, time: number) => {
+  const captureStillFromApi = async (
+    api: CaptureApi | null,
+    width: number,
+    height: number,
+    time: number,
+    withOverlays = true,
+  ) => {
+    if (!api) throw new Error('The 3D preview is not ready yet');
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Could not create export canvas');
-    captureRef.current!.drawFrame(width, height, ctx);
-    await drawOverlays(ctx, project.overlays, width, height, time);
+    api.drawFrame(width, height, ctx);
+    if (withOverlays) await drawOverlays(ctx, project.overlays, width, height, time);
+    return canvas;
+  };
+
+  const captureStillCanvas = async (width: number, height: number, time: number) => (
+    captureStillFromApi(captureRef.current, width, height, time, true)
+  );
+
+  /** Stitch the two dual-canvas panes into one side-by-side still. */
+  const captureDualCombinedStill = async (width: number, height: number, time: number) => {
+    if (!iosCaptureRef.current || !androidCaptureRef.current) {
+      throw new Error('Both platform canvases need to be ready to export');
+    }
+    const leftW = Math.floor(width / 2);
+    const rightW = width - leftW;
+    const even = (n: number) => (n % 2 === 0 ? n : n - 1);
+    const iosW = Math.max(2, even(leftW));
+    const androidW = Math.max(2, even(rightW));
+    const canvas = document.createElement('canvas');
+    canvas.width = iosW + androidW;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Could not create export canvas');
+    const iosPane = await captureStillFromApi(iosCaptureRef.current, iosW, height, time, false);
+    const androidPane = await captureStillFromApi(androidCaptureRef.current, androidW, height, time, false);
+    ctx.drawImage(iosPane, 0, 0);
+    ctx.drawImage(androidPane, iosW, 0);
+    await drawOverlays(ctx, project.overlays, canvas.width, height, time);
     return canvas;
   };
 
@@ -1314,7 +1553,6 @@ export default function App() {
     scaleLabel: string,
     platformTag = '',
   ) => {
-    if (!captureRef.current) throw new Error('The 3D preview is not ready yet');
     if (!formats.length) return;
     const scaleSuffix = scaleLabel === '1x' ? '' : `@${scaleLabel}`;
     const platformSuffix = platformTag ? `${platformTag}-` : '';
@@ -1322,36 +1560,37 @@ export default function App() {
     const labels = formats.map((format) => stillFormatById(format).label).join(' + ');
 
     if (project.compositionMode === 'split' && exportMode === 'separate') {
-      const snapshot = project;
-      const iosOnly = snapshot.devices.filter((d) => getDevice(d.deviceId).platform === 'ios').map((d) => ({ ...d, position: { x: 0, y: 0, z: 0 } }));
-      const androidOnly = snapshot.devices.filter((d) => getDevice(d.deviceId).platform === 'android').map((d) => ({ ...d, position: { x: 0, y: 0, z: 0 } }));
-      if (!iosOnly.length || !androidOnly.length) throw new Error('Split composition needs both iOS and Android devices.');
-
+      if (!iosCaptureRef.current || !androidCaptureRef.current) {
+        throw new Error('Both platform canvases need to be ready to export');
+      }
       setExportProgress(`Rendering iOS ${labels}…`);
-      setProject({ ...snapshot, compositionMode: 'single', devices: iosOnly, selectedDeviceId: iosOnly[0].id, deviceId: iosOnly[0].deviceId });
-      await waitFrames(3);
-      const iosCanvas = await captureStillCanvas(width, height, animTime);
+      const iosCanvas = await captureStillFromApi(iosCaptureRef.current, width, height, animTime, true);
       for (const format of formats) {
         await saveCapture(stillDataUrlFromCanvas(iosCanvas, format), `${baseName}-ios`, format);
       }
 
       setExportProgress(`Rendering Android ${labels}…`);
-      setProject({ ...snapshot, compositionMode: 'single', devices: androidOnly, selectedDeviceId: androidOnly[0].id, deviceId: androidOnly[0].deviceId });
-      await waitFrames(3);
-      const androidCanvas = await captureStillCanvas(width, height, animTime);
+      const androidCanvas = await captureStillFromApi(androidCaptureRef.current, width, height, animTime, true);
       for (const format of formats) {
         await saveCapture(stillDataUrlFromCanvas(androidCanvas, format), `${baseName}-android`, format);
       }
-
-      setProject(snapshot);
       return;
     }
 
+    if (project.compositionMode === 'split') {
+      setExportProgress(`Rendering dual canvas ${labels}${scaleLabel !== '1x' ? ` · ${scaleLabel}` : ''}…`);
+      const canvas = await captureDualCombinedStill(width, height, animTime);
+      for (const format of formats) {
+        await saveCapture(stillDataUrlFromCanvas(canvas, format), `${baseName}-ios-android`, format);
+      }
+      return;
+    }
+
+    if (!captureRef.current) throw new Error('The 3D preview is not ready yet');
     setExportProgress(`Rendering ${platformTag ? `${platformTag} · ` : ''}${labels}${scaleLabel !== '1x' ? ` · ${scaleLabel}` : ''}…`);
     const canvas = await captureStillCanvas(width, height, animTime);
-    const suffix = project.compositionMode === 'split' ? '-ios-android' : '';
     for (const format of formats) {
-      await saveCapture(stillDataUrlFromCanvas(canvas, format), `${baseName}${suffix}`, format);
+      await saveCapture(stillDataUrlFromCanvas(canvas, format), baseName, format);
     }
   };
 
@@ -1362,7 +1601,14 @@ export default function App() {
     scaleLabel: string,
     platformTag = '',
   ) => {
-    if (!captureRef.current) throw new Error('The 3D preview is not ready yet');
+    const dual = project.compositionMode === 'split';
+    if (dual) {
+      if (!iosCaptureRef.current || !androidCaptureRef.current) {
+        throw new Error('Both platform canvases need to be ready to export');
+      }
+    } else if (!captureRef.current) {
+      throw new Error('The 3D preview is not ready yet');
+    }
     if (!hasAnimation(animation) && !hasCameraAnimation(animation)) {
       throw new Error('Add animation keyframes before exporting video');
     }
@@ -1390,7 +1636,26 @@ export default function App() {
         flushSync(() => setAnimTime(time));
         await seekAllScreenMedia(time);
         await waitFrames(2);
-        captureRef.current?.drawFrame(frameWidth, frameHeight, ctx);
+        if (dual) {
+          const leftW = Math.max(2, Math.floor(frameWidth / 2) & ~1);
+          const rightW = Math.max(2, (frameWidth - leftW) & ~1);
+          const left = document.createElement('canvas');
+          left.width = leftW;
+          left.height = frameHeight;
+          const right = document.createElement('canvas');
+          right.width = rightW;
+          right.height = frameHeight;
+          const leftCtx = left.getContext('2d');
+          const rightCtx = right.getContext('2d');
+          if (!leftCtx || !rightCtx) throw new Error('Could not create dual export buffers');
+          iosCaptureRef.current?.drawFrame(leftW, frameHeight, leftCtx);
+          androidCaptureRef.current?.drawFrame(rightW, frameHeight, rightCtx);
+          ctx.clearRect(0, 0, frameWidth, frameHeight);
+          ctx.drawImage(left, 0, 0);
+          ctx.drawImage(right, leftW, 0);
+        } else {
+          captureRef.current?.drawFrame(frameWidth, frameHeight, ctx);
+        }
         await drawOverlays(ctx, project.overlays, frameWidth, frameHeight, time);
       },
     });
@@ -1562,16 +1827,24 @@ export default function App() {
     }
     setProject((current) => {
       const selected = getSelectedDevice(current);
-      const devices = buildSplitDevices(selected);
-      return syncProjectFromSelected({
+      const seeded = {
+        ...selected,
+        screenshot: deviceScreenMedia(selected, current.screenshot),
+        deviceColor: selected.deviceColor ?? current.deviceColor,
+        clayMode: selected.clayMode ?? current.clayMode,
+      };
+      const devices = buildPlatformSplitDevices(seeded, current);
+      const target = platformOfDevice(selected);
+      return setPublishTarget({
         ...current,
         compositionMode: 'split',
         devices,
         cameraView: 'front',
-      }, devices[0]);
+        linkSplitTransform: current.linkSplitTransform !== false,
+      }, target);
     });
     setDeviceMenu(null);
-    notify('Split iOS + Android composition ready');
+    notify('Split iOS + Android ready — each platform keeps its own screen');
   };
 
   const enableSingleComposition = () => {
@@ -1584,22 +1857,41 @@ export default function App() {
         scale: selected.scale,
         position: { x: 0, y: 0, z: 0 },
         glassReflection: selected.glassReflection,
+        screenshot: deviceScreenMedia(selected, current.screenshot),
+        deviceColor: selected.deviceColor ?? current.deviceColor,
+        clayMode: selected.clayMode ?? current.clayMode,
       });
-      return syncProjectFromSelected({
+      return setPublishTarget({
         ...current,
         compositionMode: 'single',
         devices: [single],
-      }, single);
+      }, platformOfDevice(single));
     });
     setDeviceMenu(null);
     notify('Single device composition');
+  };
+
+  const switchPublishTarget = (target: PublishTarget, opts?: { quiet?: boolean }) => {
+    setProject((current) => setPublishTarget(current, target));
+    setDeviceChosen(true);
+    if (!opts?.quiet) {
+      notify(target === 'ios' ? 'Editing iOS environment' : 'Editing Android environment');
+    }
+  };
+
+  const copyActiveScreenToOtherPlatform = () => {
+    setProject((current) => {
+      if (current.compositionMode !== 'split') return current;
+      return copyScreenToOtherPlatform(current);
+    });
+    notify('Copied active screen to the other platform');
   };
 
   const onSelectDevice = (payload: DeviceSelectPayload) => {
     setDeviceChosen(true);
     setProject((current) => {
       const selected = current.devices.find((d) => d.id === payload.id) ?? getSelectedDevice(current);
-      return syncProjectFromSelected(current, selected);
+      return setPublishTarget(current, platformOfDevice(selected));
     });
     setDeviceMenu({ id: payload.id, x: payload.clientX, y: payload.clientY });
   };
@@ -1613,24 +1905,30 @@ export default function App() {
     };
     setProject((current) => {
       const selectedDevice = current.devices.find((d) => d.id === id) ?? getSelectedDevice(current);
+      const linkTransform = current.linkSplitTransform !== false;
       const devices = current.devices.map((device) => (
-        current.compositionMode === 'split' || device.id === id
+        (current.compositionMode === 'split' && linkTransform) || device.id === id
           ? { ...device, rotation: { ...nextRotation } }
           : device
       ));
       const nextSelected = devices.find((d) => d.id === selectedDevice.id) ?? devices[0];
       let next = syncProjectFromSelected({ ...current, devices }, nextSelected);
       if (timelineOpen && recordKeys) {
+        const targetIds = (current.compositionMode === 'split' && linkTransform)
+          ? current.devices.map((d) => d.id)
+          : [id];
         let tracks = next.animation.tracks;
-        (['rotation.x', 'rotation.y', 'rotation.z'] as const).forEach((property) => {
-          const axis = property.split('.')[1] as 'x' | 'y' | 'z';
-          const existing = tracks.find((t) => t.targetId === id && t.property === property);
-          const base = existing ?? { id: `track-${id}-${property}`, targetId: id, property, keyframes: [] };
-          const updated = upsertKeyframe(base, animTime, nextRotation[axis]);
-          tracks = existing
-            ? tracks.map((t) => (t.id === existing.id ? updated : t))
-            : [...tracks, updated];
-        });
+        for (const targetId of targetIds) {
+          (['rotation.x', 'rotation.y', 'rotation.z'] as const).forEach((property) => {
+            const axis = property.split('.')[1] as 'x' | 'y' | 'z';
+            const existing = tracks.find((t) => t.targetId === targetId && t.property === property);
+            const base = existing ?? { id: `track-${targetId}-${property}`, targetId, property, keyframes: [] };
+            const updated = upsertKeyframe(base, animTime, nextRotation[axis]);
+            tracks = existing
+              ? tracks.map((t) => (t.id === existing.id ? updated : t))
+              : [...tracks, updated];
+          });
+        }
         next = { ...next, animation: { ...next.animation, tracks } };
       }
       return next;
@@ -1693,6 +1991,9 @@ export default function App() {
         scale: selected.scale,
         position: { x: selected.position.x + 1.15, y: selected.position.y, z: selected.position.z },
         glassReflection: selected.glassReflection,
+        screenshot: deviceScreenMedia(selected, current.screenshot),
+        deviceColor: selected.deviceColor ?? current.deviceColor,
+        clayMode: selected.clayMode ?? current.clayMode,
       });
       return syncProjectFromSelected({ ...current, devices: [...current.devices, copy] }, copy);
     });
@@ -1705,8 +2006,9 @@ export default function App() {
     setProject((current) => {
       const selected = getSelectedDevice(current);
       const rotation = { ...selected.rotation, y: ((selected.rotation.y + 45 + 180) % 360) - 180 };
+      const linkTransform = current.linkSplitTransform !== false;
       const devices = current.devices.map((device) => (
-        current.compositionMode === 'split' || device.id === selected.id
+        (current.compositionMode === 'split' && linkTransform) || device.id === selected.id
           ? { ...device, rotation: { ...rotation } }
           : device
       ));
@@ -1806,11 +2108,55 @@ export default function App() {
     return () => window.removeEventListener('paste', onPaste);
   });
 
+  const compositionScenes = useMemo(
+    () => ensureCompositionScenes(project),
+    [project.scenes, project.activeSceneId, project.background, project.gradientColors],
+  );
+  const activeCompositionSceneId = compositionScenes.some((scene) => scene.id === project.activeSceneId)
+    ? project.activeSceneId
+    : compositionScenes[0]?.id;
+
   const chooseScene = (scene: ScenePreset) => {
     updateProject({
       background: scene.id as BackgroundPreset,
       gradientColors: scene.gradient ? { ...scene.gradient } : { ...project.gradientColors },
     });
+  };
+
+  const onSwitchCompositionScene = (sceneId: string) => {
+    if (sceneId === activeCompositionSceneId) return;
+    setProject((current) => switchCompositionScene(current, sceneId));
+  };
+
+  const onAddCompositionScene = () => {
+    if (compositionScenes.length >= MAX_COMPOSITION_SCENES) {
+      notify(`Up to ${MAX_COMPOSITION_SCENES} scenes per composition`);
+      return;
+    }
+    setProject((current) => addCompositionScene(current, true));
+    notify('Scene added');
+  };
+
+  const onDuplicateCompositionScene = () => {
+    if (compositionScenes.length >= MAX_COMPOSITION_SCENES) {
+      notify(`Up to ${MAX_COMPOSITION_SCENES} scenes per composition`);
+      return;
+    }
+    setProject((current) => duplicateCompositionScene(current));
+    notify('Scene duplicated');
+  };
+
+  const onRemoveCompositionScene = (sceneId: string) => {
+    if (compositionScenes.length <= 1) {
+      notify('Keep at least one scene');
+      return;
+    }
+    setProject((current) => removeCompositionScene(current, sceneId));
+    notify('Scene removed');
+  };
+
+  const onRenameCompositionScene = (sceneId: string, name: string) => {
+    setProject((current) => renameCompositionScene(current, sceneId, name));
   };
 
   const updateGradient = (key: keyof GradientColors, value: string) => {
@@ -1843,7 +2189,6 @@ export default function App() {
     updateProject({ background: preset.id, gradientColors: { ...preset.gradient! } });
     setPresetName('');
     setSavingPreset(false);
-    setLeftTab('scenes');
     notify(`Saved “${preset.label}” preset`);
   };
 
@@ -1860,9 +2205,18 @@ export default function App() {
     setProject((current) => {
       const selected = getSelectedDevice(current);
       const rotation = { ...DEFAULT_PROJECT.rotation };
+      const linkTransform = current.linkSplitTransform !== false;
       const devices = current.devices.map((device) => (
-        current.compositionMode === 'split' || device.id === selected.id
-          ? { ...device, rotation: { ...rotation }, scale: 1, position: current.compositionMode === 'split' ? device.position : { x: 0, y: 0, z: 0 } }
+        (current.compositionMode === 'split' && linkTransform) || device.id === selected.id
+          ? {
+            ...device,
+            rotation: { ...rotation },
+            scale: 1,
+            // Position stays free in split — only reset the selected phone’s seat
+            position: device.id === selected.id
+              ? (current.compositionMode === 'split' ? device.position : { x: 0, y: 0, z: 0 })
+              : device.position,
+          }
           : device
       ));
       const nextSelected = devices.find((d) => d.id === selected.id) ?? devices[0];
@@ -2020,32 +2374,126 @@ export default function App() {
           </div>
         </main>
       ) : (
-      <div className={`workspace ${sidePanelsHidden ? 'panels-hidden' : ''}`}>
-        <aside className="left-panel" aria-hidden={sidePanelsHidden}>
+      <div className={`workspace ${sidePanelsHidden ? 'panels-hidden' : ''} ${leftPanelHidden && !sidePanelsHidden ? 'left-panel-hidden' : ''}`}>
+        <aside className="left-panel" aria-hidden={sidePanelsHidden || leftPanelHidden}>
           <div className="panel-title-row">
             <h2>Workspace</h2>
+          </div>
+
+          <div className="panel-tabs left-workspace-tabs" role="tablist" aria-label="Workspace tools">
             <button
-              className="icon-button"
-              title="New project from template"
-              aria-label="New project from template"
-              onClick={() => setTemplatePickerOpen(true)}
+              type="button"
+              role="tab"
+              aria-selected={leftWorkspaceTab === 'scenes'}
+              className={leftWorkspaceTab === 'scenes' ? 'panel-tab selected' : 'panel-tab'}
+              onClick={() => setLeftWorkspaceTab('scenes')}
             >
-              <Plus size={18} />
+              <LayoutTemplate size={14} />
+              Scenes
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={leftWorkspaceTab === 'assets'}
+              className={leftWorkspaceTab === 'assets' ? 'panel-tab selected' : 'panel-tab'}
+              onClick={() => setLeftWorkspaceTab('assets')}
+            >
+              <ImagePlus size={14} />
+              Assets
             </button>
           </div>
-          <div className="panel-tabs">
-            <button className={leftTab === 'scenes' ? 'panel-tab selected' : 'panel-tab'} onClick={() => setLeftTab('scenes')}>
-              <LayoutTemplate size={15} /> Scenes
-            </button>
-            <button className={leftTab === 'assets' ? 'panel-tab selected' : 'panel-tab'} onClick={() => setLeftTab('assets')}>
-              <FileImage size={15} /> Assets
-            </button>
-          </div>
-          <div className="left-scroll">
-            {leftTab === 'scenes' ? (
-              <>
-                <div className="field-caption section-label">Scenes <span>{allScenes.length}</span></div>
-                <div className="scene-grid">
+
+          <div className="left-panel-main">
+            {leftWorkspaceTab === 'scenes' ? (
+              <section className="left-scenes-content" aria-label="Scenes">
+                <div className="field-caption section-label">
+                  Scenes
+                  <span>{compositionScenes.length}/{MAX_COMPOSITION_SCENES}</span>
+                </div>
+                <div className="scene-flipper" role="tablist" aria-label="Composition scenes">
+                  <div className="scene-flipper-track">
+                    {compositionScenes.map((scene) => {
+                      const selected = scene.id === activeCompositionSceneId;
+                      return (
+                        <button
+                          key={scene.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={selected}
+                          className={`scene-flip-chip ${selected ? 'is-active' : ''}`}
+                          title={`${scene.name} · double-click to rename`}
+                          onClick={() => onSwitchCompositionScene(scene.id)}
+                          onDoubleClick={() => {
+                            const next = window.prompt('Rename scene', scene.name);
+                            if (next == null) return;
+                            onRenameCompositionScene(scene.id, next);
+                          }}
+                        >
+                          <span
+                            className="scene-flip-swatch"
+                            style={{
+                              background: scene.background === 'transparent'
+                                ? undefined
+                                : gradientCss(scene.gradientColors),
+                            }}
+                            data-transparent={scene.background === 'transparent' ? 'true' : undefined}
+                          />
+                          <strong>{scene.name}</strong>
+                          {compositionScenes.length > 1 && (
+                            <span
+                              className="scene-flip-remove"
+                              title={`Remove ${scene.name}`}
+                              role="button"
+                              tabIndex={-1}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onRemoveCompositionScene(scene.id);
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  onRemoveCompositionScene(scene.id);
+                                }
+                              }}
+                            >
+                              <X size={11} />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="scene-flipper-actions" role="group" aria-label="Scene actions">
+                    <button
+                      type="button"
+                      className="scene-flip-action"
+                      title="Duplicate active scene"
+                      aria-label="Duplicate active scene"
+                      disabled={compositionScenes.length >= MAX_COMPOSITION_SCENES}
+                      onClick={onDuplicateCompositionScene}
+                    >
+                      <Copy size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="scene-flip-action"
+                      title="Add scene"
+                      aria-label="Add scene"
+                      disabled={compositionScenes.length >= MAX_COMPOSITION_SCENES}
+                      onClick={onAddCompositionScene}
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="field-caption section-label aspect-sidebar-label">
+                  Look
+                  <span>{allScenes.length}</span>
+                </div>
+                <p className="scene-look-hint">Applies to the active scene. Devices and screenshot stay the same.</p>
+                <div className="scene-grid scene-grid-compact">
                   {allScenes.map((item) => (
                     <div key={item.id} className={`scene-card-wrap ${project.background === item.id ? 'active' : ''}`}>
                       <button type="button" className={`scene-card ${project.background === item.id ? 'active' : ''}`}
@@ -2074,93 +2522,93 @@ export default function App() {
                     </button>
                   )}
                 </div>
-
-                <div className="field-caption section-label aspect-sidebar-label">
-                  Aspect ratio
-                  <span>
-                    {exportAspectIds.length > 1
-                      ? `${exportAspectIds.length} sizes`
-                      : previewAspect
-                        ? previewAspect.hint
-                        : 'Free'}
-                  </span>
-                </div>
-                <p className="aspect-sidebar-hint">Select multiple to export together</p>
-                <div className="aspect-sidebar-grid" role="group" aria-label="Platform aspect ratio">
-                  <button
-                    type="button"
-                    className={`aspect-sidebar-chip ${previewFrame === 'free' ? 'is-preview' : ''}`}
-                    title="Hide crop overlay"
-                    onClick={() => applyPlatformFrame('free')}
-                  >
-                    <div className="aspect-sidebar-ratio aspect-sidebar-ratio-free" />
-                    <strong>Free</strong>
-                    <span>No crop</span>
-                  </button>
-                  {EXPORT_ASPECTS.filter((item) => item.id !== 'custom').map((item) => {
-                    const selected = exportAspectIds.includes(item.id);
-                    const previewing = previewFrame === item.id;
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={`aspect-sidebar-chip ${selected ? 'selected' : ''} ${previewing ? 'is-preview' : ''}`}
-                        title={`${item.label} · ${item.hint}${selected ? ' · queued for export' : ''}`}
-                        onClick={() => toggleExportAspect(item.id)}
-                      >
-                        <div className="aspect-sidebar-ratio" style={exportRatioThumbStyle(item.ratio, 18)} />
-                        <strong>{item.shortLabel}</strong>
-                        <span>{item.hint}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
+              </section>
             ) : (
-              <>
+              <div className="left-scroll">
                 <div className="assets-stack">
                   <section className="assets-block" aria-label="Import">
                     <div className="field-caption section-label assets-section-label">
                       Import
-                      <span>{screenSizeLabel(getDevice(project.deviceId).screenSize)}</span>
+                      <span>
+                        {activePublishTarget === 'ios' ? 'iOS' : 'Android'}
+                        {' · '}
+                        {screenSizeLabel(getDevice(activeEnvDevice.deviceId).screenSize)}
+                      </span>
                     </div>
+                    {project.compositionMode === 'split' && (
+                      <div className="publish-target-switch" role="group" aria-label="Publish target">
+                        <button
+                          type="button"
+                          className={activePublishTarget === 'ios' ? 'is-active' : ''}
+                          onClick={() => switchPublishTarget('ios')}
+                        >
+                          iOS
+                        </button>
+                        <button
+                          type="button"
+                          className={activePublishTarget === 'android' ? 'is-active' : ''}
+                          onClick={() => switchPublishTarget('android')}
+                        >
+                          Android
+                        </button>
+                      </div>
+                    )}
                     <button
                       type="button"
-                      className="upload-zone upload-zone-compact"
+                      className={`upload-zone upload-zone-unified ${assetsDropActive ? 'is-drop-active' : ''}`}
                       onClick={() => imageInputRef.current?.click()}
-                      title={`Import screenshot or video for ${getDevice(project.deviceId).label}`}
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        setAssetsDropActive(true);
+                      }}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setAssetsDropActive(true);
+                      }}
+                      onDragLeave={(event) => {
+                        if (!event.currentTarget.contains(event.relatedTarget as Node)) {
+                          setAssetsDropActive(false);
+                        }
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setAssetsDropActive(false);
+                        void importScreenMedia(event.dataTransfer.files[0]).catch((err: Error) => notify(err.message));
+                      }}
+                      title={`Drop, paste, or browse a screenshot for ${getDevice(activeEnvDevice.deviceId).label}`}
                     >
-                      <ImagePlus size={18} strokeWidth={1.6} />
+                      <ImagePlus size={20} strokeWidth={1.6} />
                       <div className="upload-zone-copy">
-                        <strong>Screenshot or video</strong>
-                        <span>PNG, JPG, WebP, SVG, MP4 · drop or browse</span>
+                        <strong>Drop or paste screenshot</strong>
+                        <span>
+                          {activePublishTarget === 'ios' ? 'Writes to iOS only' : 'Writes to Android only'}
+                          {' · '}
+                          Browse · ⌘V
+                        </span>
                       </div>
                     </button>
-                    <div className="assets-secondary-row">
+                    <div className="assets-figma-row">
+                      <input
+                        type="url"
+                        className="assets-figma-input"
+                        value={figmaLinkDraft}
+                        placeholder="Paste a Figma link"
+                        aria-label="Figma file link"
+                        onChange={(event) => setFigmaLinkDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter') return;
+                          event.preventDefault();
+                          setFigmaExploreOpen(true);
+                        }}
+                      />
                       <button
                         type="button"
-                        className="assets-secondary-btn"
-                        onClick={() => svgInputRef.current?.click()}
-                        title="Import SVG and keep groups as layers for explode view"
-                      >
-                        <FileCode2 size={13} strokeWidth={1.7} />
-                        SVG layers
-                      </button>
-                      <button
-                        type="button"
-                        className="assets-secondary-btn"
-                        onClick={() => void pasteScreenFromClipboard()}
-                        title="Paste PNG or SVG from clipboard"
-                      >
-                        ⌘V Paste
-                      </button>
-                      <button
-                        type="button"
-                        className="assets-secondary-btn"
+                        className="assets-figma-open"
+                        title="Open Figma file"
                         onClick={() => setFigmaExploreOpen(true)}
-                        title="Open a Figma file link with a personal access token"
                       >
-                        Figma
+                        Open
                       </button>
                     </div>
                   </section>
@@ -2201,32 +2649,50 @@ export default function App() {
                     </div>
                   </section>
 
-                  {project.screenshot && (
+                  {activeEnvScreenshot && (
                     <section className="assets-block" aria-label="Current screen">
                       <div className="asset-card asset-card-compact">
-                        <div className="asset-preview"><img src={project.screenshot} alt="Uploaded screen" /></div>
+                        <div className="asset-preview"><img src={activeEnvScreenshot} alt="Uploaded screen" /></div>
                         <div>
-                          <strong>{isPlaceholderScreenshot(project.screenshot) ? 'Size guide' : 'Current screen'}</strong>
-                          <span>{screenSizeLabel(getDevice(project.deviceId).screenSize)} px</span>
+                          <strong>
+                            {isPlaceholderScreenshot(activeEnvScreenshot) ? 'Size guide' : 'Current screen'}
+                            {project.compositionMode === 'split' ? ` · ${activePublishTarget === 'ios' ? 'iOS' : 'Android'}` : ''}
+                          </strong>
+                          <span>{screenSizeLabel(getDevice(activeEnvDevice.deviceId).screenSize)} px</span>
                         </div>
                         <button title="Replace screenshot" aria-label="Replace screenshot" onClick={() => imageInputRef.current?.click()}><ArrowLeftRight size={15} /></button>
                       </div>
+                      {project.compositionMode === 'split' && !isPlaceholderScreenshot(activeEnvScreenshot) && (
+                        <button
+                          type="button"
+                          className="button full-outline compact"
+                          style={{ marginTop: 8 }}
+                          onClick={copyActiveScreenToOtherPlatform}
+                          title="Copy this screen onto the other platform"
+                        >
+                          <Copy size={13} /> Copy screen to other platform
+                        </button>
+                      )}
                     </section>
                   )}
 
-                  {recentScreenshots.length > 0 && (
+                  {platformRecentScreenshots.length > 0 && (
                     <section className="assets-block" aria-label="Recent screenshots">
                       <div className="field-caption section-label assets-section-label">
                         Recent
-                        <span>{recentScreenshots.length}</span>
+                        <span>
+                          {activePublishTarget === 'ios' ? 'iOS' : 'Android'}
+                          {' · '}
+                          {platformRecentScreenshots.length}
+                        </span>
                       </div>
                       <div className="recent-shot-row" role="list">
-                        {recentScreenshots.map((shot) => (
+                        {platformRecentScreenshots.map((shot) => (
                           <button
                             key={shot.id}
                             type="button"
                             role="listitem"
-                            className={`recent-shot ${project.screenshot === shot.dataUrl ? 'is-active' : ''}`}
+                            className={`recent-shot ${activeEnvScreenshot === shot.dataUrl ? 'is-active' : ''}`}
                             title={`Apply ${shot.name}`}
                             aria-label={`Apply ${shot.name}`}
                             onClick={() => applyRecentScreenshot(shot)}
@@ -2238,32 +2704,191 @@ export default function App() {
                     </section>
                   )}
                 </div>
-              </>
+              </div>
             )}
           </div>
-          <div className="left-panel-footer">
-            <button
-              type="button"
-              className="left-panel-settings"
-              title={`License · ${planLabel(license.tier)} · Pro ${formatGbp(PLAN_PRICES_GBP.pro)}`}
-              aria-label="License and plans"
-              onClick={() => setLicenseOpen(true)}
-            >
-              <KeyRound size={15} strokeWidth={1.9} />
-              <span>{planLabel(license.tier)}</span>
-            </button>
-            <button
-              type="button"
-              className="left-panel-settings"
-              title="Settings & shortcuts"
-              aria-label="Settings & shortcuts"
-              onClick={() => setHelpOpen(true)}
-            >
-              <Settings2 size={15} strokeWidth={1.9} />
-              <span>Settings</span>
-            </button>
+
+          <div className="left-panel-bottom">
+            <section className="left-aspect-dock" aria-label="Aspect ratio">
+              <div className="field-caption section-label aspect-sidebar-label">
+                Aspect ratio
+                <span>
+                  {exportAspectIds.filter((id) => id !== 'custom').length > 1
+                    ? `${exportAspectIds.filter((id) => id !== 'custom').length} formats`
+                    : previewFrame === 'free'
+                      ? 'Free'
+                      : (previewAspect?.hint ?? EXPORT_ASPECTS.find((item) => item.id === exportAspectIds[0])?.hint ?? '9:16')}
+                </span>
+              </div>
+              <p className="aspect-sidebar-hint">Multi-select formats, then tap a pill to preview that crop.</p>
+              <div
+                className={`aspect-ratio-picker ${aspectDropdownOpen ? 'is-open' : ''}`}
+                ref={aspectDropdownRef}
+              >
+                <div className="aspect-format-pills" role="list" aria-label="Selected formats">
+                  <button
+                    type="button"
+                    role="listitem"
+                    className={`aspect-format-pill ${previewFrame === 'free' ? 'is-active' : ''}`}
+                    title="Free · no crop"
+                    aria-pressed={previewFrame === 'free'}
+                    onClick={() => applyPlatformFrame('free')}
+                  >
+                    Free
+                  </button>
+                  {exportAspectIds
+                    .filter((id) => id !== 'custom')
+                    .map((id) => {
+                      const item = EXPORT_ASPECTS.find((aspect) => aspect.id === id);
+                      if (!item) return null;
+                      const active = previewFrame === id;
+                      const canDismiss = exportAspectIds.filter((aspectId) => aspectId !== 'custom').length > 1;
+                      return (
+                        <div
+                          key={id}
+                          role="listitem"
+                          className={`aspect-format-pill ${active ? 'is-active' : ''}`}
+                        >
+                          <button
+                            type="button"
+                            className="aspect-format-pill-select"
+                            title={`${item.label} · ${item.hint}`}
+                            aria-pressed={active}
+                            onClick={() => focusPlatformAspect(id)}
+                          >
+                            {item.shortLabel}
+                            <span className="aspect-format-pill-hint">{item.hint}</span>
+                          </button>
+                          {canDismiss && (
+                            <button
+                              type="button"
+                              className="aspect-format-pill-dismiss"
+                              title={`Remove ${item.shortLabel}`}
+                              aria-label={`Remove ${item.shortLabel}`}
+                              onClick={() => toggleExportAspect(id)}
+                            >
+                              <X size={11} strokeWidth={2.6} aria-hidden />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+                <button
+                  type="button"
+                  className="aspect-ratio-trigger"
+                  aria-expanded={aspectDropdownOpen}
+                  aria-haspopup="listbox"
+                  title="Add or remove formats"
+                  onClick={() => setAspectDropdownOpen((open) => !open)}
+                >
+                  <Columns2 size={14} aria-hidden />
+                  <span>Formats</span>
+                  <ChevronDown size={13} className="aspect-ratio-trigger-chevron" aria-hidden />
+                </button>
+                {aspectDropdownOpen && (
+                  <div className="aspect-ratio-menu" role="listbox" aria-multiselectable aria-label="Aspect ratio formats">
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={previewFrame === 'free'}
+                      className={`aspect-ratio-option ${previewFrame === 'free' ? 'is-selected' : ''}`}
+                      onClick={() => applyPlatformFrame('free')}
+                    >
+                      <span className="aspect-ratio-option-copy">
+                        <strong>Free</strong>
+                        <span>No crop</span>
+                      </span>
+                      {previewFrame === 'free' ? <Check size={13} /> : null}
+                    </button>
+                    {EXPORT_ASPECT_GROUPS.map((group) => {
+                      const items = EXPORT_ASPECTS.filter((item) => item.group === group.id && item.id !== 'custom');
+                      if (!items.length) return null;
+                      return (
+                        <div key={group.id} className="aspect-ratio-menu-group" role="group" aria-label={group.label}>
+                          <div className="aspect-ratio-menu-label">{group.label}</div>
+                          {items.map((item) => {
+                            const selected = exportAspectIds.includes(item.id);
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                className={`aspect-ratio-option ${selected ? 'is-selected' : ''}`}
+                                title={`${item.label} · ${item.hint}`}
+                                onClick={() => toggleExportAspect(item.id)}
+                              >
+                                <span className="aspect-ratio-option-copy">
+                                  <strong>{item.label}</strong>
+                                  <span>{item.hint}</span>
+                                </span>
+                                {selected ? <Check size={13} /> : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <div className="left-panel-footer">
+              {!LICENSING_DISABLED && (
+                <button
+                  type="button"
+                  className="left-panel-settings"
+                  title={`License · ${planLabel(license.tier)} · Pro ${formatGbp(PLAN_PRICES_GBP.pro)}`}
+                  aria-label="License and plans"
+                  onClick={() => setLicenseOpen(true)}
+                >
+                  <KeyRound size={15} strokeWidth={1.9} />
+                  <span>{planLabel(license.tier)}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="left-panel-settings"
+                title="Send feedback"
+                aria-label="Send feedback"
+                onClick={() => setFeedbackOpen(true)}
+              >
+                <MessageSquarePlus size={15} strokeWidth={1.9} />
+                <span>Feedback</span>
+              </button>
+              <button
+                type="button"
+                className="left-panel-settings"
+                title="Settings & shortcuts"
+                aria-label="Settings & shortcuts"
+                onClick={() => setHelpOpen(true)}
+              >
+                <Settings2 size={15} strokeWidth={1.9} />
+                <span>Settings</span>
+              </button>
+            </div>
           </div>
+
         </aside>
+
+        {!sidePanelsHidden && (
+          <button
+            type="button"
+            className={`left-panel-edge-toggle ${leftPanelHidden ? 'is-floating' : 'is-docked'}`}
+            title={leftPanelHidden ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={leftPanelHidden ? 'Expand left sidebar' : 'Collapse left sidebar'}
+            aria-pressed={!leftPanelHidden}
+            onClick={() => setLeftPanelHidden((hidden) => !hidden)}
+          >
+            {leftPanelHidden ? (
+              <PanelLeftOpen size={15} strokeWidth={1.9} />
+            ) : (
+              <PanelLeftClose size={15} strokeWidth={1.9} />
+            )}
+          </button>
+        )}
 
         <main className="canvas-panel" onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }} onDrop={onDrop}>
@@ -2290,19 +2915,84 @@ export default function App() {
                 </p>
               )}
             </div>
-            <div className={`canvas-render ${project.background === 'transparent' ? 'transparent-grid' : ''}`}>
-              <DeviceCanvas
-                project={displayProject}
-                captureRef={captureRef}
-                mediaPlaying={animPlaying}
-                liveStream={mirrorStream}
-                cameraPosition={animatedCamera}
-                onSelectDevice={onSelectDevice}
-                onClearSelection={() => setDeviceMenu(null)}
-                onRotateDevice={onRotateDevice}
-                onMoveDevice={onMoveDevice}
-                onGizmoDraggingChange={setGizmoDragging}
-              />
+            <div className={`canvas-render ${project.background === 'transparent' ? 'transparent-grid' : ''} ${isDualCanvas ? 'is-dual' : ''}`}>
+              {isDualCanvas && iosDisplayProject && androidDisplayProject ? (
+                <DualCanvasLayout
+                  ratio={previewAspect?.ratio ?? null}
+                  label={previewAspect?.label}
+                  hint={previewAspect?.hint}
+                  ios={{
+                    active: activePublishTarget === 'ios',
+                    editing: activePublishTarget === 'ios',
+                    platformLabel: 'iOS',
+                    onActivate: () => {
+                      if (activePublishTarget !== 'ios') switchPublishTarget('ios', { quiet: true });
+                    },
+                    children: (
+                      <DeviceCanvas
+                        canvasId="env-ios"
+                        project={iosDisplayProject}
+                        captureRef={iosCaptureRef}
+                        mediaPlaying={animPlaying}
+                        liveStream={mirrorSource === 'ios' || (!mirrorSource && activePublishTarget === 'ios') ? mirrorStream : null}
+                        liveStreamDeviceId={liveStreamDeviceId}
+                        cameraPosition={animatedCamera}
+                        gizmoActive={activePublishTarget === 'ios'}
+                        sharedOrbit={sharedOrbit}
+                        onSharedOrbitChange={setSharedOrbit}
+                        recenterToken={cameraRecenterToken}
+                        onSelectDevice={onSelectDevice}
+                        onClearSelection={() => setDeviceMenu(null)}
+                        onRotateDevice={onRotateDevice}
+                        onMoveDevice={onMoveDevice}
+                        onGizmoDraggingChange={setGizmoDragging}
+                      />
+                    ),
+                  }}
+                  android={{
+                    active: activePublishTarget === 'android',
+                    editing: activePublishTarget === 'android',
+                    platformLabel: 'Android',
+                    onActivate: () => {
+                      if (activePublishTarget !== 'android') switchPublishTarget('android', { quiet: true });
+                    },
+                    children: (
+                      <DeviceCanvas
+                        canvasId="env-android"
+                        project={androidDisplayProject}
+                        captureRef={androidCaptureRef}
+                        mediaPlaying={animPlaying}
+                        liveStream={mirrorSource === 'android' || (!mirrorSource && activePublishTarget === 'android') ? mirrorStream : null}
+                        liveStreamDeviceId={liveStreamDeviceId}
+                        cameraPosition={animatedCamera}
+                        gizmoActive={activePublishTarget === 'android'}
+                        sharedOrbit={sharedOrbit}
+                        onSharedOrbitChange={setSharedOrbit}
+                        recenterToken={cameraRecenterToken}
+                        onSelectDevice={onSelectDevice}
+                        onClearSelection={() => setDeviceMenu(null)}
+                        onRotateDevice={onRotateDevice}
+                        onMoveDevice={onMoveDevice}
+                        onGizmoDraggingChange={setGizmoDragging}
+                      />
+                    ),
+                  }}
+                />
+              ) : (
+                <DeviceCanvas
+                  project={displayProject}
+                  captureRef={captureRef}
+                  mediaPlaying={animPlaying}
+                  liveStream={mirrorStream}
+                  liveStreamDeviceId={liveStreamDeviceId}
+                  cameraPosition={animatedCamera}
+                  onSelectDevice={onSelectDevice}
+                  onClearSelection={() => setDeviceMenu(null)}
+                  onRotateDevice={onRotateDevice}
+                  onMoveDevice={onMoveDevice}
+                  onGizmoDraggingChange={setGizmoDragging}
+                />
+              )}
               <ProgressiveBlurOverlay
                 top={displayProject.edgeBlurTop ?? false}
                 bottom={displayProject.edgeBlurBottom ?? false}
@@ -2346,19 +3036,6 @@ export default function App() {
                 ) : null
               ))}
             </div>
-            {previewAspect && (
-              <CropFocusOverlay
-                ratio={previewAspect.ratio}
-                label={previewAspect.label}
-                hint={previewAspect.hint}
-              />
-            )}
-            {project.compositionMode === 'split' && (
-              <div className="split-labels">
-                <span>iOS</span>
-                <span>Android</span>
-              </div>
-            )}
             {deviceMenu && (
               <div className="device-action-menu" style={{ left: Math.min(deviceMenu.x, window.innerWidth - 240), top: Math.min(deviceMenu.y, window.innerHeight - 200) }}>
                 <div className="device-action-hint">
@@ -2368,7 +3045,7 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setDeviceMenu(null);
-                    setLeftTab('assets');
+                    setLeftWorkspaceTab('assets');
                     imageInputRef.current?.click();
                   }}
                 >
@@ -2379,7 +3056,7 @@ export default function App() {
                   disabled={mirrorBusy}
                   onClick={() => {
                     setDeviceMenu(null);
-                    setLeftTab('assets');
+                    setLeftWorkspaceTab('assets');
                     void startPhoneMirroring();
                   }}
                 >
@@ -2414,6 +3091,81 @@ export default function App() {
           </div>
           {!sidePanelsHidden && (
             <div className={`workspace-bottom-chrome ${timelineOpen ? 'is-raised' : ''}`}>
+              <div
+                ref={studioAiShellRef}
+                className={`studio-ai ${studioAiOpen ? 'is-open' : 'is-compact'}`}
+              >
+                {!studioAiOpen ? (
+                  <button
+                    type="button"
+                    className="studio-ai-trigger"
+                    onClick={openStudioAi}
+                    aria-expanded={false}
+                    aria-controls="studio-ai-panel"
+                    title="AI assistant"
+                  >
+                    <span className="studio-ai-glow" aria-hidden />
+                    <Sparkles size={15} aria-hidden />
+                    <span>AI</span>
+                  </button>
+                ) : (
+                  <form
+                    id="studio-ai-panel"
+                    className="studio-ai-panel"
+                    onSubmit={(event: FormEvent) => {
+                      event.preventDefault();
+                      runStudioAiPrompt(studioAiPrompt);
+                    }}
+                  >
+                    <span className="studio-ai-glow studio-ai-glow-panel" aria-hidden />
+                    <div className="studio-ai-field">
+                      <Sparkles size={14} className="studio-ai-icon" aria-hidden />
+                      <input
+                        ref={studioAiInputRef}
+                        type="text"
+                        value={studioAiPrompt}
+                        onChange={(e) => {
+                          setStudioAiPrompt(e.target.value);
+                          if (studioAiStatus) setStudioAiStatus(null);
+                        }}
+                        placeholder="Ask AI to animate…"
+                        aria-label="AI assistant prompt"
+                        disabled={studioAiBusy}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <button
+                        type="submit"
+                        className="studio-ai-go"
+                        disabled={studioAiBusy || !studioAiPrompt.trim()}
+                        title="Generate"
+                      >
+                        Go
+                      </button>
+                    </div>
+                    <div className="studio-ai-meta">
+                      {studioAiStatus ? (
+                        <span className="studio-ai-status">{studioAiStatus}</span>
+                      ) : (
+                        <div className="studio-ai-chips" role="list">
+                          {PROMPT_SUGGESTIONS.slice(0, 6).map((chip) => (
+                            <button
+                              key={chip}
+                              type="button"
+                              role="listitem"
+                              className="studio-ai-chip"
+                              onClick={() => runStudioAiPrompt(chip)}
+                              title={`Animate: ${chip}`}
+                            >
+                              {chip}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </form>
+                )}
+              </div>
               <nav className="workspace-mode-dock" aria-label="Workspace mode">
                 <div className="workspace-mode-dock-tabs" role="tablist">
                   <button
@@ -2526,131 +3278,272 @@ export default function App() {
                 <SwitchControl
                   checked={project.compositionMode === 'split'}
                   label="iOS + Android"
-                  title={project.compositionMode === 'split' ? 'Return to a single device' : 'Show both platforms side by side'}
+                  title={project.compositionMode === 'split' ? 'Return to a single device' : 'Open dual iOS + Android canvases'}
                   onChange={(on) => (on ? enableSplitComposition() : enableSingleComposition())}
                 />
               </div>
-              <div className={`device-dropdown ${deviceDropdownOpen ? 'is-open' : ''}`}>
-                <button
-                  type="button"
-                  className="device-dropdown-trigger"
-                  disabled={project.compositionMode === 'split'}
-                  aria-expanded={deviceDropdownOpen}
-                  aria-haspopup="listbox"
-                  title={project.compositionMode === 'split' ? 'Device locked in split mode' : 'Choose device'}
-                  onClick={() => setDeviceDropdownOpen((open) => !open)}
-                >
-                  <span className="device-dropdown-copy">
-                    <strong>{getDevice(project.deviceId).label}</strong>
-                    <span>
-                      {isCustomDeviceId(project.deviceId) ? 'Custom' : getDevice(project.deviceId).platform === 'ios' ? 'iOS' : 'Android'}
-                      {' · '}
-                      {screenSizeLabel(getDevice(project.deviceId).screenSize)}
-                    </span>
-                  </span>
-                  <ChevronDown size={14} className="device-dropdown-chevron" />
-                </button>
-                {deviceDropdownOpen && project.compositionMode !== 'split' && (
-                  <div className="device-dropdown-menu" role="listbox" aria-label="Devices">
-                    {allDevices.map((device) => {
-                      const unlocked = isDeviceUnlocked(license.tier, device.id);
-                      return (
-                        <button
-                          key={device.id}
-                          type="button"
-                          role="option"
-                          aria-selected={project.deviceId === device.id}
-                          className={`device-dropdown-option ${project.deviceId === device.id ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
-                          title={unlocked
-                            ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)}`
-                            : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
-                          onClick={() => {
-                            if (!unlocked) {
-                              notify(upgradeCopy('The full device library'));
-                              setLicenseOpen(true);
-                              setDeviceDropdownOpen(false);
-                              return;
-                            }
-                            patchSelectedDevice({ deviceId: device.id });
-                            setDeviceChosen(true);
-                            if (isPlaceholderScreenshot(project.screenshot)) {
-                              updateProject({ screenshot: placeholderForDevice(device) });
-                            }
-                            setDeviceDropdownOpen(false);
-                          }}
-                        >
-                          <span className="device-dropdown-copy">
-                            <strong>{device.label}</strong>
-                            <span>
-                              {isCustomDeviceId(device.id) ? 'Custom' : device.platform === 'ios' ? 'iOS' : 'Android'}
-                              {' · '}
-                              {screenSizeLabel(device.screenSize)}
-                              {!unlocked && ' · Pro'}
-                            </span>
-                          </span>
-                          {project.deviceId === device.id ? <Check size={13} /> : !unlocked ? <Lock size={13} /> : null}
-                        </button>
-                      );
-                    })}
+              {project.compositionMode === 'split' && (
+                <>
+                  <div className="publish-target-switch" role="group" aria-label="Publish target">
+                    <button
+                      type="button"
+                      className={activePublishTarget === 'ios' ? 'is-active' : ''}
+                      onClick={() => switchPublishTarget('ios')}
+                    >
+                      Edit iOS
+                    </button>
+                    <button
+                      type="button"
+                      className={activePublishTarget === 'android' ? 'is-active' : ''}
+                      onClick={() => switchPublishTarget('android')}
+                    >
+                      Edit Android
+                    </button>
                   </div>
-                )}
-              </div>
-              <CustomDevicePanel
-                selectedDeviceId={project.deviceId}
-                customDevices={customDevices}
-                disabled={project.compositionMode === 'split'}
-                onNotify={notify}
-                onImported={(meta) => {
-                  setCustomDevices(loadCustomDeviceMeta());
-                  setDevicesTick((n) => n + 1);
-                  patchSelectedDevice({ deviceId: meta.id });
-                  if (isPlaceholderScreenshot(project.screenshot)) {
-                    updateProject({ screenshot: placeholderForDevice(meta.id) });
-                  }
-                }}
-                onUpdated={() => {
-                  setCustomDevices(loadCustomDeviceMeta());
-                  setDevicesTick((n) => n + 1);
-                  if (isPlaceholderScreenshot(project.screenshot) && isCustomDeviceId(project.deviceId)) {
-                    updateProject({ screenshot: placeholderForDevice(project.deviceId) });
-                  }
-                }}
-                onDeleted={(id) => {
-                  setCustomDevices(loadCustomDeviceMeta());
-                  setDevicesTick((n) => n + 1);
-                  if (project.deviceId === id) {
-                    const fallback = DEVICE_MODELS[0];
-                    patchSelectedDevice({ deviceId: fallback.id });
-                    if (isPlaceholderScreenshot(project.screenshot)) {
-                      updateProject({ screenshot: placeholderForDevice(fallback) });
-                    }
-                  }
-                }}
-              />
+                  <div className="option-toggle-row">
+                    <span>Link rotation &amp; scale</span>
+                    <SwitchControl
+                      checked={project.linkSplitTransform !== false}
+                      label="Link rotation and scale"
+                      title="Keep rotation and scale mirrored across platforms. Position stays independent."
+                      onChange={(on) => {
+                        if (!on) {
+                          updateProject({ linkSplitTransform: false });
+                          return;
+                        }
+                        setProject((current) => {
+                          const source = getPublishEnvDevice(current);
+                          return syncProjectFromSelected({
+                            ...current,
+                            linkSplitTransform: true,
+                            devices: mirrorLinkedTransforms(current.devices, source),
+                          }, source);
+                        });
+                      }}
+                    />
+                  </div>
+                </>
+              )}
+              {project.compositionMode === 'split' ? (
+                <div className="split-env-device-block">
+                  {([
+                    { platform: 'ios' as const, device: iosEnvDevice, finish: iosEnvFinish, title: 'iOS device' },
+                    { platform: 'android' as const, device: androidEnvDevice, finish: androidEnvFinish, title: 'Android device' },
+                  ]).map(({ platform, device, finish, title }) => {
+                    const model = getDevice(device.deviceId);
+                    const menuOpen = splitDeviceMenu === platform;
+                    const platformDevices = allDevices.filter((d) => d.platform === platform);
+                    const isAssetTarget = activePublishTarget === platform;
+                    return (
+                      <div
+                        key={platform}
+                        className={`split-env-device-card ${isAssetTarget ? 'is-active-env' : ''}`}
+                      >
+                        <div className="split-env-device-card-head">
+                          <strong>{title}</strong>
+                          <span>{isAssetTarget ? 'Assets target' : 'Model only'}</span>
+                        </div>
+                        <div className={`device-dropdown ${menuOpen ? 'is-open' : ''}`}>
+                          <button
+                            type="button"
+                            className="device-dropdown-trigger"
+                            aria-expanded={menuOpen}
+                            aria-haspopup="listbox"
+                            title={`Choose ${platform === 'ios' ? 'iOS' : 'Android'} device`}
+                            onClick={() => setSplitDeviceMenu((open) => (open === platform ? null : platform))}
+                          >
+                            <span className="device-dropdown-copy">
+                              <strong>{model.label}</strong>
+                              <span>{screenSizeLabel(model.screenSize)}</span>
+                            </span>
+                            <ChevronDown size={14} className="device-dropdown-chevron" />
+                          </button>
+                          {menuOpen && (
+                            <div className="device-dropdown-menu" role="listbox" aria-label={`${title} models`}>
+                              {platformDevices.map((option) => {
+                                const unlocked = isDeviceUnlocked(license.tier, option.id);
+                                const selected = device.deviceId === option.id;
+                                return (
+                                  <button
+                                    key={option.id}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={selected}
+                                    className={`device-dropdown-option ${selected ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
+                                    title={unlocked
+                                      ? `${option.subtitle} · ${screenSizeLabel(option.screenSize)}`
+                                      : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
+                                    onClick={() => {
+                                      if (!unlocked) {
+                                        notify(upgradeCopy('The full device library'));
+                                        setLicenseOpen(true);
+                                        setSplitDeviceMenu(null);
+                                        return;
+                                      }
+                                      setProject((current) => applyDeviceToPlatform(current, platform, option.id));
+                                      setDeviceChosen(true);
+                                      setSplitDeviceMenu(null);
+                                      // Size-guide placeholders update inside applyDeviceToPlatform.
+                                    }}
+                                  >
+                                    <span className="device-dropdown-copy">
+                                      <strong>{option.label}</strong>
+                                      <span>
+                                        {screenSizeLabel(option.screenSize)}
+                                        {!unlocked && ' · Pro'}
+                                      </span>
+                                    </span>
+                                    {selected ? <Check size={13} /> : !unlocked ? <Lock size={13} /> : null}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                        <div className="device-finish-grid" role="group" aria-label={`${title} finish`}>
+                          {DEVICE_COLORS.map((swatch) => (
+                            <button
+                              key={`${platform}-${swatch.id}`}
+                              type="button"
+                              className={`device-finish-swatch ${(finish.deviceColor === swatch.id || (swatch.id === 'clay' && finish.clayMode)) ? 'selected' : ''}`}
+                              title={swatch.label}
+                              onClick={() => setProject((current) => applyFinishToPlatform(current, platform, {
+                                deviceColor: swatch.id as DeviceColor,
+                                clayMode: swatch.id === 'clay',
+                              }))}
+                            >
+                              <span style={{ background: swatch.hex }} />
+                              <em>{swatch.label}</em>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <>
+                  <div className={`device-dropdown ${deviceDropdownOpen ? 'is-open' : ''}`}>
+                    <button
+                      type="button"
+                      className="device-dropdown-trigger"
+                      aria-expanded={deviceDropdownOpen}
+                      aria-haspopup="listbox"
+                      title="Choose device"
+                      onClick={() => setDeviceDropdownOpen((open) => !open)}
+                    >
+                      <span className="device-dropdown-copy">
+                        <strong>{getDevice(project.deviceId).label}</strong>
+                        <span>
+                          {isCustomDeviceId(project.deviceId) ? 'Custom' : getDevice(project.deviceId).platform === 'ios' ? 'iOS' : 'Android'}
+                          {' · '}
+                          {screenSizeLabel(getDevice(project.deviceId).screenSize)}
+                        </span>
+                      </span>
+                      <ChevronDown size={14} className="device-dropdown-chevron" />
+                    </button>
+                    {deviceDropdownOpen && (
+                      <div className="device-dropdown-menu" role="listbox" aria-label="Devices">
+                        {allDevices.map((device) => {
+                          const unlocked = isDeviceUnlocked(license.tier, device.id);
+                          return (
+                            <button
+                              key={device.id}
+                              type="button"
+                              role="option"
+                              aria-selected={project.deviceId === device.id}
+                              className={`device-dropdown-option ${project.deviceId === device.id ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
+                              title={unlocked
+                                ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)}`
+                                : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
+                              onClick={() => {
+                                if (!unlocked) {
+                                  notify(upgradeCopy('The full device library'));
+                                  setLicenseOpen(true);
+                                  setDeviceDropdownOpen(false);
+                                  return;
+                                }
+                                patchSelectedDevice({ deviceId: device.id });
+                                setDeviceChosen(true);
+                                if (isPlaceholderScreenshot(activeEnvScreenshot)) {
+                                  applyScreenImage(placeholderForDevice(device), device.label, 'Size guide updated');
+                                }
+                                setDeviceDropdownOpen(false);
+                              }}
+                            >
+                              <span className="device-dropdown-copy">
+                                <strong>{device.label}</strong>
+                                <span>
+                                  {isCustomDeviceId(device.id) ? 'Custom' : device.platform === 'ios' ? 'iOS' : 'Android'}
+                                  {' · '}
+                                  {screenSizeLabel(device.screenSize)}
+                                  {!unlocked && ' · Pro'}
+                                </span>
+                              </span>
+                              {project.deviceId === device.id ? <Check size={13} /> : !unlocked ? <Lock size={13} /> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  <CustomDevicePanel
+                    selectedDeviceId={project.deviceId}
+                    customDevices={customDevices}
+                    onNotify={notify}
+                    onImported={(meta) => {
+                      setCustomDevices(loadCustomDeviceMeta());
+                      setDevicesTick((n) => n + 1);
+                      patchSelectedDevice({ deviceId: meta.id });
+                      if (isPlaceholderScreenshot(activeEnvScreenshot)) {
+                        applyScreenImage(placeholderForDevice(meta.id), meta.label || 'Custom', 'Size guide updated');
+                      }
+                    }}
+                    onUpdated={() => {
+                      setCustomDevices(loadCustomDeviceMeta());
+                      setDevicesTick((n) => n + 1);
+                      if (isPlaceholderScreenshot(activeEnvScreenshot) && isCustomDeviceId(project.deviceId)) {
+                        applyScreenImage(placeholderForDevice(project.deviceId), 'Custom', 'Size guide updated');
+                      }
+                    }}
+                    onDeleted={(id) => {
+                      setCustomDevices(loadCustomDeviceMeta());
+                      setDevicesTick((n) => n + 1);
+                      if (project.deviceId === id) {
+                        const fallback = DEVICE_MODELS[0];
+                        patchSelectedDevice({ deviceId: fallback.id });
+                        if (isPlaceholderScreenshot(activeEnvScreenshot)) {
+                          applyScreenImage(placeholderForDevice(fallback), fallback.label, 'Size guide updated');
+                        }
+                      }
+                    }}
+                  />
+                  <div className="field-caption" style={{ marginTop: 10 }}>FINISH</div>
+                  <div className="device-finish-grid" role="group" aria-label="Device finish">
+                    {DEVICE_COLORS.map((finish) => (
+                      <button
+                        key={finish.id}
+                        type="button"
+                        className={`device-finish-swatch ${(project.deviceColor === finish.id || (finish.id === 'clay' && project.clayMode)) ? 'selected' : ''}`}
+                        title={finish.label}
+                        onClick={() => setProject((current) => applyFinishToPublishEnv(current, {
+                          deviceColor: finish.id as DeviceColor,
+                          clayMode: finish.id === 'clay',
+                        }))}
+                      >
+                        <span style={{ background: finish.hex }} />
+                        <em>{finish.label}</em>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
               {deviceChosen && (
-                <button className="button full-outline compact" onClick={() => { setLeftTab('assets'); imageInputRef.current?.click(); }}>
+                <button className="button full-outline compact" onClick={() => { setLeftWorkspaceTab('assets'); imageInputRef.current?.click(); }}>
                   <ImagePlus size={14} />
-                  {screenMediaKind(project.screenshot) === 'video' ? 'Replace screen video' : 'Replace screenshot'}
+                  {screenMediaKind(activeEnvScreenshot) === 'video' ? 'Replace screen video' : 'Replace screenshot'}
                 </button>
               )}
-              <div className="field-caption" style={{ marginTop: 10 }}>FINISH</div>
-              <div className="device-finish-grid" role="group" aria-label="Device finish">
-                {DEVICE_COLORS.map((finish) => (
-                  <button
-                    key={finish.id}
-                    type="button"
-                    className={`device-finish-swatch ${(project.deviceColor === finish.id || (finish.id === 'clay' && project.clayMode)) ? 'selected' : ''}`}
-                    title={finish.label}
-                    onClick={() => updateProject({
-                      deviceColor: finish.id as DeviceColor,
-                      clayMode: finish.id === 'clay',
-                    })}
-                  >
-                    <span style={{ background: finish.hex }} />
-                    <em>{finish.label}</em>
-                  </button>
-                ))}
-              </div>
             </SettingsSection>
 
             <SettingsSection id="transform" title="Transform" icon={Rotate3D} open={openSectionId === 'transform'} onToggle={toggleSection}>
@@ -3184,6 +4077,15 @@ export default function App() {
             </button>
           </div>
         </aside>
+
+        {/* Dual mode frames each pane itself — one workspace overlay would span both. */}
+        {previewAspect && !isDualCanvas && (
+          <CropFocusOverlay
+            ratio={previewAspect.ratio}
+            label={previewAspect.label}
+            hint={previewAspect.hint}
+          />
+        )}
       </div>
       )}
 
@@ -3374,6 +4276,38 @@ export default function App() {
                 <span className="export-custom-hint">{EXPORT_SIZE_LIMITS.min}–{EXPORT_SIZE_LIMITS.max} px</span>
               </div>
             )}
+
+            <div className="modal-field-label">
+              CANVAS CROP
+              <span>{previewFrame === 'free' ? 'Off' : 'On'}</span>
+            </div>
+            <div className="export-free-row" role="group" aria-label="Canvas crop overlay">
+              <button
+                type="button"
+                className={`export-free-option ${previewFrame === 'free' ? 'selected' : ''}`}
+                disabled={exporting}
+                title="Hide the crop overlay on the canvas"
+                onClick={() => applyPlatformFrame('free')}
+              >
+                <div className="aspect-sidebar-ratio aspect-sidebar-ratio-free" />
+                <div>
+                  <strong>Free</strong>
+                  <span>No crop overlay — compose without a frame guide</span>
+                </div>
+                <span className="radio-dot">{previewFrame === 'free' && <span />}</span>
+              </button>
+              {previewFrame === 'free' && (
+                <button
+                  type="button"
+                  className="button subtle-button export-free-restore"
+                  disabled={exporting}
+                  onClick={() => focusPlatformAspect(exportAspectIds[0] ?? 'tiktok')}
+                >
+                  Restore {EXPORT_ASPECTS.find((item) => item.id === (exportAspectIds[0] ?? 'tiktok'))?.shortLabel ?? 'crop'}
+                </button>
+              )}
+            </div>
+
             {exportNeedsAnimation && (
               <p className="export-warning">Add keyframes on the timeline before exporting video or GIF.</p>
             )}
@@ -3409,10 +4343,30 @@ export default function App() {
               <div><Gauge size={17} /><span>Space play/pause · long-press & drag to multi-select keys · set Ease on selection · Delete removes selected.</span></div>
               <div><Command size={17} /><span>⌘S Save · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab (last tab → recent projects) · . hide panels.</span></div>
             </div>
-            <button className="button primary-button modal-full-button" onClick={() => setHelpOpen(false)}>Start creating</button>
+            <div className="help-modal-actions">
+              <button
+                type="button"
+                className="button subtle-button"
+                onClick={() => {
+                  setHelpOpen(false);
+                  setFeedbackOpen(true);
+                }}
+              >
+                Send feedback
+              </button>
+              <button type="button" className="button primary-button" onClick={() => setHelpOpen(false)}>
+                Start creating
+              </button>
+            </div>
           </div>
         </div>
       )}
+      <FeedbackModal
+        open={feedbackOpen}
+        onClose={() => setFeedbackOpen(false)}
+        onNotify={notify}
+        appVersion="0.1.0"
+      />
       {templatePickerOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setTemplatePickerOpen(false); }}>
           <div className="export-modal template-modal" role="dialog" aria-modal="true" aria-labelledby="template-title">
@@ -3469,15 +4423,18 @@ export default function App() {
           </div>
         </div>
       )}
-      <LicenseModal
-        open={licenseOpen}
-        license={license}
-        onClose={() => setLicenseOpen(false)}
-        onChange={setLicense}
-        onNotify={notify}
-      />
+      {!LICENSING_DISABLED && (
+        <LicenseModal
+          open={licenseOpen}
+          license={license}
+          onClose={() => setLicenseOpen(false)}
+          onChange={setLicense}
+          onNotify={notify}
+        />
+      )}
       <FigmaExploreModal
         open={figmaExploreOpen}
+        initialUrl={figmaLinkDraft}
         onClose={() => setFigmaExploreOpen(false)}
         onNotify={notify}
         onApply={(dataUrl, layerName) => {

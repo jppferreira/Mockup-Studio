@@ -18,8 +18,11 @@ After Lemon Squeezy or Paddle reports a paid order, this service:
 | `POST` | `/recover/request` | Email a 6-digit code to the purchase address |
 | `POST` | `/recover/confirm` | Verify code → mint + email a **new** signed key |
 | `POST` | `/dev/fulfill` | Local test — header `X-Fulfill-Secret` |
+| `POST` | `/feedback` | Product feedback / contact form → `FEEDBACK_INBOX` via Resend |
 
 Buyer UI: website `/recover` ([`website/src/pages/RecoverPage.tsx`](../website/src/pages/RecoverPage.tsx)). App License modal links there.
+
+App **Send feedback** and website **Contact / feedback** both call `POST /feedback` when `VITE_FULFILL_API_URL` is set (see root `.env.example` / `.env.local`).
 
 ## Setup
 
@@ -27,6 +30,22 @@ Buyer UI: website `/recover` ([`website/src/pages/RecoverPage.tsx`](../website/s
 cp server/.env.example server/.env
 # ensure scripts/.license-private-key.pem exists (npm run license:issue --init once)
 npm run fulfill:dev
+```
+
+### Resend (feedback + license mail)
+
+1. Create an API key at [resend.com/api-keys](https://resend.com/api-keys).
+2. In `server/.env` set:
+   - `RESEND_API_KEY=re_...`
+   - `FEEDBACK_INBOX=hello@jppferreira.com` (delivery address)
+   - `LICENSE_EMAIL_FROM="Mockup Studio <onboarding@resend.dev>"` for sandbox, or a verified domain sender for production
+3. In the app / website `.env.local` set `VITE_FULFILL_API_URL=http://127.0.0.1:8787` (or your production fulfill URL).
+4. Restart `npm run fulfill:dev`. Without `RESEND_API_KEY`, `/feedback` still returns `ok` and prints a dry-run to the server console.
+
+```bash
+curl -s -X POST http://127.0.0.1:8787/feedback \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"hello","topic":"Other","email":"you@example.com","intent":"feedback"}'
 ```
 
 Point Lemon/Paddle webhook URLs at your public HTTPS URL (use ngrok locally):
