@@ -124,7 +124,9 @@ export default function AnimationTimeline({
   const [prompt, setPrompt] = useState('');
   const [promptStatus, setPromptStatus] = useState<string | null>(null);
   const [promptBusy, setPromptBusy] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
   const promptInputRef = useRef<HTMLInputElement>(null);
+  const promptShellRef = useRef<HTMLDivElement>(null);
 
   const pressTimerRef = useRef<number | null>(null);
   const pressOriginRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
@@ -582,6 +584,46 @@ export default function AnimationTimeline({
     return index >= 0 ? `Device ${index + 1}` : 'Device';
   };
 
+  const closePrompt = () => {
+    setPromptOpen(false);
+    setPromptStatus(null);
+  };
+
+  const openPrompt = () => {
+    setPromptOpen(true);
+    setPromptStatus(null);
+  };
+
+  useEffect(() => {
+    if (!open || chromeHidden) closePrompt();
+  }, [open, chromeHidden]);
+
+  useEffect(() => {
+    if (!promptOpen) return;
+    const id = window.requestAnimationFrame(() => {
+      promptInputRef.current?.focus();
+    });
+    const onPointerDown = (event: PointerEvent) => {
+      if (!promptShellRef.current?.contains(event.target as Node)) {
+        closePrompt();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePrompt();
+        promptInputRef.current?.blur();
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(id);
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [promptOpen]);
+
   const runPrompt = (raw: string) => {
     const text = raw.trim();
     if (!text || promptBusy) return;
@@ -593,6 +635,7 @@ export default function AnimationTimeline({
       onPlayingChange(result.label !== 'Clear');
       setPromptStatus(result.summary);
       setPrompt('');
+      setPromptOpen(true);
     } finally {
       window.setTimeout(() => setPromptBusy(false), 120);
     }
@@ -625,48 +668,81 @@ export default function AnimationTimeline({
       </button>
     </div>
     <div className={`timeline-panel ${panelVisible ? 'is-open' : 'is-closed'}`} ref={panelRef} tabIndex={-1} aria-hidden={!panelVisible}>
-      <form className="timeline-prompt" onSubmit={onPromptSubmit}>
-        <div className="timeline-prompt-field">
-          <Sparkles size={14} className="timeline-prompt-icon" aria-hidden />
-          <input
-            ref={promptInputRef}
-            type="text"
-            value={prompt}
-            onChange={(e) => {
-              setPrompt(e.target.value);
-              if (promptStatus) setPromptStatus(null);
-            }}
-            placeholder="Describe a motion… e.g. gentle floating turntable"
-            aria-label="Animate with prompt"
-            disabled={promptBusy}
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <button type="submit" className="timeline-prompt-go" disabled={promptBusy || !prompt.trim()} title="Generate animation">
-            Animate
-          </button>
-        </div>
-        <div className="timeline-prompt-meta">
-          {promptStatus ? (
-            <span className="timeline-prompt-status">{promptStatus}</span>
-          ) : (
-            <div className="timeline-prompt-chips" role="list">
-              {PROMPT_SUGGESTIONS.slice(0, 5).map((chip) => (
+      <div
+        ref={promptShellRef}
+        className={`timeline-prompt ${promptOpen ? 'is-open' : 'is-compact'}`}
+      >
+        <button
+          type="button"
+          className="timeline-prompt-trigger"
+          onClick={openPrompt}
+          aria-expanded={promptOpen}
+          aria-controls="timeline-prompt-panel"
+          aria-hidden={promptOpen}
+          tabIndex={promptOpen ? -1 : 0}
+        >
+          <Sparkles size={14} aria-hidden />
+          <span>AI Animate</span>
+        </button>
+        <div
+          id="timeline-prompt-panel"
+          className="timeline-prompt-expand"
+          aria-hidden={!promptOpen}
+        >
+          <div className="timeline-prompt-expand-inner">
+            <form className="timeline-prompt-form" onSubmit={onPromptSubmit}>
+              <div className="timeline-prompt-field">
+                <Sparkles size={14} className="timeline-prompt-icon" aria-hidden />
+                <input
+                  ref={promptInputRef}
+                  type="text"
+                  value={prompt}
+                  onChange={(e) => {
+                    setPrompt(e.target.value);
+                    if (promptStatus) setPromptStatus(null);
+                  }}
+                  placeholder="Describe a motion… e.g. gentle floating turntable"
+                  aria-label="Animate with prompt"
+                  disabled={promptBusy || !promptOpen}
+                  tabIndex={promptOpen ? 0 : -1}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
                 <button
-                  key={chip}
-                  type="button"
-                  role="listitem"
-                  className="timeline-prompt-chip"
-                  onClick={() => runPrompt(chip)}
-                  title={`Animate: ${chip}`}
+                  type="submit"
+                  className="timeline-prompt-go"
+                  disabled={promptBusy || !prompt.trim() || !promptOpen}
+                  title="Generate animation"
+                  tabIndex={promptOpen ? 0 : -1}
                 >
-                  {chip}
+                  Animate
                 </button>
-              ))}
-            </div>
-          )}
+              </div>
+              <div className="timeline-prompt-meta">
+                {promptStatus ? (
+                  <span className="timeline-prompt-status">{promptStatus}</span>
+                ) : (
+                  <div className="timeline-prompt-chips" role="list">
+                    {PROMPT_SUGGESTIONS.slice(0, 5).map((chip) => (
+                      <button
+                        key={chip}
+                        type="button"
+                        role="listitem"
+                        className="timeline-prompt-chip"
+                        onClick={() => runPrompt(chip)}
+                        title={`Animate: ${chip}`}
+                        tabIndex={promptOpen ? 0 : -1}
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </form>
+          </div>
         </div>
-      </form>
+      </div>
       <div className="timeline-transport">
         <div className="timeline-transport-left">
           <button type="button" className="timeline-icon-btn" title="Go to start" onClick={() => { onPlayingChange(false); onSeek(0); }}>
