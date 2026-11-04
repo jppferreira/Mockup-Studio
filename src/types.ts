@@ -171,6 +171,10 @@ export interface MockupProject {
   shadowSoftness: number;
   /** Contact shadow darkness */
   shadowOpacity: number;
+  /** Soft progressive blur along the top & bottom of the frame */
+  edgeBlurEnabled: boolean;
+  /** Peak blur strength at the frame edges (px) */
+  edgeBlurAmount: number;
   cameraView: CameraView;
   compositionMode: CompositionMode;
   devices: DeviceInstance[];
@@ -245,6 +249,8 @@ export const DEFAULT_PROJECT: MockupProject = {
   fillIntensity: 0.7,
   shadowSoftness: 2.5,
   shadowOpacity: 0.32,
+  edgeBlurEnabled: false,
+  edgeBlurAmount: 24,
   cameraView: 'front',
   compositionMode: 'single',
   devices: [primary],

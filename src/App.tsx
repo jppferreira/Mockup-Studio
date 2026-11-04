@@ -7,12 +7,20 @@ import {
   Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Trash2, Upload, X,
 } from 'lucide-react';
 import AnimationTimeline from './components/AnimationTimeline';
+import CustomDevicePanel from './components/CustomDevicePanel';
 import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload } from './components/DeviceCanvas';
+import ProgressiveBlurOverlay from './components/ProgressiveBlurOverlay';
 import ReflectionMapPicker from './components/ReflectionMapPicker';
 import type { GizmoMode } from './components/RotationBall';
+import {
+  hydrateCustomDeviceUrls,
+  loadCustomDeviceMeta,
+  subscribeCustomDevices,
+  type CustomDeviceMeta,
+} from './lib/customDevices';
 import { isPlaceholderScreenshot, placeholderForDevice } from './lib/demo';
 import { evaluateAnimation, hasAnimation, upsertKeyframe } from './lib/animation';
-import { DEVICE_MODELS, getDevice, screenSizeLabel } from './lib/devices';
+import { DEVICE_MODELS, getDevice, isCustomDeviceId, listAllDevices, screenSizeLabel } from './lib/devices';
 import { downloadBlob, safeFilename, validateProject } from './lib/project';
 import {
   STILL_FORMATS, VIDEO_FORMATS, encodeAnimationVideo, isStillExport, isVideoExport,
@@ -180,6 +188,8 @@ function swatchStyle(scene: ScenePreset): CSSProperties | undefined {
 export default function App() {
   const [workspace, setWorkspace] = useState<Workspace>(createInitialWorkspace);
   const [customPresets, setCustomPresets] = useState<ScenePreset[]>(() => loadCustomScenePresets());
+  const [customDevices, setCustomDevices] = useState<CustomDeviceMeta[]>(() => loadCustomDeviceMeta());
+  const [devicesTick, setDevicesTick] = useState(0);
   const [presetName, setPresetName] = useState('');
   const [savingPreset, setSavingPreset] = useState(false);
   const [leftTab, setLeftTab] = useState<LeftTab>('scenes');
@@ -217,6 +227,19 @@ export default function App() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    void hydrateCustomDeviceUrls().then(() => {
+      setCustomDevices(loadCustomDeviceMeta());
+      setDevicesTick((n) => n + 1);
+    });
+    return subscribeCustomDevices(() => {
+      setCustomDevices(loadCustomDeviceMeta());
+      setDevicesTick((n) => n + 1);
+    });
+  }, []);
+
+  const allDevices = useMemo(() => listAllDevices(), [customDevices, devicesTick]);
 
   const activeTab = workspace.tabs.find((tab) => tab.id === workspace.activeId) ?? workspace.tabs[0] ?? null;
   const hasOpenProject = activeTab != null;
@@ -1307,6 +1330,10 @@ export default function App() {
                 onRotateDevice={onRotateDevice}
                 onMoveDevice={onMoveDevice}
               />
+              <ProgressiveBlurOverlay
+                enabled={displayProject.edgeBlurEnabled ?? false}
+                amount={displayProject.edgeBlurAmount ?? DEFAULT_PROJECT.edgeBlurAmount}
+              />
             </div>
             {project.compositionMode === 'split' && (
               <div className="split-labels">
@@ -1411,11 +1438,11 @@ export default function App() {
                 </div>
               </button>
               <div className="device-list">
-                {DEVICE_MODELS.map((device) => (
+                {allDevices.map((device) => (
                   <button
                     key={device.id}
                     type="button"
-                    className={`device-picker ${project.deviceId === device.id ? 'is-selected' : ''}`}
+                    className={`device-picker ${project.deviceId === device.id ? 'is-selected' : ''} ${isCustomDeviceId(device.id) ? 'is-custom' : ''}`}
                     disabled={project.compositionMode === 'split'}
                     title={`${device.subtitle} · ${screenSizeLabel(device.screenSize)}`}
                     onClick={() => {
@@ -1429,7 +1456,7 @@ export default function App() {
                     <div className="device-picker-copy">
                       <strong>{device.label}</strong>
                       <span className="device-picker-meta">
-                        <span>{device.platform === 'ios' ? 'iOS' : 'Android'}</span>
+                        <span>{isCustomDeviceId(device.id) ? 'Custom' : device.platform === 'ios' ? 'iOS' : 'Android'}</span>
                         <span aria-hidden>·</span>
                         <span className="device-size-hint">{screenSizeLabel(device.screenSize)}</span>
                       </span>
@@ -1438,6 +1465,38 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              <CustomDevicePanel
+                selectedDeviceId={project.deviceId}
+                customDevices={customDevices}
+                disabled={project.compositionMode === 'split'}
+                onNotify={notify}
+                onImported={(meta) => {
+                  setCustomDevices(loadCustomDeviceMeta());
+                  setDevicesTick((n) => n + 1);
+                  patchSelectedDevice({ deviceId: meta.id });
+                  if (isPlaceholderScreenshot(project.screenshot)) {
+                    updateProject({ screenshot: placeholderForDevice(meta.id) });
+                  }
+                }}
+                onUpdated={() => {
+                  setCustomDevices(loadCustomDeviceMeta());
+                  setDevicesTick((n) => n + 1);
+                  if (isPlaceholderScreenshot(project.screenshot) && isCustomDeviceId(project.deviceId)) {
+                    updateProject({ screenshot: placeholderForDevice(project.deviceId) });
+                  }
+                }}
+                onDeleted={(id) => {
+                  setCustomDevices(loadCustomDeviceMeta());
+                  setDevicesTick((n) => n + 1);
+                  if (project.deviceId === id) {
+                    const fallback = DEVICE_MODELS[0];
+                    patchSelectedDevice({ deviceId: fallback.id });
+                    if (isPlaceholderScreenshot(project.screenshot)) {
+                      updateProject({ screenshot: placeholderForDevice(fallback) });
+                    }
+                  }
+                }}
+              />
               <button className="button full-outline compact" onClick={() => { setLeftTab('assets'); imageInputRef.current?.click(); }}><ImagePlus size={14} /> Replace screenshot</button>
             </SettingsSection>
 
@@ -1591,6 +1650,30 @@ export default function App() {
                 value={project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity}
                 onChange={(v) => updateProject({ shadowOpacity: v })}
               />
+              <div className="field-caption" style={{ marginTop: 14 }}>EDGE BLUR</div>
+              <p className="field-help">Progressive soft blur along the top and bottom of the frame.</p>
+              <div className="option-toggle-row">
+                <span>Progressive blur</span>
+                <button
+                  type="button"
+                  className={`option-toggle ${(project.edgeBlurEnabled ?? false) ? 'is-on' : ''}`}
+                  aria-pressed={project.edgeBlurEnabled ?? false}
+                  onClick={() => updateProject({ edgeBlurEnabled: !(project.edgeBlurEnabled ?? false) })}
+                >
+                  {(project.edgeBlurEnabled ?? false) ? 'On' : 'Off'}
+                </button>
+              </div>
+              {(project.edgeBlurEnabled ?? false) && (
+                <SliderField
+                  label="Blur amount"
+                  min={4}
+                  max={64}
+                  step={1}
+                  unit="px"
+                  value={project.edgeBlurAmount ?? DEFAULT_PROJECT.edgeBlurAmount}
+                  onChange={(v) => updateProject({ edgeBlurAmount: v })}
+                />
+              )}
               <button
                 type="button"
                 className="text-button"
@@ -1599,6 +1682,8 @@ export default function App() {
                   fillIntensity: DEFAULT_PROJECT.fillIntensity,
                   shadowSoftness: DEFAULT_PROJECT.shadowSoftness,
                   shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
+                  edgeBlurEnabled: DEFAULT_PROJECT.edgeBlurEnabled,
+                  edgeBlurAmount: DEFAULT_PROJECT.edgeBlurAmount,
                 })}
               >
                 <Sun size={13} /> Reset lighting & shadows

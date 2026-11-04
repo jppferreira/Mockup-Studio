@@ -1,4 +1,4 @@
-import { DEVICE_MODELS } from './devices';
+import { isKnownDeviceId } from './devices';
 import { REFLECTION_MAPS } from './reflectionMaps';
 import {
   ANIM_PROPERTIES, BACKGROUNDS, BUILTIN_GRADIENTS, DEFAULT_GRADIENT, DEFAULT_PROJECT, DEVICE_COLORS,
@@ -65,7 +65,7 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
       const item = (raw ?? {}) as Partial<DeviceInstance>;
       return createDeviceInstance({
         id: typeof item.id === 'string' ? item.id : `device-${index}`,
-        deviceId: DEVICE_MODELS.some((d) => d.id === item.deviceId) ? item.deviceId : DEFAULT_PROJECT.deviceId,
+        deviceId: isKnownDeviceId(item.deviceId) ? item.deviceId! : DEFAULT_PROJECT.deviceId,
         rotation: vec3(item.rotation, DEFAULT_PROJECT.rotation),
         scale: number(item.scale, 1, 0.6, 1.3),
         position: vec3(item.position, { x: 0, y: 0, z: 0 }),
@@ -77,7 +77,7 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
   return [
     createDeviceInstance({
       id: 'device-main',
-      deviceId: DEVICE_MODELS.some((d) => d.id === input.deviceId) ? input.deviceId : DEFAULT_PROJECT.deviceId,
+      deviceId: isKnownDeviceId(input.deviceId) ? input.deviceId! : DEFAULT_PROJECT.deviceId,
       rotation: vec3(input.rotation, DEFAULT_PROJECT.rotation),
       scale: number(input.scale, 1, 0.6, 1.3),
       position: { x: 0, y: 0, z: 0 },
@@ -146,6 +146,8 @@ export function validateProject(value: unknown): MockupProject {
     fillIntensity: number(input.fillIntensity, DEFAULT_PROJECT.fillIntensity, 0, 2.5),
     shadowSoftness: number(input.shadowSoftness, DEFAULT_PROJECT.shadowSoftness, 0.2, 8),
     shadowOpacity: number(input.shadowOpacity, DEFAULT_PROJECT.shadowOpacity, 0, 0.85),
+    edgeBlurEnabled: input.edgeBlurEnabled === true,
+    edgeBlurAmount: number(input.edgeBlurAmount, DEFAULT_PROJECT.edgeBlurAmount, 4, 64),
     cameraView: ['front', 'left', 'right', 'top'].includes(String(input.cameraView)) ? input.cameraView! : 'front',
     compositionMode,
     devices,

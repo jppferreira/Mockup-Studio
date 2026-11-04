@@ -1,4 +1,4 @@
-export type DeviceId =
+export type BuiltinDeviceId =
   | 'iphone_15_pro_max'
   | 'iphone_16_pro_max'
   | 'iphone_17_pro'
@@ -9,6 +9,9 @@ export type DeviceId =
   | 'pixel_9_pro_xl'
   | 'pixel_10_pro'
   | 'galaxy_s25_ultra';
+
+/** Built-in id, or a user-imported custom model id (`custom-…`). */
+export type DeviceId = BuiltinDeviceId | (string & {});
 
 export type DevicePlatform = 'ios' | 'android';
 export type DeviceKind = 'gltf' | 'procedural';
@@ -36,7 +39,7 @@ export interface DeviceModel {
   subtitle: string;
   platform: DevicePlatform;
   kind: DeviceKind;
-  /** GLB path for gltf devices */
+  /** GLB path or blob URL for gltf devices */
   url?: string;
   /** Procedural body style */
   procedural?: ProceduralStyle;
@@ -280,6 +283,41 @@ export const DEVICE_MODELS: DeviceModel[] = [
   },
 ];
 
+import {
+  customMetaToDeviceModel,
+  getCustomDeviceObjectUrl,
+  isCustomDeviceId,
+  loadCustomDeviceMeta,
+  resolveCustomDevice,
+} from './customDevices';
+
+export { isCustomDeviceId };
+
 export function getDevice(id: DeviceId | string | undefined): DeviceModel {
-  return DEVICE_MODELS.find((d) => d.id === id) ?? DEVICE_MODELS[0];
+  const builtin = DEVICE_MODELS.find((d) => d.id === id);
+  if (builtin) return builtin;
+  if (typeof id === 'string' && isCustomDeviceId(id)) {
+    const custom = resolveCustomDevice(id);
+    if (custom) return custom;
+  }
+  return DEVICE_MODELS[0];
+}
+
+/** Built-ins plus currently imported custom models (for pickers). */
+export function listAllDevices(): DeviceModel[] {
+  const custom = loadCustomDeviceMeta().map((meta) =>
+    customMetaToDeviceModel(meta, getCustomDeviceObjectUrl(meta.id) ?? undefined),
+  );
+  return [...DEVICE_MODELS, ...custom];
+}
+
+export function isBuiltinDeviceId(id: string | undefined | null): id is BuiltinDeviceId {
+  return typeof id === 'string' && DEVICE_MODELS.some((d) => d.id === id);
+}
+
+export function isKnownDeviceId(id: string | undefined | null): boolean {
+  if (!id) return false;
+  if (DEVICE_MODELS.some((d) => d.id === id)) return true;
+  if (isCustomDeviceId(id) && loadCustomDeviceMeta().some((d) => d.id === id)) return true;
+  return false;
 }

@@ -7,6 +7,7 @@ import { ContactShadows, OrbitControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { getDevice, type DeviceUv } from '../lib/devices';
+import { applyProgressiveEdgeBlur } from '../lib/edgeBlur';
 import ProceduralDevice from './ProceduralDevice';
 import RotationBall, { type GizmoMode } from './RotationBall';
 import SceneProps from './SceneProps';
@@ -547,14 +548,15 @@ function DeviceModelView({
     >
       {device.kind === 'procedural' ? (
         <ProceduralDevice device={device} screenshot={screenshot} />
-      ) : (
+      ) : device.url ? (
         <GltfDeviceContent
-          url={device.url!}
+          key={`${device.url}|${device.screenMat}|${device.rot.join(',')}|${device.uv.mirrorX ? 1 : 0}|${device.screenSize.width}x${device.screenSize.height}`}
+          url={device.url}
           deviceId={device.id}
           screenshot={screenshot}
           glassReflection={instance.glassReflection ?? 0.55}
         />
-      )}
+      ) : null}
     </group>
   );
 }
@@ -813,9 +815,30 @@ function hideEditorHelpers(scene: THREE.Scene) {
   };
 }
 
-function CaptureBridge({ captureRef }: { captureRef: MutableRefObject<CaptureApi | null> }) {
+function CaptureBridge({
+  captureRef,
+  edgeBlurEnabled,
+  edgeBlurAmount,
+}: {
+  captureRef: MutableRefObject<CaptureApi | null>;
+  edgeBlurEnabled: boolean;
+  edgeBlurAmount: number;
+}) {
   const { gl, scene, camera } = useThree();
   useEffect(() => {
+    const blitWithBlur = (width: number, height: number) => {
+      const out = document.createElement('canvas');
+      out.width = width;
+      out.height = height;
+      const c2d = out.getContext('2d', { alpha: true });
+      if (!c2d) throw new Error('Could not create export canvas');
+      c2d.drawImage(gl.domElement, 0, 0, width, height);
+      if (edgeBlurEnabled && edgeBlurAmount > 0) {
+        applyProgressiveEdgeBlur(c2d, width, height, edgeBlurAmount);
+      }
+      return out;
+    };
+
     const withSizedRender = <T,>(width: number, height: number, use: () => T): T => {
       if (!(camera instanceof THREE.PerspectiveCamera)) throw new Error('Unsupported camera');
       if (width > gl.capabilities.maxTextureSize || height > gl.capabilities.maxTextureSize) {
@@ -843,21 +866,25 @@ function CaptureBridge({ captureRef }: { captureRef: MutableRefObject<CaptureApi
     };
 
     captureRef.current = {
-      toPng: async (width, height) => withSizedRender(width, height, () => gl.domElement.toDataURL('image/png')),
+      toPng: async (width, height) => withSizedRender(width, height, () => {
+        if (!edgeBlurEnabled || edgeBlurAmount <= 0) {
+          return gl.domElement.toDataURL('image/png');
+        }
+        return blitWithBlur(width, height).toDataURL('image/png');
+      }),
       toImage: async (width, height, mime = 'image/png', quality = 0.92) => withSizedRender(
         width,
         height,
         () => {
-          if (mime !== 'image/webp') {
+          const needsBlit = mime === 'image/webp' || (edgeBlurEnabled && edgeBlurAmount > 0);
+          if (!needsBlit) {
             return gl.domElement.toDataURL('image/png');
           }
           // WebGL canvases often can't encode WebP directly — blit to a 2D canvas first.
-          const out = document.createElement('canvas');
-          out.width = width;
-          out.height = height;
-          const c2d = out.getContext('2d', { alpha: true });
-          if (!c2d) throw new Error('Could not create WebP export canvas');
-          c2d.drawImage(gl.domElement, 0, 0, width, height);
+          const out = blitWithBlur(width, height);
+          if (mime !== 'image/webp') {
+            return out.toDataURL('image/png');
+          }
           const url = out.toDataURL('image/webp', quality);
           if (!url.startsWith('data:image/webp')) {
             throw new Error('WebP export is not supported in this browser. Try PNG instead.');
@@ -869,11 +896,14 @@ function CaptureBridge({ captureRef }: { captureRef: MutableRefObject<CaptureApi
         withSizedRender(width, height, () => {
           dest.clearRect(0, 0, width, height);
           dest.drawImage(gl.domElement, 0, 0, width, height);
+          if (edgeBlurEnabled && edgeBlurAmount > 0) {
+            applyProgressiveEdgeBlur(dest, width, height, edgeBlurAmount);
+          }
         });
       },
     };
     return () => { captureRef.current = null; };
-  }, [captureRef, camera, gl, scene]);
+  }, [captureRef, camera, gl, scene, edgeBlurEnabled, edgeBlurAmount]);
   return null;
 }
 
@@ -1026,7 +1056,11 @@ export default function DeviceCanvas({
         />
       )}
       <CameraRig view={project.cameraView} split={project.compositionMode === 'split'} />
-      <CaptureBridge captureRef={captureRef} />
+      <CaptureBridge
+        captureRef={captureRef}
+        edgeBlurEnabled={project.edgeBlurEnabled ?? false}
+        edgeBlurAmount={project.edgeBlurAmount ?? 24}
+      />
     </Canvas>
   );
 }
