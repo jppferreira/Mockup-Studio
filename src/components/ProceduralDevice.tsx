@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
 import type { DeviceModel } from '../lib/devices';
+import { useScreenEmissiveMap } from '../lib/useScreenTexture';
 
 function makeScreenGeometry(width: number, height: number, radius: number) {
   const shape = new THREE.Shape();
@@ -34,6 +35,7 @@ function ScreenPlane({
   screenshot,
   screenSize,
   name = 'ProceduralScreen',
+  mediaPlaying,
 }: {
   width: number;
   height: number;
@@ -42,6 +44,7 @@ function ScreenPlane({
   screenshot: string | null;
   screenSize: { width: number; height: number };
   name?: string;
+  mediaPlaying?: boolean;
 }) {
   const geometry = useMemo(() => makeScreenGeometry(width, height, radius), [width, height, radius]);
   const material = useMemo(
@@ -59,58 +62,36 @@ function ScreenPlane({
     [name],
   );
 
-  useEffect(() => {
-    let disposed: THREE.Texture | null = null;
-    let cancelled = false;
+  useEffect(() => () => {
+    geometry.dispose();
+    material.dispose();
+  }, [geometry, material]);
 
-    const paint = (img: HTMLImageElement | null) => {
-      if (cancelled) return;
-      const canvas = document.createElement('canvas');
-      canvas.width = screenSize.width;
-      canvas.height = screenSize.height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      ctx.fillStyle = '#0b1014';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      if (img) {
-        const scale = Math.max(canvas.width / img.width, canvas.height / img.height);
-        const dw = img.width * scale;
-        const dh = img.height * scale;
-        ctx.drawImage(img, (canvas.width - dw) / 2, (canvas.height - dh) / 2, dw, dh);
-      }
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = 8;
+  useScreenEmissiveMap({
+    material,
+    screenshot,
+    width: screenSize.width,
+    height: screenSize.height,
+    playing: mediaPlaying,
+    applyUv: (tex) => {
       tex.flipY = false;
-      disposed?.dispose();
-      disposed = tex;
-      material.emissiveMap = tex;
-      material.needsUpdate = true;
-    };
-
-    if (!screenshot) {
-      paint(null);
-      return () => {
-        cancelled = true;
-        disposed?.dispose();
-        geometry.dispose();
-      };
-    }
-
-    const image = new Image();
-    image.onload = () => paint(image);
-    image.src = screenshot;
-    return () => {
-      cancelled = true;
-      disposed?.dispose();
-      geometry.dispose();
-    };
-  }, [screenshot, material, geometry, screenSize.width, screenSize.height]);
+    },
+  });
 
   return <mesh geometry={geometry} position={position} material={material} />;
 }
 
-function TitaniumMaterial({ color }: { color: string }) {
+function TitaniumMaterial({ color, clayMode }: { color: string; clayMode?: boolean }) {
+  if (clayMode) {
+    return (
+      <meshStandardMaterial
+        color={color}
+        metalness={0}
+        roughness={0.92}
+        envMapIntensity={0.08}
+      />
+    );
+  }
   return (
     <meshPhysicalMaterial
       color={color}
@@ -144,6 +125,8 @@ function DuoHalf({
   halfW,
   height,
   screenSize,
+  clayMode,
+  mediaPlaying,
 }: {
   side: 'left' | 'right';
   finish: string;
@@ -151,13 +134,15 @@ function DuoHalf({
   halfW: number;
   height: number;
   screenSize: { width: number; height: number };
+  clayMode?: boolean;
+  mediaPlaying?: boolean;
 }) {
   const isCover = side === 'right';
   return (
     <group>
       {/* Chassis */}
       <RoundedBox args={[halfW, height, 0.11]} radius={0.09} smoothness={10} castShadow receiveShadow>
-        <TitaniumMaterial color={finish} />
+        <TitaniumMaterial color={finish} clayMode={clayMode} />
       </RoundedBox>
 
       {/* Inner glass lip */}
@@ -173,32 +158,35 @@ function DuoHalf({
         screenshot={screenshot}
         screenSize={screenSize}
         name={isCover ? 'CoverScreen' : 'ProceduralScreen'}
+        mediaPlaying={mediaPlaying}
       />
 
       {/* Thin glass overlay for reflections */}
-      <RoundedBox args={[halfW - 0.1, height - 0.12, 0.004]} radius={0.065} smoothness={6} position={[0, 0, 0.074]}>
-        <meshPhysicalMaterial
-          color="#ffffff"
-          metalness={0}
-          roughness={0.05}
-          transmission={0.92}
-          thickness={0.02}
-          transparent
-          opacity={0.12}
-          envMapIntensity={1.4}
-          clearcoat={1}
-          clearcoatRoughness={0.02}
-        />
-      </RoundedBox>
+      {!clayMode && (
+        <RoundedBox args={[halfW - 0.1, height - 0.12, 0.004]} radius={0.065} smoothness={6} position={[0, 0, 0.074]}>
+          <meshPhysicalMaterial
+            color="#ffffff"
+            metalness={0}
+            roughness={0.05}
+            transmission={0.92}
+            thickness={0.02}
+            transparent
+            opacity={0.12}
+            envMapIntensity={1.4}
+            clearcoat={1}
+            clearcoatRoughness={0.02}
+          />
+        </RoundedBox>
+      )}
 
       {/* Side buttons on cover half */}
       {isCover && (
         <>
           <RoundedBox args={[0.018, 0.26, 0.035]} radius={0.006} smoothness={4} position={[halfW / 2 + 0.006, 0.38, 0]}>
-            <TitaniumMaterial color={finish} />
+            <TitaniumMaterial color={finish} clayMode={clayMode} />
           </RoundedBox>
           <RoundedBox args={[0.018, 0.14, 0.035]} radius={0.006} smoothness={4} position={[halfW / 2 + 0.006, 0.08, 0]}>
-            <TitaniumMaterial color={finish} />
+            <TitaniumMaterial color={finish} clayMode={clayMode} />
           </RoundedBox>
           {/* Rear camera island */}
           <group position={[-0.26, 0.78, -0.065]}>
@@ -228,8 +216,20 @@ function DuoHalf({
   );
 }
 
-function DuoPhone({ device, screenshot }: { device: DeviceModel; screenshot: string | null }) {
-  const finish = device.finish ?? '#c8ccd1';
+function DuoPhone({
+  device,
+  screenshot,
+  finishHex,
+  clayMode,
+  mediaPlaying,
+}: {
+  device: DeviceModel;
+  screenshot: string | null;
+  finishHex?: string;
+  clayMode?: boolean;
+  mediaPlaying?: boolean;
+}) {
+  const finish = finishHex ?? device.finish ?? '#c8ccd1';
   const halfW = 1.18;
   const height = 2.52;
   const open = 0.95;
@@ -238,12 +238,30 @@ function DuoPhone({ device, screenshot }: { device: DeviceModel; screenshot: str
     <group scale={0.95}>
       <group position={[-0.015, 0, 0]} rotation={[0, open / 2, 0]}>
         <group position={[-halfW / 2, 0, 0]}>
-          <DuoHalf side="left" finish={finish} screenshot={screenshot} halfW={halfW} height={height} screenSize={device.screenSize} />
+          <DuoHalf
+            side="left"
+            finish={finish}
+            screenshot={screenshot}
+            halfW={halfW}
+            height={height}
+            screenSize={device.screenSize}
+            clayMode={clayMode}
+            mediaPlaying={mediaPlaying}
+          />
         </group>
       </group>
       <group position={[0.015, 0, 0]} rotation={[0, -open / 2, 0]}>
         <group position={[halfW / 2, 0, 0]}>
-          <DuoHalf side="right" finish={finish} screenshot={screenshot} halfW={halfW} height={height} screenSize={device.screenSize} />
+          <DuoHalf
+            side="right"
+            finish={finish}
+            screenshot={screenshot}
+            halfW={halfW}
+            height={height}
+            screenSize={device.screenSize}
+            clayMode={clayMode}
+            mediaPlaying={mediaPlaying}
+          />
         </group>
       </group>
 
@@ -265,9 +283,15 @@ function DuoPhone({ device, screenshot }: { device: DeviceModel; screenshot: str
 export default function ProceduralDevice({
   device,
   screenshot,
+  finishHex,
+  clayMode,
+  mediaPlaying,
 }: {
   device: DeviceModel;
   screenshot: string | null;
+  finishHex?: string;
+  clayMode?: boolean;
+  mediaPlaying?: boolean;
 }) {
   const group = useRef<THREE.Group>(null);
 
@@ -286,7 +310,13 @@ export default function ProceduralDevice({
 
   return (
     <group ref={group}>
-      <DuoPhone device={device} screenshot={screenshot} />
+      <DuoPhone
+        device={device}
+        screenshot={screenshot}
+        finishHex={finishHex}
+        clayMode={clayMode}
+        mediaPlaying={mediaPlaying}
+      />
     </group>
   );
 }

@@ -79,21 +79,38 @@ export default function CustomDevicePanel({
     onNotify(`Removed “${label}”`);
   };
 
+  const showBringYourOwn = !busy && customDevices.length === 0;
+
   return (
     <div className="custom-device-panel">
-      <div className="field-caption">YOUR MODELS</div>
-      <button
-        type="button"
-        className="button full-outline compact"
-        disabled={disabled || busy}
-        onClick={() => fileRef.current?.click()}
-      >
-        <Upload size={14} />
-        {busy ? 'Importing…' : 'Import GLB / GLTF'}
-      </button>
-      <p className="helper-text tight-helper">
-        Bring your own phone (or device) mesh. Models stay on this computer. Prefer a material named Screen, Display, or OLED for the screenshot surface.
-      </p>
+      <div className="field-caption">Your models</div>
+      {(showBringYourOwn || busy) && (
+        <button
+          type="button"
+          className="button full-outline compact"
+          disabled={disabled || busy}
+          onClick={() => fileRef.current?.click()}
+        >
+          <Upload size={14} />
+          {busy ? 'Importing…' : 'Import GLB / GLTF'}
+        </button>
+      )}
+      {showBringYourOwn && (
+        <p className="helper-text tight-helper">
+          Bring your own phone (or device) mesh. Models stay on this computer. Prefer a material named Screen, Display, or OLED for the screenshot surface.
+        </p>
+      )}
+      {!showBringYourOwn && !busy && (
+        <button
+          type="button"
+          className="button full-outline compact"
+          disabled={disabled}
+          onClick={() => fileRef.current?.click()}
+        >
+          <Upload size={14} />
+          Import another model
+        </button>
+      )}
       <input
         ref={fileRef}
         type="file"
@@ -102,7 +119,7 @@ export default function CustomDevicePanel({
         onChange={(e) => { void onFile(e); }}
       />
 
-      {customDevices.length > 0 && (
+      {customDevices.length > 0 && !busy && (
         <div className="custom-device-count">{customDevices.length} custom model{customDevices.length === 1 ? '' : 's'} saved</div>
       )}
 

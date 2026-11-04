@@ -8,11 +8,13 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { getDevice, type DeviceUv } from '../lib/devices';
 import { applyProgressiveEdgeBlur } from '../lib/edgeBlur';
+import { useScreenEmissiveMap } from '../lib/useScreenTexture';
 import ProceduralDevice from './ProceduralDevice';
 import RotationBall, { type GizmoMode } from './RotationBall';
 import SceneProps from './SceneProps';
 import {
-  type BackgroundPreset, type CameraView, type DeviceInstance, type GradientColors,
+  DEVICE_COLORS,
+  type BackgroundPreset, type CameraView, type DeviceColor, type DeviceInstance, type GradientColors,
   type MockupProject, type Vec3,
 } from '../types';
 
@@ -37,10 +39,60 @@ interface Props {
   project: MockupProject;
   captureRef: MutableRefObject<CaptureApi | null>;
   gizmoMode?: GizmoMode;
+  /** Preview playback — keeps screen videos moving with the timeline */
+  mediaPlaying?: boolean;
+  /** Evaluated camera position when camera tracks are active */
+  cameraPosition?: Vec3 | null;
   onSelectDevice?: (payload: DeviceSelectPayload) => void;
   onClearSelection?: () => void;
-  onRotateDevice?: (id: string, rotation: Vec3) => void;
-  onMoveDevice?: (id: string, position: Vec3) => void;
+  onRotateDevice?: (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
+  onMoveDevice?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
+  onGizmoDraggingChange?: (dragging: boolean) => void;
+}
+
+function applyDeviceFinish(
+  root: THREE.Object3D,
+  screenMatName: string,
+  deviceColor: DeviceColor,
+  clayMode: boolean,
+) {
+  const finish = DEVICE_COLORS.find((c) => c.id === deviceColor) ?? DEVICE_COLORS[0];
+  const clay = clayMode || deviceColor === 'clay';
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      if (!mat) continue;
+      const name = (mat.name || '').toLowerCase();
+      if (mat.name === screenMatName || name.includes('screen') || name.includes('display')) continue;
+      const standard = mat as THREE.MeshStandardMaterial;
+      if (!('color' in standard) || !standard.color) continue;
+      // Skip pure glass / lens materials
+      if (name.includes('glass') || name.includes('lens') || name.includes('camera_glass')) {
+        if (clay) {
+          standard.metalness = 0;
+          standard.roughness = 0.85;
+          standard.envMapIntensity = 0.15;
+          standard.transparent = false;
+          standard.opacity = 1;
+        }
+        continue;
+      }
+      standard.color = new THREE.Color(finish.hex);
+      if (clay) {
+        standard.metalness = 0;
+        standard.roughness = 0.92;
+        standard.envMapIntensity = 0.08;
+        if ('clearcoat' in standard) (standard as THREE.MeshPhysicalMaterial).clearcoat = 0;
+      } else {
+        standard.metalness = Math.max(0.55, standard.metalness ?? 0.7);
+        standard.roughness = Math.min(0.45, standard.roughness ?? 0.35);
+        standard.envMapIntensity = Math.max(0.6, standard.envMapIntensity ?? 1);
+      }
+      standard.needsUpdate = true;
+    }
+  });
 }
 
 function applyUvTransform(tex: THREE.Texture, uv: DeviceUv, original?: THREE.Texture | null) {
@@ -313,11 +365,17 @@ function GltfDeviceContent({
   deviceId,
   screenshot,
   glassReflection,
+  deviceColor,
+  clayMode,
+  mediaPlaying,
 }: {
   url: string;
   deviceId: string;
   screenshot: string | null;
   glassReflection: number;
+  deviceColor: DeviceColor;
+  clayMode: boolean;
+  mediaPlaying?: boolean;
 }) {
   const device = getDevice(deviceId);
   const { scene, animations } = useGLTF(url);
@@ -387,7 +445,8 @@ function GltfDeviceContent({
     screenMaterial.blending = THREE.NormalBlending;
     screenMaterial.needsUpdate = true;
     setScreen({ material: screenMaterial, originalEmissiveMap });
-  }, [root, device]);
+    applyDeviceFinish(root, device.screenMat, deviceColor, clayMode);
+  }, [root, device, deviceColor, clayMode]);
 
   const envMap = useContext(SceneEnvMapContext);
   useEffect(() => {
@@ -395,7 +454,7 @@ function GltfDeviceContent({
       applyGlassReflection(
         root,
         device.screenMat,
-        glassReflection,
+        clayMode ? Math.min(glassReflection, 0.12) : glassReflection,
         device.glassMats,
         device.tweaks,
         envMap,
@@ -404,79 +463,22 @@ function GltfDeviceContent({
     } catch (err) {
       console.warn('[glass reflection]', err);
     }
-  }, [root, device, glassReflection, envMap, screen]);
+  }, [root, device, glassReflection, envMap, screen, clayMode]);
 
-  useEffect(() => {
-    if (!screen) return;
-    const { material, originalEmissiveMap } = screen;
-    let disposed: THREE.Texture | null = null;
-    let cancelled = false;
+  const applyUv = useCallback((tex: THREE.Texture, original?: THREE.Texture | null) => {
+    applyUvTransform(tex, device.uv, original);
+  }, [device.uv]);
 
-    const apply = (img: HTMLImageElement | null) => {
-      if (cancelled) return;
-      const W = device.screenSize.width;
-      const H = device.screenSize.height;
-      const canvas = document.createElement('canvas');
-      canvas.width = W;
-      canvas.height = H;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      const inset = device.screenInset;
-      const border = inset?.border ?? 0;
-      if (border) {
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, W, H);
-        ctx.save();
-        const radius = inset?.radius ?? 0;
-        ctx.beginPath();
-        if (typeof (ctx as CanvasRenderingContext2D & { roundRect?: Function }).roundRect === 'function') {
-          (ctx as CanvasRenderingContext2D & { roundRect: Function }).roundRect(
-            border, border, W - 2 * border, H - 2 * border, radius,
-          );
-        } else {
-          ctx.rect(border, border, W - 2 * border, H - 2 * border);
-        }
-        ctx.clip();
-      } else {
-        ctx.fillStyle = '#0a0c10';
-        ctx.fillRect(0, 0, W, H);
-      }
-
-      if (img) {
-        const iw = W - 2 * border;
-        const ih = H - 2 * border;
-        const scale = Math.max(iw / img.width, ih / img.height);
-        const dw = img.width * scale;
-        const dh = img.height * scale;
-        ctx.drawImage(img, border + (iw - dw) / 2, border + (ih - dh) / 2, dw, dh);
-      }
-      if (border) ctx.restore();
-
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = 8;
-      applyUvTransform(tex, device.uv, originalEmissiveMap);
-      disposed?.dispose();
-      disposed = tex;
-      material.emissiveMap = tex;
-      material.needsUpdate = true;
-    };
-
-    if (!screenshot) {
-      material.emissiveMap = originalEmissiveMap;
-      material.needsUpdate = true;
-      return () => { cancelled = true; disposed?.dispose(); };
-    }
-
-    const image = new Image();
-    image.onload = () => apply(image);
-    image.src = screenshot;
-    return () => {
-      cancelled = true;
-      disposed?.dispose();
-    };
-  }, [screenshot, device, screen]);
+  useScreenEmissiveMap({
+    material: screen?.material ?? null,
+    originalEmissiveMap: screen?.originalEmissiveMap ?? null,
+    screenshot,
+    width: device.screenSize.width,
+    height: device.screenSize.height,
+    inset: device.screenInset,
+    applyUv,
+    playing: mediaPlaying,
+  });
 
   return <primitive object={root} />;
 }
@@ -488,6 +490,9 @@ function DeviceModelView({
   onSelect,
   onGizmoObject,
   gizmoDraggingRef,
+  deviceColor,
+  clayMode,
+  mediaPlaying,
 }: {
   instance: DeviceInstance;
   screenshot: string | null;
@@ -495,6 +500,9 @@ function DeviceModelView({
   onSelect?: (payload: DeviceSelectPayload) => void;
   onGizmoObject?: (object: THREE.Object3D | null) => void;
   gizmoDraggingRef: MutableRefObject<boolean>;
+  deviceColor: DeviceColor;
+  clayMode: boolean;
+  mediaPlaying?: boolean;
 }) {
   const device = getDevice(instance.deviceId);
   const groupRef = useRef<THREE.Group>(null);
@@ -547,7 +555,13 @@ function DeviceModelView({
       onClick={onClick}
     >
       {device.kind === 'procedural' ? (
-        <ProceduralDevice device={device} screenshot={screenshot} />
+        <ProceduralDevice
+          device={device}
+          screenshot={screenshot}
+          finishHex={(DEVICE_COLORS.find((c) => c.id === deviceColor) ?? DEVICE_COLORS[0]).hex}
+          clayMode={clayMode}
+          mediaPlaying={mediaPlaying}
+        />
       ) : device.url ? (
         <GltfDeviceContent
           key={`${device.url}|${device.screenMat}|${device.rot.join(',')}|${device.uv.mirrorX ? 1 : 0}|${device.screenSize.width}x${device.screenSize.height}`}
@@ -555,6 +569,9 @@ function DeviceModelView({
           deviceId={device.id}
           screenshot={screenshot}
           glassReflection={instance.glassReflection ?? 0.55}
+          deviceColor={deviceColor}
+          clayMode={clayMode}
+          mediaPlaying={mediaPlaying}
         />
       ) : null}
     </group>
@@ -606,20 +623,24 @@ function Background({
   preset: BackgroundPreset;
   colors?: GradientColors | null;
 }) {
-  const { scene } = useThree();
+  const { scene, gl } = useThree();
   const colorKey = colors ? `${colors.center}-${colors.mid}-${colors.edge}` : '';
   useEffect(() => {
     if (preset === 'transparent') {
       scene.background = null;
-      return;
+      gl.setClearColor('#16191f', 0);
+      return () => {
+        gl.setClearColor('#16191f', 1);
+      };
     }
+    gl.setClearColor('#16191f', 1);
     const texture = backgroundTexture(preset, colors);
     scene.background = texture;
     return () => {
       if (scene.background === texture) scene.background = null;
       texture.dispose();
     };
-  }, [scene, preset, colorKey, colors]);
+  }, [scene, gl, preset, colorKey, colors]);
   return null;
 }
 
@@ -711,12 +732,28 @@ function isTypingTarget(target: EventTarget | null) {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
 }
 
-function CameraRig({ view, split }: { view: CameraView; split: boolean }) {
+function CameraRig({
+  view,
+  split,
+  animatedPosition,
+}: {
+  view: CameraView;
+  split: boolean;
+  animatedPosition?: Vec3 | null;
+}) {
   const { camera, gl } = useThree();
   const controls = useRef<any>(null);
   const [spacePan, setSpacePan] = useState(false);
 
   useEffect(() => {
+    if (animatedPosition) {
+      camera.position.set(animatedPosition.x, animatedPosition.y, animatedPosition.z);
+      camera.lookAt(0, 0, 0);
+      camera.updateProjectionMatrix();
+      controls.current?.target.set(0, 0, 0);
+      controls.current?.update();
+      return;
+    }
     const z = split ? 7.4 : 5.7;
     const positions: Record<CameraView, [number, number, number]> = {
       front: [0, 0, z],
@@ -729,7 +766,7 @@ function CameraRig({ view, split }: { view: CameraView; split: boolean }) {
     camera.updateProjectionMatrix();
     controls.current?.target.set(0, 0, 0);
     controls.current?.update();
-  }, [view, camera, split]);
+  }, [view, camera, split, animatedPosition?.x, animatedPosition?.y, animatedPosition?.z]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -817,14 +854,17 @@ function hideEditorHelpers(scene: THREE.Scene) {
 
 function CaptureBridge({
   captureRef,
-  edgeBlurEnabled,
+  edgeBlurTop,
+  edgeBlurBottom,
   edgeBlurAmount,
 }: {
   captureRef: MutableRefObject<CaptureApi | null>;
-  edgeBlurEnabled: boolean;
+  edgeBlurTop: boolean;
+  edgeBlurBottom: boolean;
   edgeBlurAmount: number;
 }) {
   const { gl, scene, camera } = useThree();
+  const edgeBlurActive = (edgeBlurTop || edgeBlurBottom) && edgeBlurAmount > 0;
   useEffect(() => {
     const blitWithBlur = (width: number, height: number) => {
       const out = document.createElement('canvas');
@@ -833,8 +873,11 @@ function CaptureBridge({
       const c2d = out.getContext('2d', { alpha: true });
       if (!c2d) throw new Error('Could not create export canvas');
       c2d.drawImage(gl.domElement, 0, 0, width, height);
-      if (edgeBlurEnabled && edgeBlurAmount > 0) {
-        applyProgressiveEdgeBlur(c2d, width, height, edgeBlurAmount);
+      if (edgeBlurActive) {
+        applyProgressiveEdgeBlur(c2d, width, height, edgeBlurAmount, {
+          top: edgeBlurTop,
+          bottom: edgeBlurBottom,
+        });
       }
       return out;
     };
@@ -867,7 +910,7 @@ function CaptureBridge({
 
     captureRef.current = {
       toPng: async (width, height) => withSizedRender(width, height, () => {
-        if (!edgeBlurEnabled || edgeBlurAmount <= 0) {
+        if (!edgeBlurActive) {
           return gl.domElement.toDataURL('image/png');
         }
         return blitWithBlur(width, height).toDataURL('image/png');
@@ -876,7 +919,7 @@ function CaptureBridge({
         width,
         height,
         () => {
-          const needsBlit = mime === 'image/webp' || (edgeBlurEnabled && edgeBlurAmount > 0);
+          const needsBlit = mime === 'image/webp' || edgeBlurActive;
           if (!needsBlit) {
             return gl.domElement.toDataURL('image/png');
           }
@@ -896,14 +939,17 @@ function CaptureBridge({
         withSizedRender(width, height, () => {
           dest.clearRect(0, 0, width, height);
           dest.drawImage(gl.domElement, 0, 0, width, height);
-          if (edgeBlurEnabled && edgeBlurAmount > 0) {
-            applyProgressiveEdgeBlur(dest, width, height, edgeBlurAmount);
+          if (edgeBlurActive) {
+            applyProgressiveEdgeBlur(dest, width, height, edgeBlurAmount, {
+              top: edgeBlurTop,
+              bottom: edgeBlurBottom,
+            });
           }
         });
       },
     };
     return () => { captureRef.current = null; };
-  }, [captureRef, camera, gl, scene, edgeBlurEnabled, edgeBlurAmount]);
+  }, [captureRef, camera, gl, scene, edgeBlurActive, edgeBlurTop, edgeBlurBottom, edgeBlurAmount]);
   return null;
 }
 
@@ -919,15 +965,19 @@ function LoadingFallback() {
 function SceneDevices({
   project,
   gizmoMode,
+  mediaPlaying,
   onSelectDevice,
   onRotateDevice,
   onMoveDevice,
+  onGizmoDraggingChange,
 }: {
   project: MockupProject;
   gizmoMode: GizmoMode;
+  mediaPlaying?: boolean;
   onSelectDevice?: (payload: DeviceSelectPayload) => void;
-  onRotateDevice?: (id: string, rotation: Vec3) => void;
-  onMoveDevice?: (id: string, position: Vec3) => void;
+  onRotateDevice?: (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
+  onMoveDevice?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
+  onGizmoDraggingChange?: (dragging: boolean) => void;
 }) {
   const [gizmoObject, setGizmoObject] = useState<THREE.Object3D | null>(null);
   const gizmoDraggingRef = useRef(false);
@@ -958,6 +1008,9 @@ function SceneDevices({
           onSelect={onSelectDevice}
           gizmoDraggingRef={gizmoDraggingRef}
           onGizmoObject={(object) => bindGizmoObject(instance.id, object)}
+          deviceColor={project.deviceColor}
+          clayMode={project.clayMode || project.deviceColor === 'clay'}
+          mediaPlaying={mediaPlaying}
         />
       ))}
       <RotationBall
@@ -965,14 +1018,18 @@ function SceneDevices({
         object={gizmoObject}
         active={Boolean(selectedId && gizmoObject)}
         mode={gizmoMode}
-        onDraggingChange={(dragging) => { gizmoDraggingRef.current = dragging; }}
+        onDraggingChange={(dragging) => {
+          gizmoDraggingRef.current = dragging;
+          onGizmoDraggingChange?.(dragging);
+        }}
         onRotate={(rotation) => {
           if (!selectedId) return;
-          onRotateDevice?.(selectedId, rotation);
+          // Commit-only: RotationBall only fires rotate on pointer-up.
+          onRotateDevice?.(selectedId, rotation, { recordKeys: true });
         }}
-        onMove={(position) => {
+        onMove={(position, opts) => {
           if (!selectedId) return;
-          onMoveDevice?.(selectedId, position);
+          onMoveDevice?.(selectedId, position, opts);
         }}
       />
     </>
@@ -980,7 +1037,16 @@ function SceneDevices({
 }
 
 export default function DeviceCanvas({
-  project, captureRef, gizmoMode = 'rotate', onSelectDevice, onClearSelection, onRotateDevice, onMoveDevice,
+  project,
+  captureRef,
+  gizmoMode = 'rotate',
+  mediaPlaying = false,
+  cameraPosition = null,
+  onSelectDevice,
+  onClearSelection,
+  onRotateDevice,
+  onMoveDevice,
+  onGizmoDraggingChange,
 }: Props) {
   const hasStudioBackdrop = Boolean(project.sceneProps?.some((p) => p.kind === 'studio_backdrop'));
   const floorY = hasStudioBackdrop ? -1.55 : -1.63;
@@ -991,7 +1057,10 @@ export default function DeviceCanvas({
       shadows
       gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' }}
       camera={{ position: [0, 0, 5.7], fov: 38, near: 0.1, far: 100 }}
-      style={{ width: '100%', height: '100%' }}
+      style={{ width: '100%', height: '100%', background: '#16191f', display: 'block' }}
+      onCreated={({ gl }) => {
+        gl.setClearColor('#16191f', 1);
+      }}
       onPointerMissed={() => onClearSelection?.()}
     >
       <Background
@@ -1039,9 +1108,11 @@ export default function DeviceCanvas({
           <SceneDevices
             project={project}
             gizmoMode={gizmoMode}
+            mediaPlaying={mediaPlaying}
             onSelectDevice={onSelectDevice}
             onRotateDevice={onRotateDevice}
             onMoveDevice={onMoveDevice}
+            onGizmoDraggingChange={onGizmoDraggingChange}
           />
         </Suspense>
       </SceneEnvironment>
@@ -1055,10 +1126,15 @@ export default function DeviceCanvas({
           color={hasStudioBackdrop ? '#1a1a1a' : '#000000'}
         />
       )}
-      <CameraRig view={project.cameraView} split={project.compositionMode === 'split'} />
+      <CameraRig
+        view={project.cameraView}
+        split={project.compositionMode === 'split'}
+        animatedPosition={cameraPosition}
+      />
       <CaptureBridge
         captureRef={captureRef}
-        edgeBlurEnabled={project.edgeBlurEnabled ?? false}
+        edgeBlurTop={project.edgeBlurTop ?? false}
+        edgeBlurBottom={project.edgeBlurBottom ?? false}
         edgeBlurAmount={project.edgeBlurAmount ?? 24}
       />
     </Canvas>

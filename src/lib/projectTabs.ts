@@ -34,7 +34,7 @@ export function createProjectTab(project?: MockupProject, partial?: Partial<Omit
     project: project ?? createBlankProject(),
     animTime: partial?.animTime ?? 0,
     animPlaying: partial?.animPlaying ?? false,
-    timelineOpen: partial?.timelineOpen ?? true,
+    timelineOpen: partial?.timelineOpen ?? false,
   };
 }
 

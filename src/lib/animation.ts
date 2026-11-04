@@ -4,11 +4,54 @@ import type {
   AnimProperty,
   AnimTrack,
   AnimationClip,
+  CameraView,
   DeviceInstance,
   EaseBezier,
   Vec3,
 } from '../types';
-import { DEFAULT_CUSTOM_BEZIER, PRESET_BEZIERS } from '../types';
+import { CAMERA_TARGET_ID, DEFAULT_CUSTOM_BEZIER, PRESET_BEZIERS } from '../types';
+
+export function isCameraProperty(property: AnimProperty) {
+  return property === 'camera.x' || property === 'camera.y' || property === 'camera.z';
+}
+
+export function defaultCameraPosition(view: CameraView, split: boolean): Vec3 {
+  const z = split ? 7.4 : 5.7;
+  const positions: Record<CameraView, Vec3> = {
+    front: { x: 0, y: 0, z },
+    left: { x: split ? -3.4 : -2.7, y: 0.1, z: split ? 6.6 : 5.1 },
+    right: { x: split ? 3.4 : 2.7, y: 0.1, z: split ? 6.6 : 5.1 },
+    top: { x: 0, y: split ? 2.6 : 2.2, z: split ? 6.8 : 5.4 },
+  };
+  return { ...positions[view] };
+}
+
+/** Evaluate camera tracks; falls back to the view preset when no keys exist. */
+export function evaluateCamera(
+  clip: AnimationClip,
+  time: number,
+  view: CameraView,
+  split: boolean,
+): Vec3 {
+  const base = defaultCameraPosition(view, split);
+  const t = clip.loop
+    ? ((time % clip.duration) + clip.duration) % clip.duration
+    : Math.min(Math.max(time, 0), clip.duration);
+
+  let next = { ...base };
+  let touched = false;
+  for (const track of clip.tracks) {
+    if (track.targetId !== CAMERA_TARGET_ID && !isCameraProperty(track.property)) continue;
+    if (!isCameraProperty(track.property)) continue;
+    const value = sampleTrack(track, t);
+    if (value == null) continue;
+    touched = true;
+    if (track.property === 'camera.x') next.x = value;
+    if (track.property === 'camera.y') next.y = value;
+    if (track.property === 'camera.z') next.z = value;
+  }
+  return touched ? next : base;
+}
 
 export function createKeyframe(time: number, value: number, ease: AnimEase = 'easeInOut'): AnimKeyframe {
   return { id: `kf-${Math.random().toString(36).slice(2, 9)}`, time, value, ease };
@@ -132,11 +175,16 @@ export function readProperty(device: DeviceInstance, property: AnimProperty): nu
     case 'position.y': return device.position.y;
     case 'position.z': return device.position.z;
     case 'scale': return device.scale;
+    case 'camera.x':
+    case 'camera.y':
+    case 'camera.z':
+      return 0;
     default: return 0;
   }
 }
 
 export function writeProperty(device: DeviceInstance, property: AnimProperty, value: number): DeviceInstance {
+  if (isCameraProperty(property)) return device;
   const next = {
     ...device,
     rotation: { ...device.rotation },
@@ -155,7 +203,7 @@ export function writeProperty(device: DeviceInstance, property: AnimProperty, va
   return next;
 }
 
-/** Evaluate all tracks onto device instances at a given time */
+/** Evaluate all device tracks onto device instances at a given time */
 export function evaluateAnimation(
   devices: DeviceInstance[],
   clip: AnimationClip,
@@ -169,6 +217,7 @@ export function evaluateAnimation(
     let next = device;
     for (const track of clip.tracks) {
       if (track.targetId !== device.id) continue;
+      if (isCameraProperty(track.property)) continue;
       const value = sampleTrack(track, t);
       if (value == null) continue;
       next = writeProperty(next, track.property, value);
@@ -177,6 +226,10 @@ export function evaluateAnimation(
       ? device
       : { ...next, rotation: { ...next.rotation } as Vec3, position: { ...next.position } as Vec3 };
   });
+}
+
+export function hasCameraAnimation(clip: AnimationClip) {
+  return clip.tracks.some((t) => isCameraProperty(t.property) && t.keyframes.length > 0);
 }
 
 export function upsertKeyframe(track: AnimTrack, time: number, value: number, snap = 0.05): AnimTrack {

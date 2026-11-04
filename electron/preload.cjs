@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
   saveMedia: (dataBase64, proposedName, extension, mimeType) => ipcRenderer.invoke('media:save', {
     dataBase64, proposedName, extension, mimeType,
   }),
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
 });
