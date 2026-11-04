@@ -26,6 +26,12 @@ export type { LicenseTier, PlanId };
 
 const STORAGE_KEY = 'mockup-studio.license.v1';
 
+/**
+ * Testing bypass — unlocks Pro Max entitlements without a key.
+ * Flip back to `false` before shipping.
+ */
+export const LICENSING_DISABLED = true;
+
 /** How the current entitlement was unlocked. `mas` reserved for a future App Store build. */
 export type LicenseSource = 'none' | 'key' | 'mas';
 
@@ -42,6 +48,14 @@ export interface LicenseState {
 
 const DEFAULT_LICENSE: LicenseState = {
   tier: 'free',
+  key: null,
+  updatesUntil: null,
+  activatedAt: null,
+  source: 'none',
+};
+
+const UNLOCKED_FOR_TESTING: LicenseState = {
+  tier: 'pro_max',
   key: null,
   updatesUntil: null,
   activatedAt: null,
@@ -155,6 +169,8 @@ export async function parseLicenseKey(
 }
 
 export function loadLicense(): LicenseState {
+  if (LICENSING_DISABLED) return { ...UNLOCKED_FOR_TESTING };
+
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_LICENSE };
@@ -232,32 +248,34 @@ export function clearLicense(): LicenseState {
 }
 
 export function entitlementsFor(tier: LicenseTier) {
-  return ENTITLEMENTS[tier];
+  return ENTITLEMENTS[LICENSING_DISABLED ? 'pro_max' : tier];
 }
 
 export function isDeviceUnlocked(tier: LicenseTier, deviceId: string): boolean {
-  if (ENTITLEMENTS[tier].allDevices) return true;
+  if (LICENSING_DISABLED || ENTITLEMENTS[tier].allDevices) return true;
   if (deviceId.startsWith('custom-')) return true;
   return (FREE_DEVICE_IDS as readonly string[]).includes(deviceId);
 }
 
 export function maxDevicesFor(tier: LicenseTier): number {
-  return ENTITLEMENTS[tier].maxDevicesInScene;
+  return ENTITLEMENTS[LICENSING_DISABLED ? 'pro_max' : tier].maxDevicesInScene;
 }
 
 export function canExportVideo(tier: LicenseTier): boolean {
-  return ENTITLEMENTS[tier].videoExport;
+  return LICENSING_DISABLED || ENTITLEMENTS[tier].videoExport;
 }
 
 export function maxStillLongEdge(tier: LicenseTier): number {
-  return ENTITLEMENTS[tier].maxStillLongEdge;
+  return ENTITLEMENTS[LICENSING_DISABLED ? 'pro_max' : tier].maxStillLongEdge;
 }
 
 export function isResolutionAllowed(tier: LicenseTier, longEdge: number): boolean {
+  if (LICENSING_DISABLED) return true;
   return longEdge <= ENTITLEMENTS[tier].maxStillLongEdge;
 }
 
 export function planLabel(tier: LicenseTier): string {
+  if (LICENSING_DISABLED) return 'Pro Max (test)';
   if (tier === 'pro_max') return 'Pro Max';
   if (tier === 'pro') return 'Pro';
   return 'Free';

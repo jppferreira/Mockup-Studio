@@ -15,6 +15,8 @@ interface Props {
   onClose: () => void;
   onApply: (dataUrl: string, layerName: string) => void;
   onNotify: (message: string) => void;
+  /** Prefill the Figma URL field when opening from Assets. */
+  initialUrl?: string;
 }
 
 type ExplodePlate = {
@@ -183,7 +185,7 @@ function ExplodeStage({
   );
 }
 
-export default function FigmaExploreModal({ open, onClose, onApply, onNotify }: Props) {
+export default function FigmaExploreModal({ open, onClose, onApply, onNotify, initialUrl }: Props) {
   const [urlDraft, setUrlDraft] = useState('');
   const [tokenDraft, setTokenDraft] = useState(() => loadFigmaToken());
   const [loading, setLoading] = useState(false);
@@ -204,7 +206,8 @@ export default function FigmaExploreModal({ open, onClose, onApply, onNotify }: 
     if (!open) return;
     setTokenDraft(loadFigmaToken());
     setError(null);
-  }, [open]);
+    if (initialUrl?.trim()) setUrlDraft(initialUrl.trim());
+  }, [open, initialUrl]);
 
   const selected = useMemo(
     () => (file && selectedId ? findNode(file.layers, selectedId) : null),

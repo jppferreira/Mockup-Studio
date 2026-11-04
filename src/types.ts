@@ -1,7 +1,37 @@
-import type { DeviceId } from './lib/devices';
+import { getDevice, type DeviceId } from './lib/devices';
 import type { SceneOverlay } from './lib/overlays';
 
 export type BuiltinBackgroundId = 'midnight' | 'studio' | 'mint' | 'sunset' | 'transparent';
+/** Stack entry kind within one composition (not per-scene). */
+export type LayerKind = 'device' | 'prop' | 'overlay';
+
+/** Ordered stack for one composition. Index 0 = back, last = front. */
+export interface CompositionLayer {
+  id: string;
+  kind: LayerKind;
+  /** Points at devices[].id / sceneProps[].id / overlays[].id */
+  refId: string;
+  visible: boolean;
+}
+
+export const MAX_COMPOSITION_LAYERS = 48;
+
+export function layerId(kind: LayerKind, refId: string) {
+  return `layer-${kind}-${refId}`;
+}
+
+export function createCompositionLayer(
+  kind: LayerKind,
+  refId: string,
+  partial?: Partial<Pick<CompositionLayer, 'visible' | 'id'>>,
+): CompositionLayer {
+  return {
+    id: partial?.id ?? layerId(kind, refId),
+    kind,
+    refId,
+    visible: partial?.visible !== false,
+  };
+}
 /** Built-in id, `'custom'`, or a saved custom preset id (`custom-…`). */
 export type BackgroundPreset = BuiltinBackgroundId | 'custom' | (string & {});
 export type DeviceColor = 'graphite' | 'titanium' | 'silver' | 'rose' | 'clay';
@@ -47,6 +77,64 @@ export interface ScenePreset {
   gradient: GradientColors | null;
 }
 
+/** Max flip-able environment scenes inside one composition / tab */
+export const MAX_COMPOSITION_SCENES = 8;
+
+/**
+ * A switchable look inside one composition — background + gradient.
+ * Devices, screenshot, animation, etc. stay shared on the project.
+ */
+export interface CompositionScene {
+  id: string;
+  name: string;
+  background: BackgroundPreset;
+  gradientColors: GradientColors;
+}
+
+export function createCompositionScene(partial?: Partial<CompositionScene>): CompositionScene {
+  return {
+    id: partial?.id ?? `scene-${Math.random().toString(36).slice(2, 10)}`,
+    name: (partial?.name ?? 'Scene 1').trim().slice(0, 40) || 'Scene 1',
+    background: partial?.background ?? 'midnight',
+    gradientColors: partial?.gradientColors
+      ? { ...partial.gradientColors }
+      : { center: '#363e49', mid: '#1d232b', edge: '#0d1016' },
+  };
+}
+
+type SceneProjectSlice = {
+  scenes?: CompositionScene[];
+  activeSceneId?: string;
+  background: BackgroundPreset;
+  gradientColors: GradientColors;
+};
+
+export function ensureCompositionScenes(project: SceneProjectSlice): CompositionScene[] {
+  if (Array.isArray(project.scenes) && project.scenes.length > 0) {
+    return project.scenes.slice(0, MAX_COMPOSITION_SCENES).map((scene, index) => createCompositionScene({
+      ...scene,
+      name: scene.name || `Scene ${index + 1}`,
+    }));
+  }
+  return [
+    createCompositionScene({
+      id: 'scene-main',
+      name: 'Scene 1',
+      background: project.background,
+      gradientColors: project.gradientColors,
+    }),
+  ];
+}
+
+function nextSceneName(scenes: CompositionScene[]) {
+  const used = new Set(scenes.map((scene) => scene.name.trim().toLowerCase()));
+  for (let i = 1; i < 100; i += 1) {
+    const name = `Scene ${i}`;
+    if (!used.has(name.toLowerCase())) return name;
+  }
+  return `Scene ${Date.now()}`;
+}
+
 export interface Vec3 {
   x: number;
   y: number;
@@ -61,9 +149,20 @@ export interface DeviceInstance {
   position: Vec3;
   /** Screen / camera glass reflection strength (0 = matte, 1 = strong) */
   glassReflection: number;
+  /**
+   * Per-environment screen media (still or video data URL).
+   * In split mode each platform keeps its own shot — never shared unless copied.
+   */
+  screenshot?: string | null;
+  /** Per-environment device finish; falls back to project.deviceColor when absent. */
+  deviceColor?: DeviceColor;
+  /** Per-environment clay finish; falls back to project.clayMode when absent. */
+  clayMode?: boolean;
 }
 
 export type CompositionMode = 'single' | 'split';
+/** Which platform environment is actively edited / exported. */
+export type PublishTarget = 'ios' | 'android';
 
 /** Decorative 3D set pieces for scenic pre-compositions */
 export type ScenePropKind =
@@ -171,16 +270,37 @@ export interface AnimationClip {
 export interface MockupProject {
   version: 1;
   name: string;
-  /** Still image or video data URL shown on device screens */
+  /**
+   * Mirrored from the active publish-target device’s screenshot.
+   * Prefer reading/writing via device.screenshot + publish helpers.
+   */
   screenshot: string | null;
   /** @deprecated mirrored from selected device — kept for older saves */
   deviceId: DeviceId;
-  /** Device finish — `clay` forces a matte abstract look */
+  /** Mirrored from the active env’s finish — `clay` forces a matte abstract look */
   deviceColor: DeviceColor;
-  /** Matte clay finish (also set when deviceColor === 'clay') */
+  /** Mirrored from the active env — also set when deviceColor === 'clay' */
   clayMode: boolean;
+  /**
+   * Active platform environment for Assets / mirror / import / single-platform export.
+   * The opposite panel stays visible in split mode with its own assets.
+   */
+  publishTarget: PublishTarget;
+  /**
+   * When true (default), rotation + scale stay linked across split partners.
+   * Position is always free per device.
+   */
+  linkSplitTransform: boolean;
   /** 2D text / image overlays composited on export and preview */
   overlays: SceneOverlay[];
+  /**
+   * Switchable environment looks for this composition.
+   * Always kept in sync with `background` / `gradientColors` for the active scene.
+   */
+  scenes: CompositionScene[];
+  /** Which scene’s background is live in the canvas */
+  activeSceneId: string;
+  /** Mirrored from the active scene — kept for renderers and older code paths */
   background: BackgroundPreset;
   /** Active gradient colours when background is not transparent. */
   gradientColors: GradientColors;
@@ -217,6 +337,11 @@ export interface MockupProject {
   selectedDeviceId: string;
   /** Optional scenic set pieces (clay shapes, walls, pedestals) */
   sceneProps: SceneProp[];
+  /**
+   * Ordered stack within the active composition (back → front).
+   * Devices, props, and overlays share one list; not per-scene.
+   */
+  layers?: CompositionLayer[];
   animation: AnimationClip;
   /** Optional soundtrack that plays with the animation timeline */
   soundtrackName: string | null;
@@ -242,6 +367,9 @@ export function createDeviceInstance(partial?: Partial<DeviceInstance>): DeviceI
     scale: partial?.scale ?? 1,
     position: partial?.position ?? { x: 0, y: 0, z: 0 },
     glassReflection: partial?.glassReflection ?? 0.55,
+    screenshot: partial?.screenshot !== undefined ? partial.screenshot : null,
+    deviceColor: partial?.deviceColor,
+    clayMode: partial?.clayMode,
   };
 }
 
@@ -283,6 +411,13 @@ export const BUILTIN_GRADIENTS: Record<Exclude<BuiltinBackgroundId, 'transparent
 
 export const DEFAULT_GRADIENT: GradientColors = { ...BUILTIN_GRADIENTS.midnight };
 
+const defaultScene = createCompositionScene({
+  id: 'scene-main',
+  name: 'Scene 1',
+  background: 'midnight',
+  gradientColors: { ...DEFAULT_GRADIENT },
+});
+
 export const DEFAULT_PROJECT: MockupProject = {
   version: 1,
   name: 'Untitled composition',
@@ -290,9 +425,13 @@ export const DEFAULT_PROJECT: MockupProject = {
   deviceId: primary.deviceId,
   deviceColor: 'graphite',
   clayMode: false,
+  publishTarget: 'ios',
+  linkSplitTransform: true,
   overlays: [],
-  background: 'midnight',
-  gradientColors: { ...DEFAULT_GRADIENT },
+  scenes: [defaultScene],
+  activeSceneId: defaultScene.id,
+  background: defaultScene.background,
+  gradientColors: { ...defaultScene.gradientColors },
   reflectionMap: 'match_background',
   reflectionMapImage: null,
   rotation: { ...primary.rotation },
@@ -310,6 +449,7 @@ export const DEFAULT_PROJECT: MockupProject = {
   devices: [primary],
   selectedDeviceId: primary.id,
   sceneProps: [],
+  layers: [createCompositionLayer('device', primary.id)],
   animation: createDefaultAnimation(primary.id),
   soundtrackName: null,
   soundtrackData: null,
@@ -347,22 +487,32 @@ export const ANDROID_DEVICE_ID: DeviceId = 'galaxy_s25_ultra';
 export function buildSplitDevices(base: DeviceInstance): DeviceInstance[] {
   const sharedRotation = { ...base.rotation };
   const sharedScale = Math.min(base.scale, 0.92);
+  const basePlatform = getDevice(base.deviceId).platform;
+  const baseShot = base.screenshot ?? null;
+  const baseColor = base.deviceColor ?? 'graphite';
+  const baseClay = base.clayMode ?? false;
   return [
     createDeviceInstance({
       id: 'device-ios',
       deviceId: IOS_DEVICE_ID,
       rotation: sharedRotation,
       scale: sharedScale,
-      position: { x: -1.35, y: 0, z: 0 },
+      position: { x: 0, y: 0, z: 0 },
       glassReflection: base.glassReflection,
+      screenshot: basePlatform === 'ios' ? baseShot : null,
+      deviceColor: basePlatform === 'ios' ? baseColor : 'graphite',
+      clayMode: basePlatform === 'ios' ? baseClay : false,
     }),
     createDeviceInstance({
       id: 'device-android',
       deviceId: ANDROID_DEVICE_ID,
       rotation: { ...sharedRotation },
       scale: sharedScale,
-      position: { x: 1.35, y: 0, z: 0 },
+      position: { x: 0, y: 0, z: 0 },
       glassReflection: base.glassReflection,
+      screenshot: basePlatform === 'android' ? baseShot : null,
+      deviceColor: basePlatform === 'android' ? baseColor : 'graphite',
+      clayMode: basePlatform === 'android' ? baseClay : false,
     }),
   ];
 }
@@ -372,13 +522,128 @@ export function getSelectedDevice(project: MockupProject): DeviceInstance {
 }
 
 export function syncProjectFromSelected(project: MockupProject, selected: DeviceInstance): MockupProject {
+  const screenshot = selected.screenshot !== undefined ? selected.screenshot : project.screenshot;
+  const deviceColor = selected.deviceColor ?? project.deviceColor;
+  const clayMode = selected.clayMode ?? project.clayMode ?? deviceColor === 'clay';
   return {
     ...project,
     selectedDeviceId: selected.id,
     deviceId: selected.deviceId,
     rotation: { ...selected.rotation },
     scale: selected.scale,
+    screenshot: screenshot ?? null,
+    deviceColor,
+    clayMode,
   };
+}
+
+export function getActiveCompositionScene(project: MockupProject): CompositionScene {
+  const scenes = ensureCompositionScenes(project);
+  return scenes.find((scene) => scene.id === project.activeSceneId) ?? scenes[0];
+}
+
+/** Mirror active scene look onto top-level background fields used by the canvas. */
+export function syncProjectFromActiveScene(project: MockupProject): MockupProject {
+  const scenes = ensureCompositionScenes(project);
+  const active = scenes.find((scene) => scene.id === project.activeSceneId) ?? scenes[0];
+  return {
+    ...project,
+    scenes,
+    activeSceneId: active.id,
+    background: active.background,
+    gradientColors: { ...active.gradientColors },
+  };
+}
+
+/** Patch the active scene and keep top-level background fields in sync. */
+export function patchActiveCompositionScene(
+  project: MockupProject,
+  patch: Partial<Pick<CompositionScene, 'name' | 'background' | 'gradientColors'>>,
+): MockupProject {
+  const scenes = ensureCompositionScenes(project);
+  const activeId = scenes.some((scene) => scene.id === project.activeSceneId)
+    ? project.activeSceneId
+    : scenes[0].id;
+  const nextScenes = scenes.map((scene) => {
+    if (scene.id !== activeId) return scene;
+    return createCompositionScene({
+      ...scene,
+      ...patch,
+      gradientColors: patch.gradientColors ? { ...patch.gradientColors } : scene.gradientColors,
+    });
+  });
+  const active = nextScenes.find((scene) => scene.id === activeId) ?? nextScenes[0];
+  return {
+    ...project,
+    scenes: nextScenes,
+    activeSceneId: active.id,
+    background: active.background,
+    gradientColors: { ...active.gradientColors },
+  };
+}
+
+export function switchCompositionScene(project: MockupProject, sceneId: string): MockupProject {
+  const scenes = ensureCompositionScenes(project);
+  if (!scenes.some((scene) => scene.id === sceneId)) return syncProjectFromActiveScene(project);
+  return syncProjectFromActiveScene({ ...project, scenes, activeSceneId: sceneId });
+}
+
+export function addCompositionScene(project: MockupProject, fromActive = true): MockupProject {
+  const scenes = ensureCompositionScenes(project);
+  if (scenes.length >= MAX_COMPOSITION_SCENES) return syncProjectFromActiveScene(project);
+  const active = scenes.find((scene) => scene.id === project.activeSceneId) ?? scenes[0];
+  const next = createCompositionScene(
+    fromActive
+      ? {
+        name: nextSceneName(scenes),
+        background: active.background,
+        gradientColors: active.gradientColors,
+      }
+      : { name: nextSceneName(scenes) },
+  );
+  return syncProjectFromActiveScene({
+    ...project,
+    scenes: [...scenes, next],
+    activeSceneId: next.id,
+  });
+}
+
+export function duplicateCompositionScene(project: MockupProject, sceneId?: string): MockupProject {
+  const scenes = ensureCompositionScenes(project);
+  if (scenes.length >= MAX_COMPOSITION_SCENES) return syncProjectFromActiveScene(project);
+  const source = scenes.find((scene) => scene.id === (sceneId || project.activeSceneId)) ?? scenes[0];
+  const copy = createCompositionScene({
+    name: `${source.name.replace(/\s+copy$/i, '')} copy`.slice(0, 40),
+    background: source.background,
+    gradientColors: source.gradientColors,
+  });
+  const index = scenes.findIndex((scene) => scene.id === source.id);
+  const nextScenes = [...scenes.slice(0, index + 1), copy, ...scenes.slice(index + 1)];
+  return syncProjectFromActiveScene({
+    ...project,
+    scenes: nextScenes.slice(0, MAX_COMPOSITION_SCENES),
+    activeSceneId: copy.id,
+  });
+}
+
+export function removeCompositionScene(project: MockupProject, sceneId: string): MockupProject {
+  const scenes = ensureCompositionScenes(project);
+  if (scenes.length <= 1) return syncProjectFromActiveScene(project);
+  const index = scenes.findIndex((scene) => scene.id === sceneId);
+  if (index < 0) return syncProjectFromActiveScene(project);
+  const nextScenes = scenes.filter((scene) => scene.id !== sceneId);
+  const fallback = nextScenes[Math.max(0, index - 1)] ?? nextScenes[0];
+  const activeSceneId = project.activeSceneId === sceneId ? fallback.id : project.activeSceneId;
+  return syncProjectFromActiveScene({ ...project, scenes: nextScenes, activeSceneId });
+}
+
+export function renameCompositionScene(project: MockupProject, sceneId: string, name: string): MockupProject {
+  const scenes = ensureCompositionScenes(project);
+  const nextName = name.trim().slice(0, 40) || 'Scene';
+  const nextScenes = scenes.map((scene) => (
+    scene.id === sceneId ? { ...scene, name: nextName } : scene
+  ));
+  return { ...project, scenes: nextScenes };
 }
 
 export const BACKGROUNDS: ScenePreset[] = [

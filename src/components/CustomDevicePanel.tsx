@@ -95,11 +95,6 @@ export default function CustomDevicePanel({
           {busy ? 'Importing…' : 'Import GLB / GLTF'}
         </button>
       )}
-      {showBringYourOwn && (
-        <p className="helper-text tight-helper">
-          Bring your own phone (or device) mesh. Models stay on this computer. Prefer a material named Screen, Display, or OLED for the screenshot surface.
-        </p>
-      )}
       {!showBringYourOwn && !busy && (
         <button
           type="button"

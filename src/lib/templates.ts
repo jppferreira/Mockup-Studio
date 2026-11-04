@@ -1,11 +1,11 @@
 import { placeholderForDevice } from './demo';
 import {
   ANDROID_DEVICE_ID, BUILTIN_GRADIENTS, DEFAULT_GRADIENT, DEFAULT_PROJECT, IOS_DEVICE_ID,
-  createDefaultAnimation, createDeviceInstance, createSceneProp,
+  createCompositionScene, createDefaultAnimation, createDeviceInstance, createSceneProp,
   type BackgroundPreset, type DeviceInstance, type GradientColors, type MockupProject,
   type SceneProp,
 } from '../types';
-import type { DeviceId } from './devices';
+import { getDevice, type DeviceId } from './devices';
 
 export type TemplateCategory = 'devices' | 'scenes';
 
@@ -55,7 +55,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
   {
     id: 'ios-android',
     label: 'iOS + Android',
-    description: 'Side-by-side platform pair',
+    description: 'Dual canvases — iOS and Android side by side',
     badge: '2 devices',
     category: 'devices',
     preview: 'split',
@@ -66,13 +66,13 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
       {
         deviceId: IOS_DEVICE_ID,
         rotation: { x: -6, y: -18, z: 4 },
-        position: { x: -1.35, y: 0, z: 0 },
+        position: { x: 0, y: 0, z: 0 },
         scale: 0.9,
       },
       {
         deviceId: ANDROID_DEVICE_ID,
         rotation: { x: -6, y: -18, z: 4 },
-        position: { x: 1.35, y: 0, z: 0 },
+        position: { x: 0, y: 0, z: 0 },
         scale: 0.9,
       },
     ],
@@ -399,21 +399,21 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
       {
         deviceId: IOS_DEVICE_ID,
         rotation: { x: -8, y: -16, z: 5 },
-        position: { x: -1.25, y: -0.05, z: 0.25 },
+        position: { x: 0, y: -0.05, z: 0.25 },
         scale: 0.85,
       },
       {
         deviceId: ANDROID_DEVICE_ID,
         rotation: { x: -8, y: -16, z: 5 },
-        position: { x: 1.25, y: -0.05, z: 0.25 },
+        position: { x: 0, y: -0.05, z: 0.25 },
         scale: 0.85,
       },
     ],
     sceneProps: [
       { id: 'slab', kind: 'concrete_slab', position: { x: 0, y: -1.58, z: 0.2 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1.1, y: 1, z: 0.75 } },
-      { id: 'sphere-l', kind: 'clay_sphere', position: { x: -2.0, y: -1.15, z: -0.2 }, rotation: { x: 0, y: 0, z: 0 }, scale: 0.65, color: '#e0cfc0' },
-      { id: 'sphere-r', kind: 'clay_sphere', position: { x: 2.05, y: -1.2, z: 0.1 }, rotation: { x: 0, y: 0, z: 0 }, scale: 0.5, color: '#c4b0a0' },
-      { id: 'torus', kind: 'clay_torus', position: { x: 0, y: -1.3, z: -0.55 }, rotation: { x: 20, y: 0, z: 0 }, scale: 0.8, color: '#d0bdb0' },
+      { id: 'sphere-l', kind: 'clay_sphere', position: { x: -1.15, y: -1.15, z: -0.2 }, rotation: { x: 0, y: 0, z: 0 }, scale: 0.55, color: '#e0cfc0' },
+      { id: 'sphere-r', kind: 'clay_sphere', position: { x: 1.15, y: -1.2, z: 0.1 }, rotation: { x: 0, y: 0, z: 0 }, scale: 0.45, color: '#c4b0a0' },
+      { id: 'torus', kind: 'clay_torus', position: { x: 0, y: -1.3, z: -0.55 }, rotation: { x: 20, y: 0, z: 0 }, scale: 0.7, color: '#d0bdb0' },
     ],
   },
   {
@@ -463,13 +463,26 @@ export function projectFromTemplate(
   template: CompositionTemplate,
   options?: { name?: string; screenshot?: string | null },
 ): MockupProject {
-  const devices = template.devices.map((entry, index) => createDeviceInstance({
-    id: index === 0 ? 'device-main' : `device-${index + 1}`,
-    deviceId: entry.deviceId,
-    rotation: entry.rotation ? { ...entry.rotation } : undefined,
-    position: entry.position ? { ...entry.position } : undefined,
-    scale: entry.scale,
-  }));
+  const sharedShot = options?.screenshot === undefined
+    ? null
+    : options.screenshot;
+  const devices = template.devices.map((entry, index) => {
+    const shot = sharedShot !== null
+      ? sharedShot
+      : (template.compositionMode === 'split'
+        ? placeholderForDevice(entry.deviceId)
+        : (index === 0 ? placeholderForDevice(entry.deviceId) : null));
+    return createDeviceInstance({
+      id: index === 0
+        ? (template.compositionMode === 'split' ? 'device-ios' : 'device-main')
+        : (template.compositionMode === 'split' && index === 1 ? 'device-android' : `device-${index + 1}`),
+      deviceId: entry.deviceId,
+      rotation: entry.rotation ? { ...entry.rotation } : undefined,
+      position: entry.position ? { ...entry.position } : undefined,
+      scale: entry.scale,
+      screenshot: shot ?? placeholderForDevice(entry.deviceId),
+    });
+  });
   const primary = devices[0];
   const builtinKey = template.background as keyof typeof BUILTIN_GRADIENTS;
   const gradient = template.gradient
@@ -490,15 +503,26 @@ export function projectFromTemplate(
         : undefined,
   }));
 
+  const scene = createCompositionScene({
+    id: 'scene-main',
+    name: 'Scene 1',
+    background: template.background,
+    gradientColors: gradient,
+  });
+
+  const primaryShot = primary.screenshot ?? placeholderForDevice(primary.deviceId);
+
   return {
     ...DEFAULT_PROJECT,
     name: options?.name ?? template.label,
-    screenshot: options?.screenshot === undefined
-      ? placeholderForDevice(devices[0]?.deviceId)
-      : options.screenshot,
+    screenshot: primaryShot,
     deviceId: primary.deviceId,
-    background: template.background,
-    gradientColors: gradient,
+    publishTarget: getDevice(primary.deviceId).platform,
+    linkSplitTransform: true,
+    scenes: [scene],
+    activeSceneId: scene.id,
+    background: scene.background,
+    gradientColors: { ...scene.gradientColors },
     rotation: { ...primary.rotation },
     scale: primary.scale,
     lightIntensity: template.lightIntensity ?? DEFAULT_PROJECT.lightIntensity,

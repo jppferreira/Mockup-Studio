@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ContactModal } from './ContactModal';
+import { ContactModal, type ContactIntent } from './ContactModal';
 import { DownloadButton } from './DownloadButton';
 import { Logo } from './Logo';
 import { useParallax } from '../hooks/useParallax';
@@ -9,6 +9,11 @@ export function SiteChrome({ children }: { children: ReactNode }) {
   const parallax = useParallax();
   const location = useLocation();
   const [contactOpen, setContactOpen] = useState(false);
+  const [contactIntent, setContactIntent] = useState<ContactIntent>('contact');
+  const openContact = (intent: ContactIntent = 'contact') => {
+    setContactIntent(intent);
+    setContactOpen(true);
+  };
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -42,7 +47,10 @@ export function SiteChrome({ children }: { children: ReactNode }) {
             <Link to="/terms" className={location.pathname === '/terms' ? 'is-active' : undefined}>
               Terms
             </Link>
-            <button type="button" className="nav-text-btn" onClick={() => setContactOpen(true)}>
+            <button type="button" className="nav-text-btn" onClick={() => openContact('feedback')}>
+              Feedback
+            </button>
+            <button type="button" className="nav-text-btn" onClick={() => openContact('contact')}>
               Contact
             </button>
           </nav>
@@ -64,14 +72,21 @@ export function SiteChrome({ children }: { children: ReactNode }) {
           <Link to="/terms">Terms</Link>
           <Link to="/credits">Credits</Link>
           <Link to="/recover">Recover key</Link>
-          <button type="button" className="footer-text-btn" onClick={() => setContactOpen(true)}>
+          <button type="button" className="footer-text-btn" onClick={() => openContact('feedback')}>
+            Feedback
+          </button>
+          <button type="button" className="footer-text-btn" onClick={() => openContact('contact')}>
             Contact
           </button>
         </nav>
         <p>Local-first 3D device mockups for macOS.</p>
       </footer>
 
-      <ContactModal open={contactOpen} onClose={() => setContactOpen(false)} />
+      <ContactModal
+        open={contactOpen}
+        intent={contactIntent}
+        onClose={() => setContactOpen(false)}
+      />
     </div>
   );
 }

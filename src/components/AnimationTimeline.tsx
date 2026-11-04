@@ -1111,7 +1111,7 @@ export default function AnimationTimeline({
                   <span className="timeline-prompt-status">{promptStatus}</span>
                 ) : (
                   <div className="timeline-prompt-chips" role="list">
-                    {PROMPT_SUGGESTIONS.slice(0, 5).map((chip) => (
+                    {PROMPT_SUGGESTIONS.slice(0, 6).map((chip) => (
                       <button
                         key={chip}
                         type="button"

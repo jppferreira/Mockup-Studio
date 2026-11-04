@@ -19,11 +19,21 @@ export function createProjectTabId() {
 }
 
 export function createBlankProject(name?: string): MockupProject {
+  const shot = placeholderForDevice(DEFAULT_PROJECT.deviceId);
+  const primary = {
+    ...DEFAULT_PROJECT.devices[0],
+    screenshot: shot,
+    deviceColor: DEFAULT_PROJECT.deviceColor,
+    clayMode: DEFAULT_PROJECT.clayMode,
+  };
   return {
     ...DEFAULT_PROJECT,
     name: name ?? 'Untitled composition',
     gradientColors: { ...DEFAULT_GRADIENT },
-    screenshot: placeholderForDevice(DEFAULT_PROJECT.deviceId),
+    screenshot: shot,
+    publishTarget: 'ios',
+    linkSplitTransform: true,
+    devices: [primary],
     animation: createDefaultAnimation(),
   };
 }

@@ -43,8 +43,24 @@ interface Props {
   mediaPlaying?: boolean;
   /** Live USB iPhone/iPad mirror stream painted onto device screens */
   liveStream?: MediaStream | null;
+  /** Only this device receives the live mirror stream (active publish env). */
+  liveStreamDeviceId?: string | null;
   /** Evaluated camera position when camera tracks are active */
   cameraPosition?: Vec3 | null;
+  /** Unique id per WebGL canvas — keeps ContactShadows / R3F state from colliding in dual mode. */
+  canvasId?: string;
+  /** When false, hide TransformControls (inactive dual-pane) so linked poses aren’t fought. */
+  gizmoActive?: boolean;
+  /**
+   * Shared dual-pane orbit as an offset from the device look-at.
+   * Both panes keep the same viewing angle while each centers on its own device.
+   */
+  sharedOrbit?: { offset: Vec3 } | null;
+  onSharedOrbitChange?: (orbit: { offset: Vec3 }) => void;
+  /** Device center to frame — camera always looks here. */
+  focusPoint?: Vec3 | null;
+  /** Bump to force an instant centered snap (no damping / easing). */
+  recenterToken?: number;
   onSelectDevice?: (payload: DeviceSelectPayload) => void;
   onClearSelection?: () => void;
   onRotateDevice?: (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
@@ -741,21 +757,65 @@ function isTypingTarget(target: EventTarget | null) {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
 }
 
+function viewOffset(view: CameraView, split: boolean): Vec3 {
+  const z = split ? 7.4 : 5.7;
+  const positions: Record<CameraView, Vec3> = {
+    front: { x: 0, y: 0, z },
+    left: { x: split ? -3.4 : -2.7, y: 0.1, z: split ? 6.6 : 5.1 },
+    right: { x: split ? 3.4 : 2.7, y: 0.1, z: split ? 6.6 : 5.1 },
+    top: { x: 0, y: split ? 2.6 : 2.2, z: split ? 6.8 : 5.4 },
+  };
+  return positions[view];
+}
+
+/** Instant pose write — damping off so format/device re-centers never ease. */
+function snapCameraPose(
+  camera: THREE.Camera,
+  controls: { enableDamping?: boolean; target: THREE.Vector3; update: () => void } | null | undefined,
+  position: Vec3,
+  focus: Vec3,
+) {
+  const wasDamping = controls?.enableDamping;
+  if (controls) controls.enableDamping = false;
+  camera.position.set(position.x, position.y, position.z);
+  camera.lookAt(focus.x, focus.y, focus.z);
+  if (camera instanceof THREE.PerspectiveCamera) camera.updateProjectionMatrix();
+  if (controls) {
+    controls.target.set(focus.x, focus.y, focus.z);
+    controls.update();
+    controls.enableDamping = wasDamping ?? true;
+  }
+}
+
 function CameraRig({
   view,
   lens,
   split,
   animatedPosition,
+  sharedOrbit = null,
+  onSharedOrbitChange,
+  focusPoint = null,
+  recenterToken = 0,
 }: {
   view: CameraView;
   lens: CameraLens;
   split: boolean;
   animatedPosition?: Vec3 | null;
+  sharedOrbit?: { offset: Vec3 } | null;
+  onSharedOrbitChange?: (orbit: { offset: Vec3 }) => void;
+  focusPoint?: Vec3 | null;
+  recenterToken?: number;
 }) {
   const { camera, gl } = useThree();
   const controls = useRef<any>(null);
   const [spacePan, setSpacePan] = useState(false);
   const fov = cameraLensFov(lens);
+  const applyingSharedRef = useRef(false);
+  const onSharedOrbitChangeRef = useRef(onSharedOrbitChange);
+  onSharedOrbitChangeRef.current = onSharedOrbitChange;
+  const focus = focusPoint ?? { x: 0, y: 0, z: 0 };
+  const focusRef = useRef(focus);
+  focusRef.current = focus;
 
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera && camera.fov !== fov) {
@@ -764,29 +824,57 @@ function CameraRig({
     }
   }, [camera, fov]);
 
-  useEffect(() => {
+  // Instant re-center on format / device / view changes (recenterToken or cleared shared orbit).
+  useLayoutEffect(() => {
     if (animatedPosition) {
-      camera.position.set(animatedPosition.x, animatedPosition.y, animatedPosition.z);
-      camera.lookAt(0, 0, 0);
-      camera.updateProjectionMatrix();
-      controls.current?.target.set(0, 0, 0);
-      controls.current?.update();
+      snapCameraPose(camera, controls.current, animatedPosition, { x: 0, y: 0, z: 0 });
       return;
     }
-    const z = split ? 7.4 : 5.7;
-    const positions: Record<CameraView, [number, number, number]> = {
-      front: [0, 0, z],
-      left: [split ? -3.4 : -2.7, 0.1, split ? 6.6 : 5.1],
-      right: [split ? 3.4 : 2.7, 0.1, split ? 6.6 : 5.1],
-      top: [0, split ? 2.6 : 2.2, split ? 6.8 : 5.4],
-    };
-    camera.position.set(...positions[view]);
-    camera.lookAt(0, 0, 0);
-    camera.updateProjectionMatrix();
-    controls.current?.target.set(0, 0, 0);
-    controls.current?.update();
-  }, [view, camera, split, animatedPosition?.x, animatedPosition?.y, animatedPosition?.z]);
+    if (sharedOrbit) return;
+    const offset = viewOffset(view, split);
+    applyingSharedRef.current = true;
+    snapCameraPose(
+      camera,
+      controls.current,
+      { x: focus.x + offset.x, y: focus.y + offset.y, z: focus.z + offset.z },
+      focus,
+    );
+    requestAnimationFrame(() => { applyingSharedRef.current = false; });
+  }, [
+    view, camera, split, recenterToken,
+    animatedPosition?.x, animatedPosition?.y, animatedPosition?.z,
+    sharedOrbit, focus.x, focus.y, focus.z,
+  ]);
 
+  // Apply linked dual-pane orbit (same angle, each pane's own device focus) — also instant.
+  useLayoutEffect(() => {
+    if (!sharedOrbit || animatedPosition) return;
+    const { offset } = sharedOrbit;
+    const nextPos = {
+      x: focus.x + offset.x,
+      y: focus.y + offset.y,
+      z: focus.z + offset.z,
+    };
+    const dx = camera.position.x - nextPos.x;
+    const dy = camera.position.y - nextPos.y;
+    const dz = camera.position.z - nextPos.z;
+    if ((dx * dx + dy * dy + dz * dz) < 1e-8) {
+      if (controls.current) {
+        const t = controls.current.target;
+        if (
+          Math.abs(t.x - focus.x) < 1e-6
+          && Math.abs(t.y - focus.y) < 1e-6
+          && Math.abs(t.z - focus.z) < 1e-6
+        ) return;
+      }
+    }
+    applyingSharedRef.current = true;
+    snapCameraPose(camera, controls.current, nextPos, focus);
+    requestAnimationFrame(() => { applyingSharedRef.current = false; });
+  }, [
+    sharedOrbit?.offset.x, sharedOrbit?.offset.y, sharedOrbit?.offset.z,
+    focus.x, focus.y, focus.z, camera, animatedPosition,
+  ]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code !== 'Space' || event.repeat || isTypingTarget(event.target)) return;
@@ -823,6 +911,22 @@ function CameraRig({
     };
   }, [gl, spacePan]);
 
+  const publishOrbit = () => {
+    if (!onSharedOrbitChangeRef.current || applyingSharedRef.current || animatedPosition) return;
+    const f = focusRef.current;
+    // Keep the look-at locked on the device; only share the viewing offset.
+    if (controls.current) {
+      controls.current.target.set(f.x, f.y, f.z);
+    }
+    onSharedOrbitChangeRef.current({
+      offset: {
+        x: Number((camera.position.x - f.x).toFixed(4)),
+        y: Number((camera.position.y - f.y).toFixed(4)),
+        z: Number((camera.position.z - f.z).toFixed(4)),
+      },
+    });
+  };
+
   return (
     <OrbitControls
       ref={controls}
@@ -841,6 +945,8 @@ function CameraRig({
       maxDistance={12}
       minPolarAngle={0.2}
       maxPolarAngle={Math.PI - 0.2}
+      onChange={publishOrbit}
+      onEnd={publishOrbit}
     />
   );
 }
@@ -981,11 +1087,31 @@ function LoadingFallback() {
   );
 }
 
+function SoftGroundDisc({ y, light }: { y: number; light: boolean }) {
+  // Always-on soft base under the device — ContactShadows alone can fail to paint in a
+  // second WebGL canvas, which made one dual pane look “base-less”.
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, y, 0]} receiveShadow>
+      <circleGeometry args={[2.15, 64]} />
+      <meshStandardMaterial
+        color={light ? '#cfcfc8' : '#050608'}
+        roughness={1}
+        metalness={0}
+        transparent
+        opacity={light ? 0.62 : 0.45}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
+
 function SceneDevices({
   project,
   gizmoMode,
   mediaPlaying,
   liveStream,
+  liveStreamDeviceId,
+  gizmoActive = true,
   onSelectDevice,
   onRotateDevice,
   onMoveDevice,
@@ -995,6 +1121,8 @@ function SceneDevices({
   gizmoMode: GizmoMode;
   mediaPlaying?: boolean;
   liveStream?: MediaStream | null;
+  liveStreamDeviceId?: string | null;
+  gizmoActive?: boolean;
   onSelectDevice?: (payload: DeviceSelectPayload) => void;
   onRotateDevice?: (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
   onMoveDevice?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
@@ -1020,34 +1148,45 @@ function SceneDevices({
 
   return (
     <>
-      {project.devices.map((instance) => (
-        <DeviceModelView
-          key={`${instance.id}-${instance.deviceId}`}
-          instance={instance}
-          screenshot={project.screenshot}
-          liveStream={liveStream}
-          selected={instance.id === selectedId}
-          onSelect={onSelectDevice}
-          gizmoDraggingRef={gizmoDraggingRef}
-          onGizmoObject={(object) => bindGizmoObject(instance.id, object)}
-          deviceColor={project.deviceColor}
-          clayMode={project.clayMode || project.deviceColor === 'clay'}
-          mediaPlaying={mediaPlaying}
-        />
-      ))}
+      {project.devices.map((instance) => {
+        const screenshot = instance.screenshot !== undefined ? instance.screenshot : project.screenshot;
+        const deviceColor = instance.deviceColor ?? project.deviceColor;
+        const clayMode = instance.clayMode ?? project.clayMode ?? deviceColor === 'clay';
+        const streamForDevice = liveStream && (
+          liveStreamDeviceId
+            ? instance.id === liveStreamDeviceId
+            : instance.id === selectedId
+        )
+          ? liveStream
+          : null;
+        return (
+          <DeviceModelView
+            key={`${instance.id}-${instance.deviceId}`}
+            instance={instance}
+            screenshot={screenshot}
+            liveStream={streamForDevice}
+            selected={instance.id === selectedId}
+            onSelect={onSelectDevice}
+            gizmoDraggingRef={gizmoDraggingRef}
+            onGizmoObject={(object) => bindGizmoObject(instance.id, object)}
+            deviceColor={deviceColor}
+            clayMode={clayMode}
+            mediaPlaying={mediaPlaying}
+          />
+        );
+      })}
       <RotationBall
-        key={`gizmo-${selectedId}`}
+        key={`gizmo-${selectedId}-${gizmoActive ? 'on' : 'off'}`}
         object={gizmoObject}
-        active={Boolean(selectedId && gizmoObject)}
+        active={Boolean(gizmoActive && selectedId && gizmoObject)}
         mode={gizmoMode}
         onDraggingChange={(dragging) => {
           gizmoDraggingRef.current = dragging;
           onGizmoDraggingChange?.(dragging);
         }}
-        onRotate={(rotation) => {
+        onRotate={(rotation, opts) => {
           if (!selectedId) return;
-          // Commit-only: RotationBall only fires rotate on pointer-up.
-          onRotateDevice?.(selectedId, rotation, { recordKeys: true });
+          onRotateDevice?.(selectedId, rotation, opts);
         }}
         onMove={(position, opts) => {
           if (!selectedId) return;
@@ -1064,18 +1203,36 @@ export default function DeviceCanvas({
   gizmoMode = 'rotate',
   mediaPlaying = false,
   liveStream = null,
+  liveStreamDeviceId = null,
   cameraPosition = null,
+  canvasId = 'main',
+  gizmoActive = true,
+  sharedOrbit = null,
+  onSharedOrbitChange,
+  focusPoint = null,
+  recenterToken = 0,
   onSelectDevice,
   onClearSelection,
   onRotateDevice,
   onMoveDevice,
   onGizmoDraggingChange,
 }: Props) {
+  const selected = project.devices.find((d) => d.id === project.selectedDeviceId) ?? project.devices[0];
+  const resolvedFocus = focusPoint ?? selected?.position ?? { x: 0, y: 0, z: 0 };
   const hasStudioBackdrop = Boolean(project.sceneProps?.some((p) => p.kind === 'studio_backdrop'));
   const floorY = hasStudioBackdrop ? -1.55 : -1.63;
+  const showGroundBase = project.background !== 'transparent'
+    && !(project.sceneProps ?? []).some((p) => (
+      p.kind === 'concrete_slab' || p.kind === 'pedestal' || p.kind === 'studio_backdrop'
+    ));
+  const lightGround = project.background === 'studio'
+    || (project.gradientColors?.center ?? '').toLowerCase().startsWith('#f')
+    || (project.gradientColors?.center ?? '').toLowerCase().startsWith('#e')
+    || (project.gradientColors?.center ?? '').toLowerCase().startsWith('#fff');
 
   return (
     <Canvas
+      key={canvasId}
       dpr={[1, 2]}
       shadows
       gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' }}
@@ -1127,34 +1284,43 @@ export default function DeviceCanvas({
         colors={project.background === 'transparent' ? null : project.gradientColors}
       >
         <Suspense fallback={<LoadingFallback />}>
+          {showGroundBase && <SoftGroundDisc y={floorY} light={lightGround} />}
           <SceneProps props={project.sceneProps ?? []} />
           <SceneDevices
             project={project}
             gizmoMode={gizmoMode}
             mediaPlaying={mediaPlaying}
             liveStream={liveStream}
+            liveStreamDeviceId={liveStreamDeviceId}
+            gizmoActive={gizmoActive}
             onSelectDevice={onSelectDevice}
             onRotateDevice={onRotateDevice}
             onMoveDevice={onMoveDevice}
             onGizmoDraggingChange={onGizmoDraggingChange}
           />
+          {project.background !== 'transparent' && (project.shadowOpacity ?? 0.32) > 0.01 && (
+            <ContactShadows
+              key={`contact-shadow-${canvasId}`}
+              frames={Infinity}
+              position={[0, floorY + 0.015, hasStudioBackdrop ? 0.35 : 0]}
+              opacity={hasStudioBackdrop ? Math.min(0.55, (project.shadowOpacity ?? 0.32) + 0.12) : (project.shadowOpacity ?? 0.32)}
+              scale={hasStudioBackdrop ? 8 : (project.sceneProps?.length ? 7.5 : 5.5)}
+              blur={hasStudioBackdrop ? Math.max(3.2, project.shadowSoftness ?? 2.5) : (project.shadowSoftness ?? 2.5)}
+              far={hasStudioBackdrop ? 6 : 5}
+              color={hasStudioBackdrop ? '#1a1a1a' : '#000000'}
+            />
+          )}
         </Suspense>
       </SceneEnvironment>
-      {project.background !== 'transparent' && (project.shadowOpacity ?? 0.32) > 0.01 && (
-        <ContactShadows
-          position={[0, floorY + 0.01, hasStudioBackdrop ? 0.35 : 0]}
-          opacity={hasStudioBackdrop ? Math.min(0.55, (project.shadowOpacity ?? 0.32) + 0.12) : (project.shadowOpacity ?? 0.32)}
-          scale={hasStudioBackdrop ? 8 : (project.sceneProps?.length ? 7.5 : 5.5)}
-          blur={hasStudioBackdrop ? Math.max(3.2, project.shadowSoftness ?? 2.5) : (project.shadowSoftness ?? 2.5)}
-          far={hasStudioBackdrop ? 6 : 5}
-          color={hasStudioBackdrop ? '#1a1a1a' : '#000000'}
-        />
-      )}
       <CameraRig
         view={project.cameraView}
         lens={project.cameraLens ?? 'standard'}
         split={project.compositionMode === 'split'}
         animatedPosition={cameraPosition}
+        sharedOrbit={sharedOrbit}
+        onSharedOrbitChange={onSharedOrbitChange}
+        focusPoint={resolvedFocus}
+        recenterToken={recenterToken}
       />
       <CaptureBridge
         captureRef={captureRef}

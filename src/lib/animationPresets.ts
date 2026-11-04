@@ -1,5 +1,6 @@
-import { createKeyframe, createTrack } from './animation';
+import { createKeyframe, createTrack, defaultCameraPosition } from './animation';
 import type { AnimProperty, AnimTrack, AnimationClip, DeviceInstance } from '../types';
+import { CAMERA_TARGET_ID } from '../types';
 
 export interface AnimationPreset {
   id: string;
@@ -178,6 +179,58 @@ const wobble: AnimationPreset = {
   },
 };
 
+/** Card-fan sweep — devices arc open like a hand of cards. */
+const fan: AnimationPreset = {
+  id: 'fan',
+  label: 'Fan',
+  description: 'Card-fan yaw and roll sweep',
+  duration: 3.2,
+  loop: true,
+  build: (device) => {
+    const { x, y, z } = device.rotation;
+    const { x: px, y: py } = device.position;
+    return [
+      track(device, 'rotation.z', [[0, z - 22], [1.6, z + 22], [3.2, z - 22]]),
+      track(device, 'rotation.y', [[0, y - 28], [1.6, y + 28], [3.2, y - 28]]),
+      track(device, 'rotation.x', [[0, x - 6], [1.6, x + 4], [3.2, x - 6]]),
+      track(device, 'position.x', [[0, px - 0.22], [1.6, px + 0.22], [3.2, px - 0.22]]),
+      track(device, 'position.y', [[0, py], [1.6, py + 0.06], [3.2, py]]),
+    ];
+  },
+};
+
+/** Camera close pan — dolly in while panning onto the device. */
+const closePan: AnimationPreset = {
+  id: 'closePan',
+  label: 'Close Pan',
+  description: 'Camera pan and push into the device',
+  duration: 2.8,
+  loop: false,
+  build: (device) => {
+    const { x, y, z } = device.rotation;
+    const cam = defaultCameraPosition('front', false);
+    return [
+      createTrack(CAMERA_TARGET_ID, 'camera.z', [
+        createKeyframe(0, cam.z + 1.35),
+        createKeyframe(2.0, cam.z - 1.0),
+        createKeyframe(2.8, cam.z - 1.15),
+      ]),
+      createTrack(CAMERA_TARGET_ID, 'camera.x', [
+        createKeyframe(0, 1.15),
+        createKeyframe(1.5, 0.25),
+        createKeyframe(2.8, 0),
+      ]),
+      createTrack(CAMERA_TARGET_ID, 'camera.y', [
+        createKeyframe(0, cam.y + 0.18),
+        createKeyframe(2.8, cam.y),
+      ]),
+      track(device, 'rotation.y', [[0, y - 16], [1.8, y + 4], [2.8, y]]),
+      track(device, 'rotation.x', [[0, x - 8], [2.8, x]]),
+      track(device, 'rotation.z', [[0, z + 4], [2.8, z]]),
+    ];
+  },
+};
+
 const clear: AnimationPreset = {
   id: 'clear',
   label: 'Clear',
@@ -197,6 +250,8 @@ export const ANIMATION_PRESETS: AnimationPreset[] = [
   zoom,
   present,
   wobble,
+  fan,
+  closePan,
   clear,
 ];
 
@@ -212,8 +267,23 @@ export function applyAnimationPreset(
 ): AnimationClip {
   const targets = Array.isArray(devices) ? devices : [devices];
   const targetIds = new Set(targets.map((d) => d.id));
-  const kept = clip.tracks.filter((t) => !targetIds.has(t.targetId));
-  const built = targets.flatMap((device) => preset.build(device));
+  // Close pan builds camera tracks once from the first device.
+  const built = preset.id === 'closePan'
+    ? preset.build(targets[0])
+    : targets.flatMap((device) => preset.build(device));
+  const touchesCamera = built.some(
+    (t) => t.targetId === CAMERA_TARGET_ID
+      || t.property === 'camera.x'
+      || t.property === 'camera.y'
+      || t.property === 'camera.z',
+  );
+  const kept = clip.tracks.filter((t) => {
+    if (touchesCamera && t.targetId === CAMERA_TARGET_ID) return false;
+    if (touchesCamera && (t.property === 'camera.x' || t.property === 'camera.y' || t.property === 'camera.z')) {
+      return false;
+    }
+    return !targetIds.has(t.targetId);
+  });
   return {
     ...clip,
     duration: preset.id === 'clear' ? clip.duration : preset.duration,

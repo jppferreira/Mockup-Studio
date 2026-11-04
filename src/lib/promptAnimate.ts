@@ -1,4 +1,4 @@
-import { createKeyframe, createTrack } from './animation';
+import { createKeyframe, createTrack, defaultCameraPosition, isCameraProperty } from './animation';
 import { ANIMATION_PRESETS, applyAnimationPreset, getAnimationPreset } from './animationPresets';
 import type {
   AnimEase,
@@ -9,6 +9,7 @@ import type {
   DeviceInstance,
   EaseBezier,
 } from '../types';
+import { CAMERA_TARGET_ID } from '../types';
 
 export interface PromptAnimateResult {
   clip: AnimationClip;
@@ -17,13 +18,16 @@ export interface PromptAnimateResult {
 }
 
 export const PROMPT_SUGGESTIONS = [
+  'close pan to the device',
+  'device fanning',
   'gentle floating turntable',
-  'dramatic 360 spin',
+  'dramatic 360 spin loop',
   'slow product orbit',
   'quick attention wobble',
-  'present and settle',
+  'present and settle once',
   'soft tilt toward camera',
   'bounce float loop',
+  'spin once no loop',
   'clear animation',
 ] as const;
 
@@ -39,6 +43,8 @@ type MotionKind =
   | 'wobble'
   | 'bounce'
   | 'flip'
+  | 'fan'
+  | 'closePan'
   | 'clear'
   | 'custom';
 
@@ -100,8 +106,17 @@ function parseDirection(text: string): number {
 }
 
 function parseLoop(text: string, kind: MotionKind): boolean | null {
-  if (/\b(one[\s-]?shot|once|reveal|settle|land|present)\b/.test(text) || kind === 'present') return false;
+  // Explicit off first so "don't loop" / "no loop" win over bare "loop".
+  if (
+    /\b(don'?t\s+loop|do\s+not\s+loop|no[\s-]?loop|without\s+loop(?:ing)?|not\s+looping|one[\s-]?shot|play\s+once|\bonce\b|no\s+repeat)\b/.test(text)
+  ) {
+    return false;
+  }
+  // Explicit on — also overrides one-shot motion kinds like present / close pan.
   if (/\b(loop|looping|seamless|infinite|repeat)\b/.test(text)) return true;
+  // Soft one-shot cues when the user didn't ask to loop.
+  if (/\b(reveal|settle|land|present)\b/.test(text)) return false;
+  if (kind === 'present' || kind === 'closePan') return false;
   if (kind === 'clear') return null;
   return null;
 }
@@ -113,6 +128,14 @@ function detectKind(text: string): { kind: MotionKind; label: string } {
     || /\b(anim|motion|key|clip).*\b(clear|reset|remove|delete)\b/.test(text)
   ) {
     return { kind: 'clear', label: 'Clear' };
+  }
+  if (
+    /\b(close\s*pan|pan\s*(in|to|clos|toward)|dolly\s*(in|clos)|camera\s*(push|dolly|close|pan)|push[\s-]?in)\b/.test(text)
+  ) {
+    return { kind: 'closePan', label: 'Close Pan' };
+  }
+  if (/\b(fan(?:ning|ned|s)?|fan\s*(out|open|spread)|hand\s*of\s*cards)\b/.test(text)) {
+    return { kind: 'fan', label: 'Fan' };
   }
   if (/\b(360|full\s*spin|revolv|spin)\b/.test(text)) return { kind: 'spin', label: 'Spin 360' };
   if (/\b(turntable|product\s*spin|showcase\s*spin|y[\s-]?spin)\b/.test(text)) return { kind: 'turntable', label: 'Turntable' };
@@ -147,6 +170,8 @@ function defaultDuration(kind: MotionKind): number {
     case 'wobble': return 2;
     case 'bounce': return 2.4;
     case 'flip': return 2.8;
+    case 'fan': return 3.2;
+    case 'closePan': return 2.8;
     case 'tilt':
     case 'swing': return 3;
     case 'turntable': return 4;
@@ -322,10 +347,98 @@ function buildFlip(device: DeviceInstance, intent: PromptIntent): AnimTrack[] {
   ];
 }
 
+/** Card-fan sweep — Z roll with Y yaw and a little lateral drift. */
+function buildFan(device: DeviceInstance, intent: PromptIntent): AnimTrack[] {
+  const d = intent.duration ?? 3.2;
+  const i = intent.intensity;
+  const dir = intent.direction;
+  const { x, y, z } = device.rotation;
+  const { x: px, y: py } = device.position;
+  const ease = intent.ease;
+  const bez = intent.easeBezier;
+  const mid = d / 2;
+  return [
+    track(device, 'rotation.z', [
+      kf(0, scaleAround(z, -22 * dir, i), ease, bez),
+      kf(mid, scaleAround(z, 22 * dir, i), ease, bez),
+      kf(d, scaleAround(z, -22 * dir, i), ease, bez),
+    ]),
+    track(device, 'rotation.y', [
+      kf(0, scaleAround(y, -28 * dir, i), ease, bez),
+      kf(mid, scaleAround(y, 28 * dir, i), ease, bez),
+      kf(d, scaleAround(y, -28 * dir, i), ease, bez),
+    ]),
+    track(device, 'rotation.x', [
+      kf(0, scaleAround(x, -6, i), ease, bez),
+      kf(mid, scaleAround(x, 4, i), ease, bez),
+      kf(d, scaleAround(x, -6, i), ease, bez),
+    ]),
+    track(device, 'position.x', [
+      kf(0, scaleAround(px, -0.22 * dir, i), ease, bez),
+      kf(mid, scaleAround(px, 0.22 * dir, i), ease, bez),
+      kf(d, scaleAround(px, -0.22 * dir, i), ease, bez),
+    ]),
+    track(device, 'position.y', [
+      kf(0, py, ease, bez),
+      kf(mid, scaleAround(py, 0.06, i), ease, bez),
+      kf(d, py, ease, bez),
+    ]),
+  ];
+}
+
+/** Camera dolly + lateral pan closing in on the device, with a soft settle. */
+function buildClosePan(device: DeviceInstance, intent: PromptIntent): AnimTrack[] {
+  const d = intent.duration ?? 2.8;
+  const i = intent.intensity;
+  const dir = intent.direction;
+  const { x, y, z } = device.rotation;
+  const ease = intent.ease;
+  const bez = intent.easeBezier;
+  const cam = defaultCameraPosition('front', false);
+  const startZ = cam.z + 1.35 * (0.55 + i * 0.45);
+  const endZ = Math.max(3.2, cam.z - 1.15 * (0.55 + i * 0.45));
+  const panX = 1.15 * dir * (0.55 + i * 0.45);
+
+  const camTrack = (property: AnimProperty, keys: AnimKeyframe[]): AnimTrack =>
+    createTrack(CAMERA_TARGET_ID, property, keys);
+
+  return [
+    camTrack('camera.z', [
+      kf(0, startZ, ease, bez),
+      kf(d * 0.7, endZ + 0.12, ease, bez),
+      kf(d, endZ, ease, bez),
+    ]),
+    camTrack('camera.x', [
+      kf(0, panX, ease, bez),
+      kf(d * 0.55, panX * 0.2, ease, bez),
+      kf(d, 0, ease, bez),
+    ]),
+    camTrack('camera.y', [
+      kf(0, cam.y + 0.18 * i, ease, bez),
+      kf(d, cam.y, ease, bez),
+    ]),
+    track(device, 'rotation.y', [
+      kf(0, scaleAround(y, -16 * dir, i), ease, bez),
+      kf(d * 0.65, scaleAround(y, 4 * dir, i), ease, bez),
+      kf(d, y, ease, bez),
+    ]),
+    track(device, 'rotation.x', [
+      kf(0, scaleAround(x, -8, i), ease, bez),
+      kf(d, x, ease, bez),
+    ]),
+    track(device, 'rotation.z', [
+      kf(0, scaleAround(z, 4 * dir, i), ease, bez),
+      kf(d, z, ease, bez),
+    ]),
+  ];
+}
+
 function buildForDevice(device: DeviceInstance, intent: PromptIntent): AnimTrack[] {
   if (intent.kind === 'clear') return [];
   if (intent.kind === 'bounce') return buildBounce(device, intent);
   if (intent.kind === 'flip') return buildFlip(device, intent);
+  if (intent.kind === 'fan') return buildFan(device, intent);
+  if (intent.kind === 'closePan') return buildClosePan(device, intent);
   if (intent.kind === 'custom') return buildCustom(device, intent);
 
   const preset = getAnimationPreset(intent.kind);
@@ -389,10 +502,24 @@ export function promptToAnimation(
   });
 
   const duration = intent.duration ?? exact?.duration ?? defaultDuration(intent.kind);
-  const loop = intent.loop ?? (intent.kind === 'present' || intent.kind === 'flip' ? false : true);
+  const loop = intent.loop ?? (
+    intent.kind === 'present' || intent.kind === 'flip' || intent.kind === 'closePan'
+      ? false
+      : true
+  );
 
-  const kept = clip.tracks.filter((t) => !targets.some((d) => d.id === t.targetId));
-  const built = targets.flatMap((device) => buildForDevice(device, { ...intent, duration }));
+  const replaceCamera = intent.kind === 'closePan';
+  const kept = clip.tracks.filter((t) => {
+    if (replaceCamera && (t.targetId === CAMERA_TARGET_ID || isCameraProperty(t.property))) {
+      return false;
+    }
+    return !targets.some((d) => d.id === t.targetId);
+  });
+
+  // Close pan only needs one camera pass — build from the first selected device.
+  const built = intent.kind === 'closePan'
+    ? buildForDevice(targets[0], { ...intent, duration })
+    : targets.flatMap((device) => buildForDevice(device, { ...intent, duration }));
 
   return {
     clip: {
