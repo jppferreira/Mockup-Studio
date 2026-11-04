@@ -38,6 +38,7 @@ export function Landing() {
             <Link to="/workflow">Workflow</Link>
             <Link to="/pricing">Pricing</Link>
             <Link to="/privacy">Privacy</Link>
+            <Link to="/terms">Terms</Link>
             <button type="button" className="nav-text-btn" onClick={() => setContactOpen(true)}>
               Contact
             </button>
@@ -129,8 +130,8 @@ export function Landing() {
               <p className="section-kicker">Product</p>
               <h2>Everything you need to finish the shot.</h2>
               <p className="features-lede">
-                Devices, light, motion, templates, export, and local files — arranged like a modern creative tool, not a
-                render farm.
+                Devices, motion, templates, export, and local files — arranged like a modern creative tool, not a render
+                farm.
               </p>
             </div>
             <ul className="feature-grid">
@@ -258,6 +259,8 @@ export function Landing() {
           <Link to="/workflow">Workflow</Link>
           <Link to="/pricing">Pricing</Link>
           <Link to="/privacy">Privacy</Link>
+          <Link to="/terms">Terms</Link>
+          <Link to="/credits">Credits</Link>
           <button type="button" className="footer-text-btn" onClick={() => setContactOpen(true)}>
             Contact
           </button>

@@ -1,32 +1,35 @@
-export type FeatureIconId = 'devices' | 'motion' | 'templates' | 'local' | 'lighting' | 'export';
+export type FeatureIconId = 'devices' | 'motion' | 'templates' | 'export' | 'local';
 export type FeatureIlloStyle = 'charcoal' | 'mint';
 
-const ILLUSTRATIONS: Record<FeatureIlloStyle, Record<FeatureIconId, string>> = {
+const BASE = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+
+const FILES: Record<FeatureIlloStyle, Record<FeatureIconId, string>> = {
   charcoal: {
-    devices: '/illustrations/feature-devices-charcoal.png?v=6',
-    motion: '/illustrations/feature-motion-charcoal.png?v=6',
-    templates: '/illustrations/feature-templates-charcoal.png?v=6',
-    local: '/illustrations/feature-local-charcoal.png?v=6',
-    lighting: '/illustrations/feature-lighting-charcoal.png?v=1',
-    export: '/illustrations/feature-export-charcoal.png?v=1',
+    devices: 'illustrations/feature-devices-charcoal.png',
+    motion: 'illustrations/feature-motion-charcoal.png',
+    templates: 'illustrations/feature-templates-charcoal.png',
+    export: 'illustrations/feature-export-charcoal.png',
+    local: 'illustrations/feature-local-charcoal.png',
   },
   mint: {
-    devices: '/illustrations/feature-devices-mint.png?v=3',
-    motion: '/illustrations/feature-motion-mint.png?v=3',
-    templates: '/illustrations/feature-templates-mint.png?v=3',
-    local: '/illustrations/feature-local-mint.png?v=3',
-    lighting: '/illustrations/feature-lighting-mint.png?v=1',
-    export: '/illustrations/feature-export-mint.png?v=1',
+    devices: 'illustrations/feature-devices-mint.png',
+    motion: 'illustrations/feature-motion-mint.png',
+    templates: 'illustrations/feature-templates-mint.png',
+    export: 'illustrations/feature-export-mint.png',
+    local: 'illustrations/feature-local-mint.png',
   },
 };
+
+function assetUrl(file: string) {
+  return `${BASE}${file}?v=7`;
+}
 
 const ALT: Record<FeatureIconId, string> = {
   devices: 'Soft 3D charcoal phone illustration',
   motion: 'Soft 3D charcoal phone with orbit rings',
   templates: 'Soft 3D charcoal template card stack',
-  local: 'Soft 3D charcoal local vault',
-  lighting: 'Soft 3D charcoal studio light',
   export: 'Soft 3D charcoal export and aspect frames',
+  local: 'Soft 3D charcoal local vault',
 };
 
 export function FeatureIcon({
@@ -40,7 +43,7 @@ export function FeatureIcon({
   return (
     <span className="feature-illo" aria-hidden>
       <img
-        src={ILLUSTRATIONS[style][id]}
+        src={assetUrl(FILES[style][id])}
         alt={ALT[id]}
         width={160}
         height={160}

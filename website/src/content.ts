@@ -54,13 +54,6 @@ export const FEATURES = [
       'Jump into single or multi-device compositions, soft studio backdrops, and prop-friendly scenes. Swap the screenshot and keep the lighting you already like.',
   },
   {
-    icon: 'lighting' as const,
-    title: 'Light & reflections',
-    copy: 'Soft studio light, glass highlights, and reflection maps you can nudge until the phone feels real.',
-    detail:
-      'Dial reflection strength, environment maps, and fill so screenshots sit in the device instead of floating on a flat PNG.',
-  },
-  {
     icon: 'export' as const,
     title: 'Export that fits',
     copy: 'Ship PNG, MP4, or GIF sized for TikTok, Reels, YouTube, Instagram, App Store, and Play.',
