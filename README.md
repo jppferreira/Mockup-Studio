@@ -38,13 +38,12 @@ The output will be under `release/`, including an Apple Silicon `.dmg` and a `.z
 
 ## Important limitations
 
-- The phone is an **original procedural generic smartphone**, not a licensed manufacturer 3D model. No external assets are bundled.
-- This MVP supports one smartphone per scene. Multi-device layouts, tablets, laptops, text overlays and video output are follow-up work.
+- Device meshes in `public/models/` are **third-party CC BY (and similar) Sketchfab assets** — see `CREDITS.md` and the website `/credits` page. They are fan-made visualizations, not official manufacturer models.
+- Free plan limits devices, resolution, and video; Pro / Pro Max unlock via signed license keys (see Licensing below).
 - Open/save projects use embedded data URLs; large screenshots can result in large JSON files. For production, switch to a packaged project format with separate assets.
 - The live preview and image export require an operational WebGL GPU. Maximum export dimensions depend on the GPU.
-- Export is PNG only. Background gradients and transparent PNG are supported.
 - Fonts fall back to system fonts when offline.
-- No login, cloud services, external API, subscription or payments are required.
+- No account or cloud upload is required. Optional checkout uses Lemon Squeezy / Paddle / Stripe payment links when configured.
 - Dependencies must be installed with `npm install`; builds were not compiled in this delivery environment.
 
 ## Structure
@@ -72,8 +71,7 @@ mockup-studio/
 ## Next improvements
 
 - Unit/UI tests and a signed/notarised release pipeline
-- Licensed GLB/GLTF device library with material/UV maps
-- Multiple devices, layers, templates and text overlays
+- Mac App Store build with StoreKit unlocks mapped to the same tiers
 - Better aspect-aware camera composition and crop controls
 - Automated project recovery / autosave
 
@@ -90,8 +88,25 @@ cp .env.example website/.env.local
 # fill VITE_DOWNLOAD_MAC_URL with the public .dmg link after npm run dist:mac
 ```
 
-Configure the store’s success URL to `/thanks?plan=pro` (or `pro_max`). Deliver license keys as `MS-PRO-…` / `MS-PROMAX-…` so the desktop app can activate them. Until checkout URLs are set, Buy buttons fall back to `mailto:` via `VITE_SALES_EMAIL`. Until `VITE_DOWNLOAD_MAC_URL` is set, Download buttons scroll to the landing `#download` section.
+Configure the store’s success URL to `/thanks?plan=pro` (or `pro_max`). For production, run the fulfillment server (`npm run fulfill:dev` / see `server/README.md`) so Lemon/Paddle webhooks mint a signed key and email it via Resend. Manual keys: `npm run license:issue -- pro`. Until checkout URLs are set, Buy buttons fall back to `mailto:` via `VITE_SALES_EMAIL`. Until `VITE_DOWNLOAD_MAC_URL` is set, Download buttons scroll to the landing `#download` section.
 
-## Privacy and licensing
+## Licensing
 
-Your imported screenshots and project files remain local. The app does not make API requests itself. The optional Google Fonts stylesheet downloads fonts when online; remove the CSS `@import` if you want absolutely zero network font requests. Dependence on npm packages means their respective open-source licences apply.
+- **App code / binaries:** proprietary — see root [`LICENSE`](LICENSE). `package.json` declares `"license": "UNLICENSED"`.
+- **Buyer terms:** website [`/terms`](website/src/pages/TermsPage.tsx) (personal vs commercial, updates, Dual-Mac policy, future Mac App Store note).
+- **Device models:** CC BY / Sketchfab terms — [`CREDITS.md`](CREDITS.md) and website `/credits`.
+- **License keys (direct download):** Ed25519-signed offline keys, format `MS-PRO.<payload>.<sig>` / `MS-PROMAX.…` / `MS-UPDATE.…`. Generate with:
+
+```bash
+# once per machine / rotation
+node scripts/issue-license.mjs --init   # writes gitignored private key + public key module
+npm run license:issue -- pro
+npm run license:issue -- pro_max
+npm run license:issue -- update_pass
+```
+
+Entitlements are always driven by `LicenseTier` in `shared/pricing.ts`, so a future Mac App Store / StoreKit build can set the same tiers without a second feature matrix.
+
+## Privacy
+
+Your imported screenshots and project files remain local. The desktop app does not upload project contents. The marketing site may load Google Fonts when online. npm dependencies keep their own open-source licences.

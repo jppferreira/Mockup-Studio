@@ -617,7 +617,10 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
 .license-activate {
   display: grid;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+}
+.license-modal > .license-hint {
+  margin-bottom: 12px;
 }
 .license-activate label {
   font-size: 11px;
@@ -652,6 +655,18 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
 }
 .license-hint code {
   color: #c5f2b6;
+}
+.license-inline-link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: none;
+  color: #c5f2b6;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }
 .field-caption { color: #8b9199; font-size: 11px; letter-spacing: .2px; font-weight: 550; text-transform: none; }
 .section-label { display: flex; justify-content: space-between; align-items: baseline; padding: 0 0 12px; }

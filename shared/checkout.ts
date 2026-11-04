@@ -69,7 +69,9 @@ export function checkoutCtaLabel(plan: PaidPlanId, config = getCheckoutConfig())
   return 'Email for Update Pass';
 }
 
+/** Example shapes for signed offline keys (payload + Ed25519 signature). */
 export const LICENSE_KEY_HINTS = {
-  pro: 'MS-PRO-XXXXXX',
-  pro_max: 'MS-PROMAX-XXXXXX',
+  pro: 'MS-PRO.<payload>.<sig>',
+  pro_max: 'MS-PROMAX.<payload>.<sig>',
+  update_pass: 'MS-UPDATE.<payload>.<sig>',
 } as const;

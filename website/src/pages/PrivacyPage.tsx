@@ -28,7 +28,8 @@ export function PrivacyPage() {
         <Reveal as="section" className="page-note">
           <p>
             The marketing website may load fonts from Google when you are online. The desktop app itself does not upload
-            project contents. Open-source npm dependencies apply their own licenses.
+            project contents. The app is proprietary (see Terms); open-source npm dependencies and CC BY device models
+            apply their own licenses — see <Link to="/credits">Credits</Link>.
           </p>
         </Reveal>
 

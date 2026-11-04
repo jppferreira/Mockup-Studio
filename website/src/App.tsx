@@ -1,8 +1,11 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { Landing } from './Landing';
+import { CreditsPage } from './pages/CreditsPage';
 import { FeaturesPage } from './pages/FeaturesPage';
 import { PricingPage } from './pages/PricingPage';
 import { PrivacyPage } from './pages/PrivacyPage';
+import { RecoverPage } from './pages/RecoverPage';
+import { TermsPage } from './pages/TermsPage';
 import { ThanksPage } from './pages/ThanksPage';
 import { WorkflowPage } from './pages/WorkflowPage';
 
@@ -15,6 +18,9 @@ export function App() {
       <Route path="/pricing" element={<PricingPage />} />
       <Route path="/thanks" element={<ThanksPage />} />
       <Route path="/privacy" element={<PrivacyPage />} />
+      <Route path="/terms" element={<TermsPage />} />
+      <Route path="/credits" element={<CreditsPage />} />
+      <Route path="/recover" element={<RecoverPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

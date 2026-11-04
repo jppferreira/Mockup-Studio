@@ -40,6 +40,20 @@ export const FEATURES = [
       'Built-in device library covers current iPhone, Pixel, and Galaxy models. Tune glass reflection, body finish, and studio lighting until the frame feels finished — without hunting for stock mockups.',
   },
   {
+    icon: 'backgrounds' as const,
+    title: 'Customizable backgrounds',
+    copy: 'Swap studio presets, dial your own gradients, go transparent, or drop in a custom backdrop that matches the brand.',
+    detail:
+      'Built-in scenes cover soft studio, midnight, and more. Edit gradient stops, save custom colors, or export with a transparent plate for design tools.',
+  },
+  {
+    icon: 'lighting' as const,
+    title: 'Light & reflections',
+    copy: 'Soft studio light, glass highlights, and reflection maps you can nudge until the phone feels real.',
+    detail:
+      'Dial reflection strength, environment maps, and fill so screenshots sit in the device instead of floating on a flat PNG.',
+  },
+  {
     icon: 'motion' as const,
     title: 'Stills and motion',
     copy: 'Keyframe rotation, position, and scale. Export crisp PNG frames or MP4 / GIF motion from the same scene.',
@@ -52,6 +66,13 @@ export const FEATURES = [
     copy: 'Start from device layouts and scenic presets instead of a blank canvas every time.',
     detail:
       'Jump into single or multi-device compositions, soft studio backdrops, and prop-friendly scenes. Swap the screenshot and keep the lighting you already like.',
+  },
+  {
+    icon: 'props' as const,
+    title: 'Props & multi-device',
+    copy: 'Add a second phone, quiet props, or custom devices when the story needs more than a single hero shot.',
+    detail:
+      'Stack devices in one frame, drop in studio props, and keep each object lit with the same scene so the composition stays coherent.',
   },
   {
     icon: 'export' as const,

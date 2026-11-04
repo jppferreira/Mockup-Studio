@@ -11,7 +11,11 @@ export function ThanksPage() {
   const planId = raw === 'pro_max' || raw === 'update_pass' || raw === 'pro' ? raw : 'pro';
   const plan = planById(planId);
   const keyHint =
-    planId === 'pro_max' ? LICENSE_KEY_HINTS.pro_max : LICENSE_KEY_HINTS.pro;
+    planId === 'pro_max'
+      ? LICENSE_KEY_HINTS.pro_max
+      : planId === 'update_pass'
+        ? LICENSE_KEY_HINTS.update_pass
+        : LICENSE_KEY_HINTS.pro;
 
   return (
     <SiteChrome>
@@ -21,8 +25,8 @@ export function ThanksPage() {
           <h1>Thanks for supporting Mockup Studio.</h1>
           <p className="page-lede">
             {plan.name} is {plan.priceLabel}
-            {planId === 'update_pass' ? '/year' : ' one-time'}. Your receipt and license key are on the way
-            by email from the payment provider.
+            {planId === 'update_pass' ? '/year' : ' one-time'}. Your payment receipt comes from the store;
+            your signed license key is emailed by Mockup Studio right after payment clears.
           </p>
         </header>
 
@@ -30,7 +34,7 @@ export function ThanksPage() {
           <ol>
             <li>
               <strong>Check your inbox</strong>
-              <span>Open the license key from Lemon Squeezy / Paddle (or your receipt email).</span>
+              <span>Open the Mockup Studio license email (separate from the store receipt).</span>
             </li>
             <li>
               <strong>Open Mockup Studio</strong>
