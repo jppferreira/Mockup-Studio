@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   ChevronDown, ChevronUp, Diamond, Gauge, KeyRound, Pause, Play, Plus,
-  Repeat, SkipBack, Trash2, ZoomIn, ZoomOut,
+  Repeat, SkipBack, Sparkles, Trash2, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import {
   createTrack,
@@ -13,6 +13,7 @@ import {
   setKeyframeEase,
   upsertKeyframe,
 } from '../lib/animation';
+import { PROMPT_SUGGESTIONS, promptToAnimation } from '../lib/promptAnimate';
 import {
   ANIM_EASES,
   ANIM_PROPERTIES,
@@ -120,6 +121,10 @@ export default function AnimationTimeline({
     y1: number;
   } | null>(null);
   const [easeGraphOpen, setEaseGraphOpen] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [promptStatus, setPromptStatus] = useState<string | null>(null);
+  const [promptBusy, setPromptBusy] = useState(false);
+  const promptInputRef = useRef<HTMLInputElement>(null);
 
   const pressTimerRef = useRef<number | null>(null);
   const pressOriginRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
@@ -577,6 +582,27 @@ export default function AnimationTimeline({
     return index >= 0 ? `Device ${index + 1}` : 'Device';
   };
 
+  const runPrompt = (raw: string) => {
+    const text = raw.trim();
+    if (!text || promptBusy) return;
+    setPromptBusy(true);
+    try {
+      const result = promptToAnimation(text, clip, selectedDevice);
+      onChange(result.clip);
+      onSeek(0);
+      onPlayingChange(result.label !== 'Clear');
+      setPromptStatus(result.summary);
+      setPrompt('');
+    } finally {
+      window.setTimeout(() => setPromptBusy(false), 120);
+    }
+  };
+
+  const onPromptSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    runPrompt(prompt);
+  };
+
   const playheadPct = clip.duration <= 0 ? 0 : (currentTime / clip.duration) * 100;
 
   const marqueeStyle = (() => {
@@ -599,6 +625,48 @@ export default function AnimationTimeline({
       </button>
     </div>
     <div className={`timeline-panel ${panelVisible ? 'is-open' : 'is-closed'}`} ref={panelRef} tabIndex={-1} aria-hidden={!panelVisible}>
+      <form className="timeline-prompt" onSubmit={onPromptSubmit}>
+        <div className="timeline-prompt-field">
+          <Sparkles size={14} className="timeline-prompt-icon" aria-hidden />
+          <input
+            ref={promptInputRef}
+            type="text"
+            value={prompt}
+            onChange={(e) => {
+              setPrompt(e.target.value);
+              if (promptStatus) setPromptStatus(null);
+            }}
+            placeholder="Describe a motion… e.g. gentle floating turntable"
+            aria-label="Animate with prompt"
+            disabled={promptBusy}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button type="submit" className="timeline-prompt-go" disabled={promptBusy || !prompt.trim()} title="Generate animation">
+            Animate
+          </button>
+        </div>
+        <div className="timeline-prompt-meta">
+          {promptStatus ? (
+            <span className="timeline-prompt-status">{promptStatus}</span>
+          ) : (
+            <div className="timeline-prompt-chips" role="list">
+              {PROMPT_SUGGESTIONS.slice(0, 5).map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  role="listitem"
+                  className="timeline-prompt-chip"
+                  onClick={() => runPrompt(chip)}
+                  title={`Animate: ${chip}`}
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </form>
       <div className="timeline-transport">
         <div className="timeline-transport-left">
           <button type="button" className="timeline-icon-btn" title="Go to start" onClick={() => { onPlayingChange(false); onSeek(0); }}>
