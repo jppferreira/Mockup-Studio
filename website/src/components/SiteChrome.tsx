@@ -41,6 +41,9 @@ export function SiteChrome({ children }: { children: ReactNode }) {
             <Link to="/pricing" className={location.pathname === '/pricing' ? 'is-active' : undefined}>
               Pricing
             </Link>
+            <Link to="/releases" className={location.pathname === '/releases' ? 'is-active' : undefined}>
+              Releases
+            </Link>
             <Link to="/privacy" className={location.pathname === '/privacy' ? 'is-active' : undefined}>
               Privacy
             </Link>
@@ -68,6 +71,7 @@ export function SiteChrome({ children }: { children: ReactNode }) {
           <Link to="/features">Features</Link>
           <Link to="/workflow">Workflow</Link>
           <Link to="/pricing">Pricing</Link>
+          <Link to="/releases">Releases</Link>
           <Link to="/privacy">Privacy</Link>
           <Link to="/terms">Terms</Link>
           <Link to="/credits">Credits</Link>

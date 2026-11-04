@@ -1,7 +1,7 @@
 {
   "name": "mockup-studio",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "UNLICENSED",
   "description": "Local-first 3D device mockup studio for macOS",
   "main": "electron/main.cjs",

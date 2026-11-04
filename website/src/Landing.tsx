@@ -42,6 +42,7 @@ export function Landing() {
             <Link to="/features">Features</Link>
             <Link to="/workflow">Workflow</Link>
             <Link to="/pricing">Pricing</Link>
+            <Link to="/releases">Releases</Link>
             <Link to="/privacy">Privacy</Link>
             <Link to="/terms">Terms</Link>
             <button type="button" className="nav-text-btn" onClick={() => openContact('feedback')}>
@@ -260,6 +261,7 @@ export function Landing() {
           <Link to="/features">Features</Link>
           <Link to="/workflow">Workflow</Link>
           <Link to="/pricing">Pricing</Link>
+          <Link to="/releases">Releases</Link>
           <Link to="/privacy">Privacy</Link>
           <Link to="/terms">Terms</Link>
           <Link to="/credits">Credits</Link>
