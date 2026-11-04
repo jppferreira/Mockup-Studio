@@ -208,12 +208,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [deviceMenu, setDeviceMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>('rotate');
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({
-    device: true,
-    transform: true,
-    environment: false,
-    camera: false,
-  });
+  const [openSectionId, setOpenSectionId] = useState<string | null>('device');
   const [sidePanelsHidden, setSidePanelsHidden] = useState(false);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -221,7 +216,7 @@ export default function App() {
   const renameInputRef = useRef<HTMLInputElement>(null);
   const timelineBeforeHideRef = useRef(true);
   const toggleSection = useCallback((id: string) => {
-    setOpenSections((current) => ({ ...current, [id]: !current[id] }));
+    setOpenSectionId((current) => (current === id ? null : id));
   }, []);
   const captureRef = useRef<CaptureApi | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -1425,7 +1420,7 @@ export default function App() {
 
         <aside className="right-panel" aria-hidden={sidePanelsHidden}>
           <div className="inspector-scroll">
-            <SettingsSection id="device" title="Device" icon={Smartphone} trailing="01" open={!!openSections.device} onToggle={toggleSection}>
+            <SettingsSection id="device" title="Device" icon={Smartphone} trailing="01" open={openSectionId === 'device'} onToggle={toggleSection}>
               <button
                 type="button"
                 className={`split-launch ${project.compositionMode === 'split' ? 'is-active' : ''}`}
@@ -1500,7 +1495,7 @@ export default function App() {
               <button className="button full-outline compact" onClick={() => { setLeftTab('assets'); imageInputRef.current?.click(); }}><ImagePlus size={14} /> Replace screenshot</button>
             </SettingsSection>
 
-            <SettingsSection id="transform" title="Transform" icon={Rotate3D} open={!!openSections.transform} onToggle={toggleSection}>
+            <SettingsSection id="transform" title="Transform" icon={Rotate3D} open={openSectionId === 'transform'} onToggle={toggleSection}>
               <SliderField label="Rotate X" min={-90} max={90} value={displaySelected.rotation.x} onChange={(v) => updateRotation('x', v)} />
               <SliderField label="Rotate Y" min={-180} max={180} value={displaySelected.rotation.y} onChange={(v) => updateRotation('y', v)} />
               <SliderField label="Rotate Z" min={-90} max={90} value={displaySelected.rotation.z} onChange={(v) => updateRotation('z', v)} />
@@ -1521,7 +1516,7 @@ export default function App() {
               <button className="text-button" onClick={resetDevice}><RotateCcw size={13} /> Reset transform</button>
             </SettingsSection>
 
-            <SettingsSection id="environment" title="Environment" icon={Aperture} open={!!openSections.environment} onToggle={toggleSection}>
+            <SettingsSection id="environment" title="Environment" icon={Aperture} open={openSectionId === 'environment'} onToggle={toggleSection}>
               <div className="field-caption">BACKGROUND</div>
               <div className="background-options wrap-options">
                 {allScenes.map((item) => (
@@ -1690,7 +1685,7 @@ export default function App() {
               </button>
             </SettingsSection>
 
-            <SettingsSection id="camera" title="Camera presets" icon={Settings2} open={!!openSections.camera} onToggle={toggleSection} last>
+            <SettingsSection id="camera" title="Camera presets" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection} last>
               <div className="camera-preset-grid">
                 {(['front', 'left', 'right', 'top'] as CameraView[]).map((view) => (
                   <button key={view} onClick={() => updateProject({ cameraView: view })}
