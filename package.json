@@ -2,10 +2,12 @@
   "name": "mockup-studio",
   "private": true,
   "version": "0.1.0",
+  "license": "UNLICENSED",
   "description": "Local-first 3D device mockup studio for macOS",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
+    "license:issue": "node scripts/issue-license.mjs",
     "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5175 --strictPort\" \"wait-on http://127.0.0.1:5175 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5175 electron .\"",
     "dev:web": "vite --host 127.0.0.1 --port 5175 --strictPort",
     "website": "vite --config website/vite.config.ts",

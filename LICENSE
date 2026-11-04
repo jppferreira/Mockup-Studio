@@ -1,0 +1,44 @@
+Mockup Studio — Proprietary Software License
+Copyright (c) 2026 Mockup Studio contributors. All rights reserved.
+
+PERMISSION TO USE
+Subject to these terms and a valid Free, Pro, or Pro Max entitlement
+(or a future Mac App Store purchase of the same tiers), you may install
+and use Mockup Studio on macOS for your own projects.
+
+RESTRICTIONS
+You may not copy, modify, distribute, sublicense, rent, lease, or make
+the software (source or binaries) available to third parties, except as
+expressly allowed by your plan (for example Pro Max dual-Mac / transfer
+policy) or by written permission from the copyright holder.
+
+Open-sourcing, reverse engineering for redistribution, or republishing
+device models bundled with the app is not permitted under this license.
+
+THIRD-PARTY ASSETS
+3D device models in public/models/ are third-party works, typically under
+Creative Commons Attribution 4.0 (CC BY 4.0). They are not covered by this
+proprietary license. See CREDITS.md and the in-app / website Credits page.
+Reuse those assets only under their own terms (including attribution).
+
+npm dependencies retain their respective open-source licenses.
+
+OWNERSHIP OF YOUR CONTENT
+Screenshots and project files you import or create remain yours. The app
+does not claim ownership of your exports.
+
+NO WARRANTY
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY ARISING FROM USE OF THE SOFTWARE.
+
+TRADEMARKS
+“iPhone” is a trademark of Apple Inc. “Galaxy” is a trademark of Samsung
+Electronics. “Pixel” is a trademark of Google LLC. This project is not
+affiliated with or endorsed by Apple Inc., Samsung Electronics, or Google LLC.
+
+Mac App Store distribution, if offered later, is also subject to Apple’s
+standard Licensed Application End User License Agreement and App Store
+terms for purchases and refunds made through Apple.

@@ -10,6 +10,7 @@ import {
   type LicenseTier,
   type PlanId,
 } from '@shared/pricing';
+import { LICENSE_PUBLIC_KEY_SPKI_B64 } from './licensePublicKey';
 
 export {
   ENTITLEMENTS,
@@ -25,13 +26,18 @@ export type { LicenseTier, PlanId };
 
 const STORAGE_KEY = 'mockup-studio.license.v1';
 
+/** How the current entitlement was unlocked. `mas` reserved for a future App Store build. */
+export type LicenseSource = 'none' | 'key' | 'mas';
+
 export interface LicenseState {
   tier: LicenseTier;
   /** Activated license key (if any) */
   key: string | null;
-  /** ISO date when paid updates expire (Pro / Pro Max) */
+  /** ISO date when paid updates expire (Pro / Pro Max / Update Pass) */
   updatesUntil: string | null;
   activatedAt: string | null;
+  /** Channel that granted the tier — gates stay tier-based for MAS later */
+  source: LicenseSource;
 }
 
 const DEFAULT_LICENSE: LicenseState = {
@@ -39,26 +45,108 @@ const DEFAULT_LICENSE: LicenseState = {
   key: null,
   updatesUntil: null,
   activatedAt: null,
+  source: 'none',
 };
 
-function monthsFromNow(months: number): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() + months);
-  return d.toISOString();
+export type LicenseProduct = 'pro' | 'pro_max' | 'update_pass';
+
+interface LicensePayload {
+  v: number;
+  tier: LicenseProduct;
+  iat: number;
 }
 
-/** Simple offline key format for launch: MS-PRO-XXXXXX / MS-PROMAX-XXXXXX */
-export function parseLicenseKey(raw: string): { tier: LicenseTier; key: string } | null {
-  const key = raw.trim().toUpperCase().replace(/\s+/g, '');
+function monthsFrom(isoOrNow: string | null, months: number): string {
+  const d = isoOrNow ? new Date(isoOrNow) : new Date();
+  const base = Number.isNaN(d.getTime()) || d.getTime() < Date.now() ? new Date() : d;
+  base.setMonth(base.getMonth() + months);
+  return base.toISOString();
+}
+
+function b64UrlToBytes(value: string): Uint8Array {
+  const pad = '='.repeat((4 - (value.length % 4)) % 4);
+  const b64 = (value + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function prefixProduct(prefix: string): LicenseProduct | null {
+  if (prefix === 'MS-PROMAX') return 'pro_max';
+  if (prefix === 'MS-PRO') return 'pro';
+  if (prefix === 'MS-UPDATE') return 'update_pass';
+  return null;
+}
+
+function decodeSpki(): Uint8Array {
+  const pad = '='.repeat((4 - (LICENSE_PUBLIC_KEY_SPKI_B64.length % 4)) % 4);
+  const bin = atob(LICENSE_PUBLIC_KEY_SPKI_B64 + pad);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+let verifyKeyPromise: Promise<CryptoKey> | null = null;
+
+function getVerifyKey(): Promise<CryptoKey> {
+  if (!verifyKeyPromise) {
+    verifyKeyPromise = crypto.subtle.importKey(
+      'spki',
+      decodeSpki(),
+      { name: 'Ed25519' },
+      false,
+      ['verify'],
+    );
+  }
+  return verifyKeyPromise;
+}
+
+/**
+ * Parse + cryptographically verify a signed key.
+ * Format: MS-PRO.<payloadB64url>.<sigB64url> (also MS-PROMAX / MS-UPDATE)
+ */
+export async function parseLicenseKey(
+  raw: string,
+): Promise<{ product: LicenseProduct; key: string; payload: LicensePayload } | null> {
+  const key = raw.trim().replace(/\s+/g, '');
   if (!key) return null;
 
-  const proMax = /^MS-PROMAX-([A-Z0-9]{6,16})$/.exec(key);
-  if (proMax) return { tier: 'pro_max', key };
+  const match = /^(MS-PROMAX|MS-PRO|MS-UPDATE)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(key);
+  if (!match) return null;
 
-  const pro = /^MS-PRO-([A-Z0-9]{6,16})$/.exec(key);
-  if (pro) return { tier: 'pro', key };
+  const productFromPrefix = prefixProduct(match[1]);
+  if (!productFromPrefix) return null;
 
-  return null;
+  const payloadBytes = b64UrlToBytes(match[2]);
+  let payload: LicensePayload;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(payloadBytes)) as LicensePayload;
+  } catch {
+    return null;
+  }
+
+  if (payload.v !== 1) return null;
+  if (payload.tier !== productFromPrefix) return null;
+  if (payload.tier !== 'pro' && payload.tier !== 'pro_max' && payload.tier !== 'update_pass') {
+    return null;
+  }
+  if (typeof payload.iat !== 'number' || !Number.isFinite(payload.iat)) return null;
+
+  try {
+    const cryptoKey = await getVerifyKey();
+    const ok = await crypto.subtle.verify(
+      'Ed25519',
+      cryptoKey,
+      b64UrlToBytes(match[3]),
+      payloadBytes,
+    );
+    if (!ok) return null;
+  } catch {
+    return null;
+  }
+
+  return { product: payload.tier, key, payload };
 }
 
 export function loadLicense(): LicenseState {
@@ -67,11 +155,18 @@ export function loadLicense(): LicenseState {
     if (!raw) return { ...DEFAULT_LICENSE };
     const parsed = JSON.parse(raw) as Partial<LicenseState>;
     const tier = parsed.tier === 'pro' || parsed.tier === 'pro_max' ? parsed.tier : 'free';
+    const source: LicenseSource =
+      parsed.source === 'key' || parsed.source === 'mas'
+        ? parsed.source
+        : tier === 'free'
+          ? 'none'
+          : 'key';
     return {
       tier,
       key: typeof parsed.key === 'string' ? parsed.key : null,
       updatesUntil: typeof parsed.updatesUntil === 'string' ? parsed.updatesUntil : null,
       activatedAt: typeof parsed.activatedAt === 'string' ? parsed.activatedAt : null,
+      source: tier === 'free' ? 'none' : source,
     };
   } catch {
     return { ...DEFAULT_LICENSE };
@@ -82,20 +177,45 @@ export function saveLicense(state: LicenseState) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-export function activateLicenseKey(raw: string): { ok: true; state: LicenseState } | { ok: false; error: string } {
-  const parsed = parseLicenseKey(raw);
+export async function activateLicenseKey(
+  raw: string,
+  current: LicenseState = loadLicense(),
+): Promise<{ ok: true; state: LicenseState } | { ok: false; error: string }> {
+  const parsed = await parseLicenseKey(raw);
   if (!parsed) {
     return {
       ok: false,
-      error: `Invalid key. Pro keys look like MS-PRO-XXXXXX (${formatGbp(PLAN_PRICES_GBP.pro)}).`,
+      error: `Invalid or forged key. Buy on the website — keys look like MS-PRO.<payload>.<sig> (${formatGbp(PLAN_PRICES_GBP.pro)}).`,
     };
   }
-  const months = ENTITLEMENTS[parsed.tier].updateMonths;
+
+  const nowIso = new Date().toISOString();
+
+  if (parsed.product === 'update_pass') {
+    if (current.tier === 'free') {
+      return {
+        ok: false,
+        error: 'Update Pass extends an existing Pro or Pro Max license. Activate Pro first.',
+      };
+    }
+    const state: LicenseState = {
+      ...current,
+      key: parsed.key,
+      updatesUntil: monthsFrom(current.updatesUntil, 12),
+      activatedAt: nowIso,
+      source: 'key',
+    };
+    saveLicense(state);
+    return { ok: true, state };
+  }
+
+  const months = ENTITLEMENTS[parsed.product].updateMonths;
   const state: LicenseState = {
-    tier: parsed.tier,
+    tier: parsed.product,
     key: parsed.key,
-    updatesUntil: months > 0 ? monthsFromNow(months) : null,
-    activatedAt: new Date().toISOString(),
+    updatesUntil: months > 0 ? monthsFrom(null, months) : null,
+    activatedAt: nowIso,
+    source: 'key',
   };
   saveLicense(state);
   return { ok: true, state };
