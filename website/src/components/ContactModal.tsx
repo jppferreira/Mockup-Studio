@@ -120,8 +120,7 @@ export function ContactModal({ open, onClose }: Props) {
 
         <h2 id={titleId}>Contact us</h2>
         <p className="contact-modal-lede">
-          Questions about Mockup Studio, licensing, or the Mac build? Send a note — it goes to{' '}
-          <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+          Questions about Mockup Studio, licensing, or the Mac build? Send a note and we&apos;ll get back to you.
         </p>
 
         {status === 'sent' ? (
