@@ -6,7 +6,20 @@ export type BuiltinBackgroundId = 'midnight' | 'studio' | 'mint' | 'sunset' | 't
 export type BackgroundPreset = BuiltinBackgroundId | 'custom' | (string & {});
 export type DeviceColor = 'graphite' | 'titanium' | 'silver' | 'rose' | 'clay';
 export type CameraView = 'front' | 'left' | 'right' | 'top';
+/** Perspective lens presets — changes scene FOV (not the phone’s rear cameras). */
+export type CameraLens = 'ultrawide' | 'wide' | 'standard' | 'telephoto';
 export type { SceneOverlay };
+
+export const CAMERA_LENSES: { id: CameraLens; label: string; hint: string; fov: number }[] = [
+  { id: 'ultrawide', label: 'Ultrawide', hint: '~16 mm', fov: 62 },
+  { id: 'wide', label: 'Wide', hint: '~24 mm', fov: 48 },
+  { id: 'standard', label: 'Standard', hint: '~35 mm', fov: 38 },
+  { id: 'telephoto', label: 'Telephoto', hint: '~85 mm', fov: 26 },
+];
+
+export function cameraLensFov(lens: CameraLens | undefined): number {
+  return CAMERA_LENSES.find((item) => item.id === lens)?.fov ?? 38;
+}
 /** Procedural / preset reflection environments for glass (Cinema 4D–style). */
 export type ReflectionMapId =
   | 'match_background'
@@ -197,6 +210,8 @@ export interface MockupProject {
    */
   edgeBlurEnabled?: boolean;
   cameraView: CameraView;
+  /** Perspective lens / FOV preset for the scene camera */
+  cameraLens: CameraLens;
   compositionMode: CompositionMode;
   devices: DeviceInstance[];
   selectedDeviceId: string;
@@ -290,6 +305,7 @@ export const DEFAULT_PROJECT: MockupProject = {
   edgeBlurBottom: false,
   edgeBlurAmount: 24,
   cameraView: 'front',
+  cameraLens: 'standard',
   compositionMode: 'single',
   devices: [primary],
   selectedDeviceId: primary.id,

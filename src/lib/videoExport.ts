@@ -1,6 +1,15 @@
 import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
+import {
+  BufferTarget,
+  CanvasSource,
+  Output,
+  WebMOutputFormat,
+  canEncodeVideo,
+  getFirstEncodableVideoCodec,
+  type VideoCodec,
+} from 'mediabunny';
 import { encodeSoundtrackAac, renderSoundtrackPcm, type SoundtrackClip } from './soundtrack';
 
 export type VideoFormatId = 'webm' | 'mp4' | 'gif';
@@ -13,11 +22,18 @@ export const VIDEO_FORMATS: {
   extension: string;
   mime: string;
   description: string;
+  /** True when this format can keep a transparent plate. */
+  supportsAlpha: boolean;
 }[] = [
-  { id: 'webm', label: 'WebM', extension: 'webm', mime: 'video/webm', description: 'VP8/VP9 · wide browser support' },
-  { id: 'mp4', label: 'MP4', extension: 'mp4', mime: 'video/mp4', description: 'H.264 · best for social & editing' },
-  { id: 'gif', label: 'GIF', extension: 'gif', mime: 'image/gif', description: 'Animated loop · auto-scaled for size' },
+  { id: 'webm', label: 'WebM', extension: 'webm', mime: 'video/webm', description: 'VP9 · keeps transparency (Chrome, Firefox, Edge)', supportsAlpha: true },
+  { id: 'mp4', label: 'MP4', extension: 'mp4', mime: 'video/mp4', description: 'H.264 · solid backgrounds only', supportsAlpha: false },
+  { id: 'gif', label: 'GIF', extension: 'gif', mime: 'image/gif', description: 'Animated loop · keeps transparency everywhere', supportsAlpha: true },
 ];
+
+/** Formats that preserve a transparent studio background. */
+export function videoFormatsForAlpha(transparent: boolean) {
+  return transparent ? VIDEO_FORMATS.filter((item) => item.supportsAlpha) : VIDEO_FORMATS;
+}
 
 export const STILL_FORMATS: {
   id: StillFormatId;
@@ -235,6 +251,8 @@ export interface EncodeVideoOptions {
   onProgress?: (ratio: number, label: string) => void;
   /** Optional soundtrack muxed into MP4 (AAC). Skipped for GIF; best-effort for WebM. */
   soundtrack?: SoundtrackClip | null;
+  /** Preserve transparent pixels (WebM VP9 alpha or GIF). MP4 cannot keep alpha. */
+  transparent?: boolean;
 }
 
 function createEncoderBridge(muxerAdd: (chunk: EncodedVideoChunk, meta?: EncodedVideoChunkMetadata) => void) {
@@ -259,9 +277,14 @@ export async function encodeAnimationVideo(options: EncodeVideoOptions): Promise
   const fps = Math.max(12, Math.min(60, Math.round(options.fps) || 30));
   const duration = Math.max(0.2, Math.min(30, options.duration));
   const totalFrames = Math.max(1, Math.round(duration * fps));
+  const transparent = Boolean(options.transparent);
+
+  if (transparent && options.format === 'mp4') {
+    throw new Error('MP4 cannot keep a transparent background. Export WebM or GIF instead.');
+  }
 
   if (options.format === 'gif') {
-    return encodeGif({ options, fps, duration, totalFrames });
+    return encodeGif({ options, fps, duration, totalFrames, transparent });
   }
 
   const width = even(options.width);
@@ -270,15 +293,36 @@ export async function encodeAnimationVideo(options: EncodeVideoOptions): Promise
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: false, colorSpace: 'srgb' });
+  const ctx = canvas.getContext('2d', {
+    alpha: transparent,
+    willReadFrequently: transparent,
+    colorSpace: 'srgb',
+  });
   if (!ctx) throw new Error('Could not create export canvas');
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
   if (options.format === 'mp4') {
-    return encodeMp4({ options, width, height, fps, totalFrames, bitrate, canvas, ctx });
+    return encodeMp4({ options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent: false });
   }
-  return encodeWebm({ options, width, height, fps, totalFrames, bitrate, canvas, ctx });
+  if (transparent) {
+    return encodeTransparentWebm({ options, width, height, fps, totalFrames, bitrate, canvas, ctx });
+  }
+  return encodeWebm({ options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent: false });
+}
+
+function clearExportFrame(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  transparent: boolean,
+) {
+  if (transparent) {
+    ctx.clearRect(0, 0, width, height);
+    return;
+  }
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, width, height);
 }
 
 async function prepareMp4Audio(options: EncodeVideoOptions) {
@@ -290,7 +334,7 @@ async function prepareMp4Audio(options: EncodeVideoOptions) {
 }
 
 async function encodeMp4({
-  options, width, height, fps, totalFrames, bitrate, canvas, ctx,
+  options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent,
 }: {
   options: EncodeVideoOptions;
   width: number;
@@ -300,6 +344,7 @@ async function encodeMp4({
   bitrate: number;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
+  transparent: boolean;
 }) {
   const picked = await pickVideoConfig('mp4', width, height, fps, bitrate);
   const audioPcm = await prepareMp4Audio(options);
@@ -338,8 +383,7 @@ async function encodeMp4({
       for (let i = 0; i < totalFrames; i += 1) {
         const time = Math.min(options.duration, i / fps);
         options.onProgress?.(i / totalFrames, `Encoding frame ${i + 1}/${totalFrames}`);
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, width, height);
+        clearExportFrame(ctx, width, height, transparent);
         await options.renderFrame(time, ctx, width, height);
         const frame = new VideoFrame(canvas, {
           timestamp: Math.round((i * 1_000_000) / fps),
@@ -376,8 +420,73 @@ async function encodeMp4({
   }
 }
 
+/** Dual VP8/VP9 colour + alpha streams muxed as WebM AlphaMode — plays in Chrome, Firefox, Edge. */
+async function encodeTransparentWebm({
+  options, width, height, fps, totalFrames, bitrate, canvas, ctx,
+}: {
+  options: EncodeVideoOptions;
+  width: number;
+  height: number;
+  fps: number;
+  totalFrames: number;
+  bitrate: number;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+}) {
+  // Mediabunny dual-encodes colour + alpha into WebM BlockAdditions (Chrome VideoEncoder drops alpha:keep).
+  let pickedCodec = await getFirstEncodableVideoCodec(['vp9', 'vp8'], {
+    width,
+    height,
+    bitrate,
+    frameRate: fps,
+  });
+  if (!pickedCodec) {
+    throw new Error('Transparent WebM needs VP8/VP9 encoding on this computer. Try GIF instead.');
+  }
+  // Prefer VP9 when available — cleaner gradients for mockups.
+  if (pickedCodec === 'vp8' && await canEncodeVideo('vp9', { width, height, bitrate, frameRate: fps })) {
+    pickedCodec = 'vp9';
+  }
+  const codec: VideoCodec = pickedCodec;
+
+  const target = new BufferTarget();
+  const output = new Output({
+    format: new WebMOutputFormat(),
+    target,
+  });
+  const source = new CanvasSource(canvas, {
+    codec,
+    bitrate,
+    keyFrameInterval: 2,
+    alpha: 'keep',
+    latencyMode: 'quality',
+  });
+  output.addVideoTrack(source, { frameRate: fps });
+  await output.start();
+
+  const frameDuration = 1 / fps;
+  try {
+    for (let i = 0; i < totalFrames; i += 1) {
+      const time = Math.min(options.duration, i / fps);
+      options.onProgress?.(i / totalFrames, `Encoding transparent frame ${i + 1}/${totalFrames}`);
+      clearExportFrame(ctx, width, height, true);
+      await options.renderFrame(time, ctx, width, height);
+      await source.add(i * frameDuration, frameDuration);
+    }
+    options.onProgress?.(0.98, 'Finishing transparent WebM');
+    await output.finalize();
+    if (!target.buffer) throw new Error('Transparent WebM muxer produced an empty file');
+    options.onProgress?.(1, 'Finishing WebM');
+    return new Blob([target.buffer], { type: 'video/webm' });
+  } catch (error) {
+    try { await output.cancel(); } catch { /* ignore */ }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Transparent WebM export failed: ${message}`);
+  }
+}
+
 async function encodeWebmWithCodecs({
-  options, width, height, fps, totalFrames, bitrate, canvas, ctx, picked,
+  options, width, height, fps, totalFrames, bitrate, canvas, ctx, picked, transparent,
 }: {
   options: EncodeVideoOptions;
   width: number;
@@ -388,6 +497,7 @@ async function encodeWebmWithCodecs({
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
   picked: PickedCodec;
+  transparent: boolean;
 }) {
   const target = new WebmArrayBufferTarget();
   const muxer = new WebmMuxer({
@@ -418,8 +528,7 @@ async function encodeWebmWithCodecs({
       for (let i = 0; i < totalFrames; i += 1) {
         const time = Math.min(options.duration, i / fps);
         options.onProgress?.(i / totalFrames, `Encoding frame ${i + 1}/${totalFrames}`);
-        ctx.fillStyle = '#000';
-        ctx.fillRect(0, 0, width, height);
+        clearExportFrame(ctx, width, height, transparent);
         await options.renderFrame(time, ctx, width, height);
         const frame = new VideoFrame(canvas, {
           timestamp: Math.round((i * 1_000_000) / fps),
@@ -444,7 +553,7 @@ async function encodeWebmWithCodecs({
 
 /** Fallback when WebCodecs VP8/VP9 is unavailable or broken. */
 async function encodeWebmWithMediaRecorder({
-  options, width, height, fps, totalFrames, bitrate, canvas, ctx,
+  options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent,
 }: {
   options: EncodeVideoOptions;
   width: number;
@@ -454,6 +563,7 @@ async function encodeWebmWithMediaRecorder({
   bitrate: number;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
+  transparent: boolean;
 }) {
   if (typeof MediaRecorder === 'undefined' || typeof canvas.captureStream !== 'function') {
     throw new Error('WebM export is not available in this browser. Try MP4 or GIF.');
@@ -492,6 +602,7 @@ async function encodeWebmWithMediaRecorder({
     for (let i = 0; i < totalFrames; i += 1) {
       const time = Math.min(options.duration, i / fps);
       options.onProgress?.(i / totalFrames, `Recording frame ${i + 1}/${totalFrames}`);
+      clearExportFrame(ctx, width, height, transparent);
       await options.renderFrame(time, ctx, width, height);
       track.requestFrame?.();
       await new Promise<void>((resolve) => window.setTimeout(resolve, frameDelay));
@@ -508,7 +619,7 @@ async function encodeWebmWithMediaRecorder({
 }
 
 async function encodeWebm({
-  options, width, height, fps, totalFrames, bitrate, canvas, ctx,
+  options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent,
 }: {
   options: EncodeVideoOptions;
   width: number;
@@ -518,17 +629,18 @@ async function encodeWebm({
   bitrate: number;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
+  transparent: boolean;
 }) {
   try {
     const picked = await pickVideoConfig('webm', width, height, fps, bitrate);
     return await encodeWebmWithCodecs({
-      options, width, height, fps, totalFrames, bitrate, canvas, ctx, picked,
+      options, width, height, fps, totalFrames, bitrate, canvas, ctx, picked, transparent,
     });
   } catch (primaryError) {
     try {
       options.onProgress?.(0, 'Retrying WebM with MediaRecorder…');
       return await encodeWebmWithMediaRecorder({
-        options, width, height, fps, totalFrames, bitrate, canvas, ctx,
+        options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent,
       });
     } catch (fallbackError) {
       const primary = primaryError instanceof Error ? primaryError.message : String(primaryError);
@@ -538,13 +650,28 @@ async function encodeWebm({
   }
 }
 
+function gifTransparentIndex(palette: number[][]): number {
+  let best = 0;
+  let bestAlpha = 255;
+  for (let i = 0; i < palette.length; i += 1) {
+    const alpha = palette[i]?.[3] ?? 255;
+    if (alpha < bestAlpha) {
+      bestAlpha = alpha;
+      best = i;
+      if (alpha === 0) break;
+    }
+  }
+  return bestAlpha < 128 ? best : -1;
+}
+
 async function encodeGif({
-  options, fps, duration,
+  options, fps, duration, transparent,
 }: {
   options: EncodeVideoOptions;
   fps: number;
   duration: number;
   totalFrames: number;
+  transparent: boolean;
 }) {
   const maxEdge = 720;
   const scale = Math.min(1, maxEdge / Math.max(options.width, options.height));
@@ -557,18 +684,28 @@ async function encodeGif({
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true, alpha: false });
+  const ctx = canvas.getContext('2d', { willReadFrequently: true, alpha: transparent });
   if (!ctx) throw new Error('Could not create GIF canvas');
 
   const gif = GIFEncoder();
+  const format = transparent ? 'rgba4444' : 'rgb565';
   for (let i = 0; i < gifFrames; i += 1) {
     const time = Math.min(duration, i / gifFps);
     options.onProgress?.(i / gifFrames, `GIF frame ${i + 1}/${gifFrames}`);
+    clearExportFrame(ctx, width, height, transparent);
     await options.renderFrame(time, ctx, width, height);
     const imageData = ctx.getImageData(0, 0, width, height);
-    const palette = quantize(imageData.data, 256);
-    const index = applyPalette(imageData.data, palette);
-    gif.writeFrame(index, width, height, { palette, delay, repeat: 0 });
+    const palette = quantize(imageData.data, transparent ? 255 : 256, { format });
+    const index = applyPalette(imageData.data, palette, format);
+    const transparentIndex = transparent ? gifTransparentIndex(palette) : -1;
+    gif.writeFrame(index, width, height, {
+      palette,
+      delay,
+      repeat: 0,
+      transparent: transparentIndex >= 0,
+      transparentIndex: transparentIndex >= 0 ? transparentIndex : 0,
+      dispose: transparentIndex >= 0 ? 2 : undefined,
+    });
   }
   gif.finish();
   options.onProgress?.(1, 'Finishing GIF');

@@ -33,6 +33,7 @@ function ScreenPlane({
   radius,
   position,
   screenshot,
+  liveStream,
   screenSize,
   name = 'ProceduralScreen',
   mediaPlaying,
@@ -42,6 +43,7 @@ function ScreenPlane({
   radius: number;
   position: [number, number, number];
   screenshot: string | null;
+  liveStream?: MediaStream | null;
   screenSize: { width: number; height: number };
   name?: string;
   mediaPlaying?: boolean;
@@ -70,6 +72,7 @@ function ScreenPlane({
   useScreenEmissiveMap({
     material,
     screenshot,
+    liveStream,
     width: screenSize.width,
     height: screenSize.height,
     playing: mediaPlaying,
@@ -122,6 +125,7 @@ function DuoHalf({
   side,
   finish,
   screenshot,
+  liveStream,
   halfW,
   height,
   screenSize,
@@ -131,6 +135,7 @@ function DuoHalf({
   side: 'left' | 'right';
   finish: string;
   screenshot: string | null;
+  liveStream?: MediaStream | null;
   halfW: number;
   height: number;
   screenSize: { width: number; height: number };
@@ -156,6 +161,7 @@ function DuoHalf({
         radius={0.07}
         position={[0, 0, 0.068]}
         screenshot={screenshot}
+        liveStream={liveStream}
         screenSize={screenSize}
         name={isCover ? 'CoverScreen' : 'ProceduralScreen'}
         mediaPlaying={mediaPlaying}
@@ -219,12 +225,14 @@ function DuoHalf({
 function DuoPhone({
   device,
   screenshot,
+  liveStream,
   finishHex,
   clayMode,
   mediaPlaying,
 }: {
   device: DeviceModel;
   screenshot: string | null;
+  liveStream?: MediaStream | null;
   finishHex?: string;
   clayMode?: boolean;
   mediaPlaying?: boolean;
@@ -242,6 +250,7 @@ function DuoPhone({
             side="left"
             finish={finish}
             screenshot={screenshot}
+            liveStream={liveStream}
             halfW={halfW}
             height={height}
             screenSize={device.screenSize}
@@ -256,6 +265,7 @@ function DuoPhone({
             side="right"
             finish={finish}
             screenshot={screenshot}
+            liveStream={liveStream}
             halfW={halfW}
             height={height}
             screenSize={device.screenSize}
@@ -283,12 +293,14 @@ function DuoPhone({
 export default function ProceduralDevice({
   device,
   screenshot,
+  liveStream,
   finishHex,
   clayMode,
   mediaPlaying,
 }: {
   device: DeviceModel;
   screenshot: string | null;
+  liveStream?: MediaStream | null;
   finishHex?: string;
   clayMode?: boolean;
   mediaPlaying?: boolean;
@@ -313,6 +325,7 @@ export default function ProceduralDevice({
       <DuoPhone
         device={device}
         screenshot={screenshot}
+        liveStream={liveStream}
         finishHex={finishHex}
         clayMode={clayMode}
         mediaPlaying={mediaPlaying}

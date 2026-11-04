@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import {
-  Aperture, ArrowDownToLine, ArrowLeftRight, Box, Check, ChevronDown, CircleHelp,
-  Clock3, Columns2, Command, Copy, Download, FileImage, Film, FolderOpen, Gauge, ImagePlus, KeyRound, Layers3,
-  LayoutTemplate, Lock, Minus, MoreHorizontal, MousePointer2, Plus, RotateCcw, Rotate3D, Save,
+  Aperture, ArrowDownToLine, ArrowLeftRight, Box, Camera, Check, ChevronDown, CircleHelp,
+  Clock3, Columns2, Command, Copy, Download, FileCode2, FileImage, Film, FolderOpen, Gauge, ImagePlus, KeyRound, Layers3,
+  LayoutTemplate, Lock, Minus, MonitorSmartphone, MoreHorizontal, MousePointer2, Plus, RotateCcw, Rotate3D, Save,
   Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Trash2, Upload, X,
 } from 'lucide-react';
 import AnimationTimeline from './components/AnimationTimeline';
 import CropFocusOverlay from './components/CropFocusOverlay';
 import CustomDevicePanel from './components/CustomDevicePanel';
 import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload } from './components/DeviceCanvas';
+import FigmaExploreModal from './components/FigmaExploreModal';
 import LicenseModal from './components/LicenseModal';
+import SvgExplodeModal from './components/SvgExplodeModal';
 import ProgressiveBlurOverlay from './components/ProgressiveBlurOverlay';
 import ReflectionMapPicker from './components/ReflectionMapPicker';
 import {
@@ -28,8 +30,28 @@ import { applyAnimationPreset, getAnimationPreset } from './lib/animationPresets
 import { DEVICE_MODELS, getDevice, isCustomDeviceId, listAllDevices, screenSizeLabel } from './lib/devices';
 import { createOverlay, drawOverlays, overlayVisibleAt, type SceneOverlay } from './lib/overlays';
 import {
-  isImageFile, isVideoFile, readFileAsDataUrl, screenMediaKind, seekAllScreenMedia,
+  isImageFile, isVideoFile, readFileAsDataUrl, readImageFromClipboard, readImageFromPasteEvent,
+  screenMediaKind, seekAllScreenMedia,
 } from './lib/screenMedia';
+import {
+  isSvgFile, parseSvgDocument, readFileAsText, readSvgTextFromPasteEvent,
+  type SvgDocumentModel,
+} from './lib/svgLayers';
+import {
+  isDesktopApp,
+  listMirrorDevices,
+  snapshotMirrorStream,
+  startPhoneMirror,
+  stopPhoneMirror,
+  type MirrorDevice,
+} from './lib/phoneMirror';
+import {
+  AndroidMirrorPlayer,
+  getAndroidMirrorStatus,
+  isAndroidMirrorAvailable,
+  sortAndroidDevicesPreferred,
+  type AndroidDeviceInfo,
+} from './lib/androidMirror';
 import {
   PLAN_PRICES_GBP,
   canExportVideo,
@@ -49,7 +71,7 @@ import {
 } from './lib/recentScreenshots';
 import {
   STILL_FORMATS, VIDEO_FORMATS, encodeAnimationVideo, isStillExport, isVideoExport,
-  stillFormatById, videoFormatById,
+  stillFormatById, videoFormatById, videoFormatsForAlpha,
   type ExportKind, type StillFormatId, type VideoFormatId,
 } from './lib/videoExport';
 import {
@@ -66,7 +88,7 @@ import {
   type CompositionTemplate, type TemplateCategory,
 } from './lib/templates';
 import {
-  BACKGROUNDS, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT, DEVICE_COLORS,
+  BACKGROUNDS, CAMERA_LENSES, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT, DEVICE_COLORS,
   EXPORT_ASPECTS, EXPORT_ASPECT_GROUPS, EXPORT_FPS_OPTIONS, EXPORT_RESOLUTIONS,
   EXPORT_SIZE_LIMITS, MAX_DEVICES, exportAspectFixedSize, exportAspectHasFixed, resolveExportDimensions,
   buildSplitDevices, createDefaultAnimation, createDeviceInstance, getSelectedDevice, gradientCss,
@@ -288,6 +310,8 @@ export default function App() {
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [licenseOpen, setLicenseOpen] = useState(false);
+  const [figmaExploreOpen, setFigmaExploreOpen] = useState(false);
+  const [svgExplodeModel, setSvgExplodeModel] = useState<SvgDocumentModel | null>(null);
   const [license, setLicense] = useState<LicenseState>(() => loadLicense());
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>('devices');
@@ -316,14 +340,27 @@ export default function App() {
   const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>(() => loadRecentProjects());
   const [recentScreenshots, setRecentScreenshots] = useState<RecentScreenshot[]>(() => loadRecentScreenshots());
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
+  const [mirrorStream, setMirrorStream] = useState<MediaStream | null>(null);
+  const [mirrorSource, setMirrorSource] = useState<'ios' | 'android' | null>(null);
+  const [mirrorDevice, setMirrorDevice] = useState<MirrorDevice | null>(null);
+  const [mirrorDevices, setMirrorDevices] = useState<MirrorDevice[]>([]);
+  const [androidDevices, setAndroidDevices] = useState<AndroidDeviceInfo[]>([]);
+  const [androidAdbError, setAndroidAdbError] = useState<string | null>(null);
+  const [androidMirrorLabel, setAndroidMirrorLabel] = useState<string | null>(null);
+  const [androidMirrorSerial, setAndroidMirrorSerial] = useState<string | null>(null);
+  const [mirrorBusy, setMirrorBusy] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const timelineBeforeHideRef = useRef(true);
   const overlayDragRef = useRef<{ id: string; pointerId: number } | null>(null);
+  const mirrorStreamRef = useRef<MediaStream | null>(null);
+  const androidPlayerRef = useRef<AndroidMirrorPlayer | null>(null);
+  const androidUnsubRef = useRef<(() => void) | null>(null);
   const toggleSection = useCallback((id: string) => {
     setOpenSectionId((current) => (current === id ? null : id));
   }, []);
   const captureRef = useRef<CaptureApi | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const svgInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
 
@@ -336,6 +373,53 @@ export default function App() {
       setCustomDevices(loadCustomDeviceMeta());
       setDevicesTick((n) => n + 1);
     });
+  }, []);
+
+  useEffect(() => {
+    mirrorStreamRef.current = mirrorStream;
+  }, [mirrorStream]);
+
+  useEffect(() => () => {
+    stopPhoneMirror(mirrorStreamRef.current);
+    androidUnsubRef.current?.();
+    androidUnsubRef.current = null;
+    androidPlayerRef.current?.dispose();
+    androidPlayerRef.current = null;
+    void window.mockupDesktop?.androidStopMirror?.();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const devices = await listMirrorDevices();
+        if (!cancelled) setMirrorDevices(devices);
+      } catch {
+        if (!cancelled) setMirrorDevices([]);
+      }
+      if (isAndroidMirrorAvailable()) {
+        try {
+          const status = await getAndroidMirrorStatus();
+          if (cancelled) return;
+          setAndroidDevices(sortAndroidDevicesPreferred(status.devices || []));
+          setAndroidAdbError(status.ok ? null : (status.error || 'ADB unavailable'));
+        } catch (err) {
+          if (!cancelled) {
+            setAndroidDevices([]);
+            setAndroidAdbError(err instanceof Error ? err.message : 'ADB unavailable');
+          }
+        }
+      }
+    };
+    void refresh();
+    const onChange = () => { void refresh(); };
+    navigator.mediaDevices?.addEventListener?.('devicechange', onChange);
+    const timer = window.setInterval(() => { void refresh(); }, 4000);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener?.('devicechange', onChange);
+      window.clearInterval(timer);
+    };
   }, []);
 
   const allDevices = useMemo(() => listAllDevices(), [customDevices, devicesTick]);
@@ -396,6 +480,19 @@ export default function App() {
 
   const allScenes = [...BACKGROUNDS, ...customPresets];
   const isTransparent = project.background === 'transparent';
+
+  useEffect(() => {
+    if (!isTransparent) return;
+    setAnimatedExportEntries((current) => {
+      let changed = false;
+      const next = current.map((entry) => {
+        if (entry.kind !== 'mp4') return entry;
+        changed = true;
+        return { ...entry, kind: 'webm' as ExportKind };
+      });
+      return changed ? next : current;
+    });
+  }, [isTransparent]);
 
   const animation = project.animation ?? createDefaultAnimation(project.selectedDeviceId || 'device-main');
   const animActive = timelineOpen || animPlaying;
@@ -695,12 +792,43 @@ export default function App() {
     if (toastTimer.current != null) window.clearTimeout(toastTimer.current);
   }, []);
 
+  const applyScreenImage = (dataUrl: string, name: string, message = 'Screenshot added to your device') => {
+    updateProject({ screenshot: dataUrl });
+    if (!isPlaceholderScreenshot(dataUrl)) {
+      setRecentScreenshots((current) => rememberRecentScreenshot(current, dataUrl, name));
+    }
+    notify(message);
+  };
+
+  const openSvgExplode = (svgText: string, fileName: string) => {
+    try {
+      const model = parseSvgDocument(svgText, fileName);
+      if (!model.layers.length) {
+        notify('SVG had no drawable layers');
+        return;
+      }
+      setSvgExplodeModel(model);
+      notify(`Loaded “${fileName}” — explode or pick a layer`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not open SVG');
+    }
+  };
+
   const importScreenMedia = async (file?: File) => {
     if (!file) return;
+    if (isSvgFile(file)) {
+      if (file.size > 8 * 1024 * 1024) {
+        notify('Use an SVG under 8 MB.');
+        return;
+      }
+      const text = await readFileAsText(file);
+      openSvgExplode(text, file.name);
+      return;
+    }
     const asImage = isImageFile(file);
     const asVideo = isVideoFile(file);
     if (!asImage && !asVideo) {
-      notify('Choose a PNG, JPG, WebP image — or MP4 / WebM / MOV video.');
+      notify('Choose a PNG, JPG, WebP, SVG — or MP4 / WebM / MOV video.');
       return;
     }
     const maxBytes = asVideo ? 40 * 1024 * 1024 : 20 * 1024 * 1024;
@@ -709,17 +837,209 @@ export default function App() {
       return;
     }
     const url = await readFileAsDataUrl(file);
-    updateProject({ screenshot: url });
-    if (asImage && !isPlaceholderScreenshot(url)) {
-      setRecentScreenshots((current) => rememberRecentScreenshot(current, url, file.name));
+    if (asVideo) {
+      updateProject({ screenshot: url });
+      notify('Screen recording added to your device');
+      return;
     }
-    notify(asVideo ? 'Screen recording added to your device' : 'Screenshot added to your device');
+    applyScreenImage(url, file.name);
+  };
+
+  const pasteScreenFromClipboard = async (event?: ClipboardEvent) => {
+    try {
+      const svgText = event ? readSvgTextFromPasteEvent(event) : null;
+      if (svgText) {
+        openSvgExplode(svgText, 'pasted.svg');
+        return;
+      }
+      const fromEvent = event ? await readImageFromPasteEvent(event) : null;
+      const image = fromEvent ?? await readImageFromClipboard();
+      applyScreenImage(image.dataUrl, image.name, 'Pasted from clipboard onto the device');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Nothing to paste — copy a frame from Figma first');
+    }
   };
 
   const applyRecentScreenshot = (shot: RecentScreenshot) => {
     updateProject({ screenshot: shot.dataUrl });
     setRecentScreenshots((current) => rememberRecentScreenshot(current, shot.dataUrl, shot.name));
     notify('Screenshot applied');
+  };
+
+  const stopMirroring = useCallback(() => {
+    androidUnsubRef.current?.();
+    androidUnsubRef.current = null;
+    androidPlayerRef.current?.dispose();
+    androidPlayerRef.current = null;
+    void window.mockupDesktop?.androidStopMirror?.();
+    stopPhoneMirror(mirrorStreamRef.current);
+    mirrorStreamRef.current = null;
+    setMirrorStream(null);
+    setMirrorSource(null);
+    setMirrorDevice(null);
+    setAndroidMirrorLabel(null);
+    setAndroidMirrorSerial(null);
+  }, []);
+
+  const androidReadyDevices = useMemo(
+    () => androidDevices.filter((d) => d.state === 'device'),
+    [androidDevices],
+  );
+  const androidPreferredReady = useMemo(
+    () => androidReadyDevices.find((d) => d.preferred) ?? androidReadyDevices[0] ?? null,
+    [androidReadyDevices],
+  );
+  const iosReady = mirrorDevices.length > 0;
+  const androidReady = androidReadyDevices.length > 0;
+
+  const connectIosMirror = async () => {
+    const { stream, device } = await startPhoneMirror();
+    mirrorStreamRef.current = stream;
+    setMirrorStream(stream);
+    setMirrorSource('ios');
+    setMirrorDevice(device);
+    setAndroidMirrorLabel(null);
+    setAndroidMirrorSerial(null);
+    stream.getVideoTracks().forEach((track) => {
+      track.addEventListener('ended', () => {
+        if (mirrorStreamRef.current === stream) stopMirroring();
+      });
+    });
+    notify(
+      device.continuityLikely
+        ? `Mirroring ${device.label} (looks like Continuity Camera — use USB for the phone screen)`
+        : `Mirroring ${device.label}`,
+    );
+  };
+
+  const connectAndroidMirror = async (serial?: string) => {
+    if (!window.mockupDesktop?.androidStartMirror) {
+      throw new Error('Android mirror requires the Mac desktop app with ADB.');
+    }
+    const player = new AndroidMirrorPlayer();
+    androidPlayerRef.current = player;
+    const unsubFrame = window.mockupDesktop.onAndroidMirrorFrame?.((frame) => {
+      void player.pushFrame(frame).catch(() => { /* drop bad frame */ });
+    });
+    const unsubError = window.mockupDesktop.onAndroidMirrorError?.((payload) => {
+      notify(payload.message || 'Android mirror failed');
+      stopMirroring();
+    });
+    androidUnsubRef.current = () => {
+      unsubFrame?.();
+      unsubError?.();
+    };
+
+    const result = await window.mockupDesktop.androidStartMirror(serial);
+    const stream = player.getMediaStream();
+    mirrorStreamRef.current = stream;
+    setMirrorStream(stream);
+    setMirrorSource('android');
+    setMirrorDevice(null);
+    setAndroidMirrorLabel(result.device.label);
+    setAndroidMirrorSerial(result.device.serial);
+    notify(
+      result.device.preferred
+        ? `Mirroring ${result.device.label}`
+        : `Mirroring ${result.device.label} (Pixel/Samsung preferred; other brands are experimental)`,
+    );
+  };
+
+  /** Single Phone Mirror entry — auto-picks iOS or Android from what's plugged in. */
+  const startPhoneMirroring = async () => {
+    if (mirrorBusy) return;
+    if (mirrorStream) {
+      stopMirroring();
+      notify('Mirror stopped');
+      return;
+    }
+
+    const scenePlatform = getDevice(project.deviceId).platform;
+    let target: 'ios' | 'android' | null = null;
+    if (iosReady && !androidReady) target = 'ios';
+    else if (androidReady && !iosReady) target = 'android';
+    else if (iosReady && androidReady) target = scenePlatform === 'android' ? 'android' : 'ios';
+    else if (!isDesktopApp() && iosReady) target = 'ios';
+    else {
+      // Re-probe once in case lists are stale, then decide.
+      try {
+        const [iosList, androidStatus] = await Promise.all([
+          listMirrorDevices({ unlockLabels: true }),
+          isAndroidMirrorAvailable() ? getAndroidMirrorStatus() : Promise.resolve(null),
+        ]);
+        const androidList = (androidStatus?.devices || []).filter((d) => d.state === 'device');
+        if (iosList.length && !androidList.length) target = 'ios';
+        else if (androidList.length && !iosList.length) target = 'android';
+        else if (iosList.length && androidList.length) target = scenePlatform === 'android' ? 'android' : 'ios';
+      } catch {
+        /* fall through */
+      }
+    }
+
+    if (!target) {
+      notify(
+        isDesktopApp()
+          ? 'No phone found. Plug in an iPhone (USB + Trust) or Android (USB debugging + ADB), then try again.'
+          : 'Phone Mirror works in the Mac app. Plug in an iPhone over USB, or use Android with ADB.',
+      );
+      return;
+    }
+
+    setMirrorBusy(true);
+    try {
+      stopMirroring();
+      if (target === 'ios') await connectIosMirror();
+      else await connectAndroidMirror(androidPreferredReady?.serial);
+    } catch (err) {
+      stopMirroring();
+      notify(err instanceof Error ? err.message : 'Could not start phone mirror');
+    } finally {
+      setMirrorBusy(false);
+    }
+  };
+
+  const mirrorStatusLabel = (() => {
+    if (mirrorStream) {
+      if (mirrorSource === 'android' && androidMirrorLabel) return `Live · ${androidMirrorLabel}`;
+      if (mirrorSource === 'ios' && mirrorDevice) return `Live · ${mirrorDevice.label}`;
+      return 'Live';
+    }
+    if (iosReady && androidReady) {
+      const androidName = androidPreferredReady?.label || 'Android';
+      return `Ready · ${mirrorDevices[0].label} · ${androidName}`;
+    }
+    if (iosReady) return `Ready · ${mirrorDevices[0].label}`;
+    if (androidReady) return `Ready · ${androidPreferredReady!.label}`;
+    if (androidDevices.some((d) => d.state === 'unauthorized')) return 'Android connected — allow USB debugging';
+    if (androidAdbError && isDesktopApp()) return 'ADB missing for Android';
+    return isDesktopApp() ? 'Plug in an iPhone or Android over USB' : 'Use the Mac app for USB mirror';
+  })();
+
+  const snapshotMirror = async () => {
+    if (!mirrorStream || mirrorBusy) return;
+    setMirrorBusy(true);
+    try {
+      let dataUrl: string;
+      let name: string;
+      if (mirrorSource === 'android') {
+        if (!window.mockupDesktop?.androidSnapshot) {
+          throw new Error('Android snapshot is unavailable');
+        }
+        const snap = await window.mockupDesktop.androidSnapshot(androidMirrorSerial || undefined);
+        dataUrl = snap.dataUrl;
+        name = androidMirrorLabel ? `${androidMirrorLabel} snapshot` : 'Android snapshot';
+      } else {
+        dataUrl = await snapshotMirrorStream(mirrorStream);
+        name = mirrorDevice ? `${mirrorDevice.label} snapshot` : 'iPhone snapshot';
+      }
+      updateProject({ screenshot: dataUrl });
+      setRecentScreenshots((current) => rememberRecentScreenshot(current, dataUrl, name));
+      notify('Snapshot applied to the device screen');
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Snapshot failed');
+    } finally {
+      setMirrorBusy(false);
+    }
   };
 
   const keyCameraAtPlayhead = () => {
@@ -1054,6 +1374,7 @@ export default function App() {
       height,
       fps: animation.fps,
       duration: animation.duration,
+      transparent: project.background === 'transparent',
       soundtrack: project.soundtrackData
         ? {
           dataUrl: project.soundtrackData,
@@ -1089,14 +1410,19 @@ export default function App() {
     && !hasAnimation(animation)
     && !hasCameraAnimation(animation);
 
+  const availableVideoFormats = videoFormatsForAlpha(isTransparent);
+
   const nextExportKind = (): ExportKind => {
+    const videoIds = new Set(availableVideoFormats.map((item) => item.id));
     const order = ALL_EXPORT_FORMATS
       .filter((item) => (
-        exportMediaMode === 'static' ? item.group === 'still' : item.group === 'video' && videoAllowed
+        exportMediaMode === 'static'
+          ? item.group === 'still'
+          : item.group === 'video' && videoAllowed && videoIds.has(item.id as VideoFormatId)
       ))
       .map((item) => item.id);
     const unused = order.find((kind) => !exportKinds.includes(kind));
-    return unused ?? order[0] ?? (exportMediaMode === 'static' ? 'png' : 'mp4');
+    return unused ?? order[0] ?? (exportMediaMode === 'static' ? 'png' : (isTransparent ? 'webm' : 'mp4'));
   };
 
   const setExportMediaModeSafe = (mode: ExportMediaMode) => {
@@ -1122,6 +1448,10 @@ export default function App() {
     if (patch.kind) {
       if (exportMediaMode === 'static' && !isStillExport(patch.kind)) return;
       if (exportMediaMode === 'animated' && !isVideoExport(patch.kind)) return;
+      if (isVideoExport(patch.kind) && isTransparent && patch.kind === 'mp4') {
+        notify('MP4 cannot keep transparency. Use WebM or GIF.');
+        return;
+      }
       if (isVideoExport(patch.kind) && !videoAllowed) {
         notify(upgradeCopy('MP4 / GIF export'));
         setLicenseOpen(true);
@@ -1452,6 +1782,30 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler);
   });
 
+  useEffect(() => {
+    if (!hasOpenProject) return;
+    const onPaste = (event: ClipboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      const svgText = readSvgTextFromPasteEvent(event);
+      const items = event.clipboardData?.items;
+      const hasImage = items
+        ? Array.from(items).some((item) => (
+          item.type.startsWith('image/')
+          || item.type === 'image/svg+xml'
+          || (item.kind === 'file' && (item.type.startsWith('image/') || item.type === 'image/svg+xml'))
+        ))
+        : Boolean(event.clipboardData?.files?.length);
+      if (!svgText && !hasImage) return;
+      event.preventDefault();
+      void pasteScreenFromClipboard(event);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  });
+
   const chooseScene = (scene: ScenePreset) => {
     updateProject({
       background: scene.id as BackgroundPreset,
@@ -1764,45 +2118,126 @@ export default function App() {
               </>
             ) : (
               <>
-                <div className="field-caption section-label">Screenshot</div>
-                <button className="upload-zone" onClick={() => imageInputRef.current?.click()}>
-                  <ImagePlus size={22} strokeWidth={1.5} />
-                  <strong>Import screenshot or video</strong>
-                  <span>PNG, JPG, WebP, MP4, WebM · Max 40 MB</span>
-                  <span className="upload-size-hint">
-                    {getDevice(project.deviceId).label}: {screenSizeLabel(getDevice(project.deviceId).screenSize)}
-                  </span>
-                </button>
-                {project.screenshot && (
-                  <div className="asset-card">
-                    <div className="asset-preview"><img src={project.screenshot} alt="Uploaded screen" /></div>
-                    <div>
-                      <strong>{isPlaceholderScreenshot(project.screenshot) ? 'Size guide' : 'Current screen'}</strong>
-                      <span>{screenSizeLabel(getDevice(project.deviceId).screenSize)} px</span>
+                <div className="assets-stack">
+                  <section className="assets-block" aria-label="Import">
+                    <div className="field-caption section-label assets-section-label">
+                      Import
+                      <span>{screenSizeLabel(getDevice(project.deviceId).screenSize)}</span>
                     </div>
-                    <button title="Replace screenshot" aria-label="Replace screenshot" onClick={() => imageInputRef.current?.click()}><ArrowLeftRight size={15} /></button>
-                  </div>
-                )}
-                {recentScreenshots.length > 0 && (
-                  <div className="left-quiet-block">
-                    <div className="field-caption section-label">Recent <span>{recentScreenshots.length}</span></div>
-                    <div className="recent-shot-row" role="list">
-                      {recentScreenshots.map((shot) => (
+                    <button
+                      type="button"
+                      className="upload-zone upload-zone-compact"
+                      onClick={() => imageInputRef.current?.click()}
+                      title={`Import screenshot or video for ${getDevice(project.deviceId).label}`}
+                    >
+                      <ImagePlus size={18} strokeWidth={1.6} />
+                      <div className="upload-zone-copy">
+                        <strong>Screenshot or video</strong>
+                        <span>PNG, JPG, WebP, SVG, MP4 · drop or browse</span>
+                      </div>
+                    </button>
+                    <div className="assets-secondary-row">
+                      <button
+                        type="button"
+                        className="assets-secondary-btn"
+                        onClick={() => svgInputRef.current?.click()}
+                        title="Import SVG and keep groups as layers for explode view"
+                      >
+                        <FileCode2 size={13} strokeWidth={1.7} />
+                        SVG layers
+                      </button>
+                      <button
+                        type="button"
+                        className="assets-secondary-btn"
+                        onClick={() => void pasteScreenFromClipboard()}
+                        title="Paste PNG or SVG from clipboard"
+                      >
+                        ⌘V Paste
+                      </button>
+                      <button
+                        type="button"
+                        className="assets-secondary-btn"
+                        onClick={() => setFigmaExploreOpen(true)}
+                        title="Open a Figma file link with a personal access token"
+                      >
+                        Figma
+                      </button>
+                    </div>
+                  </section>
+
+                  <section className="assets-block" aria-label="Phone Mirror">
+                    <div className="field-caption section-label assets-section-label">Phone Mirror</div>
+                    <div className={`phone-mirror-card ${mirrorStream ? 'is-live' : ''}`}>
+                      <div className="phone-mirror-meta">
+                        <strong>
+                          <MonitorSmartphone size={14} strokeWidth={1.7} />
+                          {mirrorStream
+                            ? (mirrorSource === 'android' ? 'Android' : 'iPhone')
+                            : 'Auto-detect'}
+                        </strong>
+                        <span title={mirrorStatusLabel}>{mirrorStatusLabel}</span>
+                      </div>
+                      <div className="phone-mirror-actions">
                         <button
-                          key={shot.id}
                           type="button"
-                          role="listitem"
-                          className={`recent-shot ${project.screenshot === shot.dataUrl ? 'is-active' : ''}`}
-                          title={`Apply ${shot.name}`}
-                          aria-label={`Apply ${shot.name}`}
-                          onClick={() => applyRecentScreenshot(shot)}
+                          className={`button ${mirrorStream ? 'mirror-active' : 'secondary-button'}`}
+                          disabled={mirrorBusy}
+                          onClick={() => void startPhoneMirroring()}
+                          title={mirrorStream ? 'Stop phone mirror' : 'Mirror the connected iPhone or Android over USB'}
                         >
-                          <img src={shot.dataUrl} alt="" />
+                          {mirrorBusy ? 'Connecting…' : mirrorStream ? 'Stop' : 'Phone Mirror'}
                         </button>
-                      ))}
+                        <button
+                          type="button"
+                          className="button secondary-button"
+                          disabled={!mirrorStream || mirrorBusy}
+                          onClick={() => void snapshotMirror()}
+                          title="Snapshot the live phone screen onto the mockup"
+                        >
+                          <Camera size={13} />
+                          Snapshot
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  </section>
+
+                  {project.screenshot && (
+                    <section className="assets-block" aria-label="Current screen">
+                      <div className="asset-card asset-card-compact">
+                        <div className="asset-preview"><img src={project.screenshot} alt="Uploaded screen" /></div>
+                        <div>
+                          <strong>{isPlaceholderScreenshot(project.screenshot) ? 'Size guide' : 'Current screen'}</strong>
+                          <span>{screenSizeLabel(getDevice(project.deviceId).screenSize)} px</span>
+                        </div>
+                        <button title="Replace screenshot" aria-label="Replace screenshot" onClick={() => imageInputRef.current?.click()}><ArrowLeftRight size={15} /></button>
+                      </div>
+                    </section>
+                  )}
+
+                  {recentScreenshots.length > 0 && (
+                    <section className="assets-block" aria-label="Recent screenshots">
+                      <div className="field-caption section-label assets-section-label">
+                        Recent
+                        <span>{recentScreenshots.length}</span>
+                      </div>
+                      <div className="recent-shot-row" role="list">
+                        {recentScreenshots.map((shot) => (
+                          <button
+                            key={shot.id}
+                            type="button"
+                            role="listitem"
+                            className={`recent-shot ${project.screenshot === shot.dataUrl ? 'is-active' : ''}`}
+                            title={`Apply ${shot.name}`}
+                            aria-label={`Apply ${shot.name}`}
+                            onClick={() => applyRecentScreenshot(shot)}
+                          >
+                            <img src={shot.dataUrl} alt="" />
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -1834,15 +2269,33 @@ export default function App() {
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }} onDrop={onDrop}>
           <div className={`canvas-stage ${sidePanelsHidden ? 'chrome-hidden' : timelineOpen ? 'with-timeline' : ''}`}>
             <div className="canvas-top-right">
-              <p className="canvas-usage-hint">
-                Hold <kbd>Space</kbd> + drag to pan · Drag the gimbal to rotate
-              </p>
+              {mirrorStream ? (
+                <div className="mirror-live-chip" role="status">
+                  <span className="mirror-live-dot" aria-hidden />
+                  {mirrorSource === 'android' ? 'Android' : 'iPhone'}
+                  {' · '}
+                  {mirrorSource === 'android'
+                    ? (androidMirrorLabel || 'device')
+                    : (mirrorDevice?.label || 'device')}
+                  <button type="button" disabled={mirrorBusy} onClick={() => void snapshotMirror()}>
+                    <Camera size={12} /> Snapshot
+                  </button>
+                  <button type="button" className="mirror-stop" disabled={mirrorBusy} onClick={() => { stopMirroring(); notify('Mirror stopped'); }}>
+                    Stop
+                  </button>
+                </div>
+              ) : (
+                <p className="canvas-usage-hint">
+                  Hold <kbd>Space</kbd> + drag to pan · Drag the gimbal to rotate
+                </p>
+              )}
             </div>
             <div className={`canvas-render ${project.background === 'transparent' ? 'transparent-grid' : ''}`}>
               <DeviceCanvas
                 project={displayProject}
                 captureRef={captureRef}
                 mediaPlaying={animPlaying}
+                liveStream={mirrorStream}
                 cameraPosition={animatedCamera}
                 onSelectDevice={onSelectDevice}
                 onClearSelection={() => setDeviceMenu(null)}
@@ -1921,6 +2374,29 @@ export default function App() {
                 >
                   <ImagePlus size={14} /> Replace screenshot
                 </button>
+                <button
+                  type="button"
+                  disabled={mirrorBusy}
+                  onClick={() => {
+                    setDeviceMenu(null);
+                    setLeftTab('assets');
+                    void startPhoneMirroring();
+                  }}
+                >
+                  <MonitorSmartphone size={14} /> {mirrorStream ? 'Stop Phone Mirror' : 'Phone Mirror'}
+                </button>
+                {mirrorStream && (
+                  <button
+                    type="button"
+                    disabled={mirrorBusy}
+                    onClick={() => {
+                      setDeviceMenu(null);
+                      void snapshotMirror();
+                    }}
+                  >
+                    <Camera size={14} /> Snapshot
+                  </button>
+                )}
                 <button type="button" onClick={duplicateSelectedDevice}><Copy size={14} /> Duplicate</button>
                 <button type="button" onClick={rotateSelectedDevice}><Rotate3D size={14} /> Snap +45°</button>
                 <button type="button" className="danger" onClick={deleteSelectedDevice} disabled={project.compositionMode === 'split' || project.devices.length <= 1}><Trash2 size={14} /> Remove</button>
@@ -1934,13 +2410,60 @@ export default function App() {
                 <span>Image or video · {screenSizeLabel(getDevice(project.deviceId).screenSize)}</span>
               </div>
             )}
-            <div className={`canvas-bottom-controls ${timelineOpen ? 'with-timeline' : ''}`}>
+            <div className="canvas-watermark"><Aperture size={16} /> Mockup Studio</div>
+          </div>
+          {!sidePanelsHidden && (
+            <div className={`workspace-bottom-chrome ${timelineOpen ? 'is-raised' : ''}`}>
+              <nav className="workspace-mode-dock" aria-label="Workspace mode">
+                <div className="workspace-mode-dock-tabs" role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={!timelineOpen}
+                    className={!timelineOpen ? 'is-active' : ''}
+                    onClick={() => { if (timelineOpen) toggleTimeline(); }}
+                  >
+                    Composition
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={timelineOpen}
+                    className={timelineOpen ? 'is-active' : ''}
+                    onClick={() => { if (!timelineOpen) toggleTimeline(); }}
+                  >
+                    Animate
+                  </button>
+                </div>
+              </nav>
               <div className="view-buttons" role="group" aria-label="Camera views">
                 <button type="button" onClick={() => updateProject({ cameraView: 'front' })} className={project.cameraView === 'front' ? 'active' : ''}>Front</button>
                 <button type="button" onClick={() => updateProject({ cameraView: 'left' })} className={project.cameraView === 'left' ? 'active' : ''}>Left</button>
                 <button type="button" onClick={() => updateProject({ cameraView: 'right' })} className={project.cameraView === 'right' ? 'active' : ''}>Right</button>
                 <button type="button" onClick={() => updateProject({ cameraView: 'top' })} className={project.cameraView === 'top' ? 'active' : ''}>Top</button>
                 <span className="view-buttons-divider" aria-hidden />
+                <button
+                  type="button"
+                  className={`view-mirror-btn ${mirrorStream ? 'active' : ''}`}
+                  title={mirrorStream ? 'Stop phone mirror' : 'Phone Mirror — auto-detect iPhone or Android'}
+                  aria-label={mirrorStream ? 'Stop phone mirror' : 'Phone Mirror'}
+                  disabled={mirrorBusy}
+                  onClick={() => void startPhoneMirroring()}
+                >
+                  <MonitorSmartphone size={14} />
+                </button>
+                {mirrorStream && (
+                  <button
+                    type="button"
+                    className="view-mirror-btn"
+                    title="Snapshot phone screen"
+                    aria-label="Snapshot phone screen"
+                    disabled={mirrorBusy}
+                    onClick={() => void snapshotMirror()}
+                  >
+                    <Camera size={14} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="view-reset-btn"
@@ -1952,34 +2475,6 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <div className="canvas-watermark"><Aperture size={16} /> Mockup Studio</div>
-          </div>
-          {!sidePanelsHidden && (
-            <nav
-              className={`workspace-mode-dock ${timelineOpen ? 'is-raised' : ''}`}
-              aria-label="Workspace mode"
-            >
-              <div className="workspace-mode-dock-tabs" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={!timelineOpen}
-                  className={!timelineOpen ? 'is-active' : ''}
-                  onClick={() => { if (timelineOpen) toggleTimeline(); }}
-                >
-                  Composition
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={timelineOpen}
-                  className={timelineOpen ? 'is-active' : ''}
-                  onClick={() => { if (!timelineOpen) toggleTimeline(); }}
-                >
-                  Animate
-                </button>
-              </div>
-            </nav>
           )}
           <AnimationTimeline
             open={timelineOpen}
@@ -2547,12 +3042,30 @@ export default function App() {
             </SettingsSection>
 
             <SettingsSection id="camera" title="Camera" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection}>
+              <div className="field-caption">Angle</div>
               <div className="camera-preset-grid">
                 {(['front', 'left', 'right', 'top'] as CameraView[]).map((view) => (
                   <button key={view} onClick={() => updateProject({ cameraView: view })}
                     className={project.cameraView === view ? 'selected' : ''}>{view[0].toUpperCase() + view.slice(1)}</button>
                 ))}
               </div>
+              <div className="field-caption" style={{ marginTop: 12 }}>Lens</div>
+              <div className="camera-preset-grid">
+                {CAMERA_LENSES.map((lens) => (
+                  <button
+                    key={lens.id}
+                    type="button"
+                    title={`${lens.label} ${lens.hint}`}
+                    onClick={() => updateProject({ cameraLens: lens.id })}
+                    className={(project.cameraLens ?? 'standard') === lens.id ? 'selected' : ''}
+                  >
+                    {lens.label}
+                  </button>
+                ))}
+              </div>
+              <p className="field-caption" style={{ marginTop: 8 }}>
+                {CAMERA_LENSES.find((l) => l.id === (project.cameraLens ?? 'standard'))?.hint ?? '~35 mm'} · changes perspective FOV
+              </p>
               <button type="button" className="button full-outline compact" style={{ marginTop: 10 }} onClick={keyCameraAtPlayhead}>
                 <Aperture size={14} /> Key camera at playhead
               </button>
@@ -2623,7 +3136,7 @@ export default function App() {
                       ? STILL_FORMATS.map((item) => (
                         <option key={item.id} value={item.id}>{item.label}</option>
                       ))
-                      : VIDEO_FORMATS.map((item) => (
+                      : availableVideoFormats.map((item) => (
                         <option key={item.id} value={item.id} disabled={!videoAllowed}>
                           {item.label}{!videoAllowed ? ' · Pro' : ''}
                         </option>
@@ -2655,6 +3168,11 @@ export default function App() {
             {exportNeedsAnimation && (
               <p className="export-panel-warning">Add timeline keyframes before exporting video.</p>
             )}
+            {exportMediaMode === 'animated' && isTransparent && (
+              <p className="export-panel-warning">
+                Transparent plate: WebM keeps alpha in Chrome / Firefox / Edge. GIF works everywhere. MP4 cannot keep transparency.
+              </p>
+            )}
             {exportProgress && <p className="export-panel-progress">{exportProgress}</p>}
             <button
               type="button"
@@ -2669,7 +3187,17 @@ export default function App() {
       </div>
       )}
 
-      <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,video/mp4,video/webm,video/quicktime" hidden onChange={onImageChange} />
+      <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,.svg,video/mp4,video/webm,video/quicktime" hidden onChange={onImageChange} />
+      <input
+        ref={svgInputRef}
+        type="file"
+        accept="image/svg+xml,.svg"
+        hidden
+        onChange={(event) => {
+          void importScreenMedia(event.currentTarget.files?.[0]).catch((e: Error) => notify(e.message));
+          event.currentTarget.value = '';
+        }}
+      />
       <input ref={projectInputRef} type="file" accept=".json,.mockup.json,application/json" hidden onChange={(e) => { void onProjectFile(e); }} />
 
       {hasOpenProject && exportOpen && (
@@ -2876,6 +3404,7 @@ export default function App() {
             <div className="help-rows">
               <div><MousePointer2 size={17} /><span>Drag on the preview to orbit the 3D phone. Scroll to zoom. Hold Space + drag to pan.</span></div>
               <div><ImagePlus size={17} /><span>Drop a screenshot onto the preview or select Assets → Import.</span></div>
+              <div><MonitorSmartphone size={17} /><span>Plug in an iPhone or Android over USB and use Phone Mirror — it auto-detects the device. Snapshot freezes the live screen onto the mockup.</span></div>
               <div><SlidersHorizontal size={17} /><span>Drag gizmo arrows to move the device, rings to rotate. Tune colour, lighting and backgrounds in Properties.</span></div>
               <div><Gauge size={17} /><span>Space play/pause · long-press & drag to multi-select keys · set Ease on selection · Delete removes selected.</span></div>
               <div><Command size={17} /><span>⌘S Save · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab (last tab → recent projects) · . hide panels.</span></div>
@@ -2946,6 +3475,23 @@ export default function App() {
         onClose={() => setLicenseOpen(false)}
         onChange={setLicense}
         onNotify={notify}
+      />
+      <FigmaExploreModal
+        open={figmaExploreOpen}
+        onClose={() => setFigmaExploreOpen(false)}
+        onNotify={notify}
+        onApply={(dataUrl, layerName) => {
+          applyScreenImage(dataUrl, layerName, `Applied “${layerName}” from Figma`);
+        }}
+      />
+      <SvgExplodeModal
+        open={svgExplodeModel != null}
+        model={svgExplodeModel}
+        onClose={() => setSvgExplodeModel(null)}
+        onNotify={notify}
+        onApply={(dataUrl, layerName) => {
+          applyScreenImage(dataUrl, layerName, `Applied “${layerName}” from SVG`);
+        }}
       />
       {toast && <div className="toast"><span className="toast-dot" /> {toast}<button aria-label="Dismiss notification" onClick={() => setToast(null)}><X size={14} /></button></div>}
     </div>

@@ -12,11 +12,13 @@ export type ScreenUvApply = (tex: THREE.Texture, original?: THREE.Texture | null
 /**
  * Paints image or video screen media onto a material's emissiveMap.
  * Registers a seeker so video export can sync frames to the timeline.
+ * Optional liveStream (USB iPhone mirror) takes priority over screenshot.
  */
 export function useScreenEmissiveMap({
   material,
   originalEmissiveMap,
   screenshot,
+  liveStream,
   width,
   height,
   inset,
@@ -26,6 +28,8 @@ export function useScreenEmissiveMap({
   material: THREE.MeshStandardMaterial | null;
   originalEmissiveMap?: THREE.Texture | null;
   screenshot: string | null;
+  /** Live USB / camera capture stream painted onto the screen */
+  liveStream?: MediaStream | null;
   width: number;
   height: number;
   inset?: ScreenInset;
@@ -41,7 +45,7 @@ export function useScreenEmissiveMap({
   useEffect(() => {
     if (!material) return undefined;
     let cancelled = false;
-    const kind = screenMediaKind(screenshot);
+    const kind = liveStream ? 'live' as const : screenMediaKind(screenshot);
 
     const ensureCanvas = () => {
       if (!canvasRef.current) {
@@ -107,12 +111,13 @@ export function useScreenEmissiveMap({
       const video = videoRef.current;
       if (!video) return;
       video.pause();
+      video.srcObject = null;
       video.removeAttribute('src');
       video.load();
       videoRef.current = null;
     };
 
-    if (kind === 'none' || !screenshot) {
+    if (kind === 'none' || (!screenshot && !liveStream)) {
       stopLoop();
       disposeVideo();
       material.emissiveMap = originalEmissiveMap ?? null;
@@ -126,7 +131,7 @@ export function useScreenEmissiveMap({
       };
     }
 
-    if (kind === 'image') {
+    if (kind === 'image' && screenshot) {
       stopLoop();
       disposeVideo();
       const image = new Image();
@@ -141,11 +146,11 @@ export function useScreenEmissiveMap({
       };
     }
 
-    // Video
+    // Live USB mirror or embedded video
     const video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
-    video.loop = true;
+    video.loop = kind !== 'live';
     video.preload = 'auto';
     video.crossOrigin = 'anonymous';
     videoRef.current = video;
@@ -162,7 +167,7 @@ export function useScreenEmissiveMap({
     const onReady = () => {
       if (cancelled) return;
       paintFromSource(video, video.videoWidth || width, video.videoHeight || height);
-      if (playing) {
+      if (kind === 'live' || playing) {
         void video.play().catch(() => { /* autoplay */ });
       } else {
         video.pause();
@@ -172,35 +177,41 @@ export function useScreenEmissiveMap({
     };
 
     video.addEventListener('loadeddata', onReady);
-    video.src = screenshot;
-    void video.load();
 
-    const unregister = registerScreenSeeker(async (time) => {
-      const v = videoRef.current;
-      if (!v) return;
-      v.pause();
-      await waitForVideoSeek(v, time);
-      paintFromSource(v, v.videoWidth || width, v.videoHeight || height);
-    });
+    let unregister: (() => void) | undefined;
+    if (kind === 'live' && liveStream) {
+      video.srcObject = liveStream;
+      void video.play().catch(() => { /* autoplay */ });
+    } else if (screenshot) {
+      video.src = screenshot;
+      void video.load();
+      unregister = registerScreenSeeker(async (time) => {
+        const v = videoRef.current;
+        if (!v) return;
+        v.pause();
+        await waitForVideoSeek(v, time);
+        paintFromSource(v, v.videoWidth || width, v.videoHeight || height);
+      });
+    }
 
     return () => {
       cancelled = true;
-      unregister();
+      unregister?.();
       stopLoop();
       video.removeEventListener('loadeddata', onReady);
       disposeVideo();
       texRef.current?.dispose();
       texRef.current = null;
     };
-  }, [material, originalEmissiveMap, screenshot, width, height, inset?.border, inset?.radius, applyUv, playing]);
+  }, [material, originalEmissiveMap, screenshot, liveStream, width, height, inset?.border, inset?.radius, applyUv, playing]);
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || screenMediaKind(screenshot) !== 'video') return;
+    if (!video || liveStream || screenMediaKind(screenshot) !== 'video') return;
     if (playing) {
       void video.play().catch(() => { /* autoplay */ });
     } else {
       video.pause();
     }
-  }, [playing, screenshot]);
+  }, [playing, screenshot, liveStream]);
 }
