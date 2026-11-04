@@ -39,6 +39,9 @@ export function SiteChrome({ children }: { children: ReactNode }) {
             <Link to="/privacy" className={location.pathname === '/privacy' ? 'is-active' : undefined}>
               Privacy
             </Link>
+            <Link to="/terms" className={location.pathname === '/terms' ? 'is-active' : undefined}>
+              Terms
+            </Link>
             <button type="button" className="nav-text-btn" onClick={() => setContactOpen(true)}>
               Contact
             </button>
@@ -58,6 +61,9 @@ export function SiteChrome({ children }: { children: ReactNode }) {
           <Link to="/workflow">Workflow</Link>
           <Link to="/pricing">Pricing</Link>
           <Link to="/privacy">Privacy</Link>
+          <Link to="/terms">Terms</Link>
+          <Link to="/credits">Credits</Link>
+          <Link to="/recover">Recover key</Link>
           <button type="button" className="footer-text-btn" onClick={() => setContactOpen(true)}>
             Contact
           </button>

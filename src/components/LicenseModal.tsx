@@ -15,6 +15,7 @@ import {
   planLabel,
   type LicenseState,
 } from '../lib/license';
+import { getCheckoutConfig } from '@shared/checkout';
 
 interface Props {
   open: boolean;
@@ -28,21 +29,34 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
   const [keyDraft, setKeyDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [buying, setBuying] = useState<PaidPlanId | null>(null);
+  const [activating, setActivating] = useState(false);
 
   if (!open) return null;
 
+  const creditsUrl = `${getCheckoutConfig().siteUrl}/credits`;
+  const termsUrl = `${getCheckoutConfig().siteUrl}/terms`;
+  const recoverUrl = `${getCheckoutConfig().siteUrl}/recover`;
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    const result = activateLicenseKey(keyDraft);
-    if (!result.ok) {
-      setError(result.error);
-      return;
-    }
-    setError(null);
-    setKeyDraft('');
-    onChange(result.state);
-    onNotify(`Activated ${planLabel(result.state.tier)}`);
-    onClose();
+    void (async () => {
+      setActivating(true);
+      const result = await activateLicenseKey(keyDraft, license);
+      setActivating(false);
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      setError(null);
+      setKeyDraft('');
+      onChange(result.state);
+      onNotify(
+        result.state.key?.startsWith('MS-UPDATE')
+          ? `Update Pass active until ${result.state.updatesUntil ? new Date(result.state.updatesUntil).toLocaleDateString() : '—'}`
+          : `Activated ${planLabel(result.state.tier)}`,
+      );
+      onClose();
+    })();
   };
 
   const onClear = () => {
@@ -64,6 +78,18 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
     } else {
       onNotify('Could not open checkout');
     }
+  };
+
+  const openExternal = async (url: string) => {
+    try {
+      if (window.mockupDesktop?.openExternal) {
+        await window.mockupDesktop.openExternal(url);
+        return;
+      }
+    } catch {
+      /* fall through */
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -152,17 +178,49 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
               id="license-key"
               value={keyDraft}
               onChange={(e) => { setKeyDraft(e.target.value); setError(null); }}
-              placeholder="MS-PRO-XXXXXX or MS-PROMAX-XXXXXX"
+              placeholder="MS-PRO.<payload>.<sig>"
               autoComplete="off"
               spellCheck={false}
             />
-            <button type="submit" className="button primary-button">Activate</button>
+            <button type="submit" className="button primary-button" disabled={activating}>
+              {activating ? 'Checking…' : 'Activate'}
+            </button>
           </div>
           {error && <p className="license-error">{error}</p>}
           <p className="license-hint">
-            After checkout, paste the key from your email. Format: <code>MS-PRO-ABC123</code>.
+            After checkout, paste the signed key from your email. Lost it?{' '}
+            <button type="button" className="license-inline-link" onClick={() => void openExternal(recoverUrl)}>
+              Recover key
+            </button>
+            . Random <code>MS-PRO-…</code> strings will not unlock Pro.
           </p>
+          {license.tier === 'pro_max' && (
+            <p className="license-hint">
+              Pro Max: activate on up to 2 Macs you own, or email support to transfer. See{' '}
+              <button type="button" className="license-inline-link" onClick={() => void openExternal(termsUrl)}>
+                Terms
+              </button>
+              .
+            </p>
+          )}
+          {license.tier === 'pro' && (
+            <p className="license-hint">
+              Need a second Mac? Upgrade to Pro Max for dual-Mac / transfer policy.
+            </p>
+          )}
         </form>
+
+        <p className="license-hint">
+          Device models are third-party CC BY assets —{' '}
+          <button type="button" className="license-inline-link" onClick={() => void openExternal(creditsUrl)}>
+            Credits
+          </button>
+          {' · '}
+          <button type="button" className="license-inline-link" onClick={() => void openExternal(termsUrl)}>
+            Terms of use
+          </button>
+          .
+        </p>
 
         <div className="export-modal-actions">
           {license.tier !== 'free' && (

@@ -72,6 +72,11 @@ function b64UrlToBytes(value: string): Uint8Array {
   return out;
 }
 
+/** Copy into a standalone ArrayBuffer — required by some SubtleCrypto backends. */
+function asBufferSource(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
 function prefixProduct(prefix: string): LicenseProduct | null {
   if (prefix === 'MS-PROMAX') return 'pro_max';
   if (prefix === 'MS-PRO') return 'pro';
@@ -93,7 +98,7 @@ function getVerifyKey(): Promise<CryptoKey> {
   if (!verifyKeyPromise) {
     verifyKeyPromise = crypto.subtle.importKey(
       'spki',
-      decodeSpki(),
+      asBufferSource(decodeSpki()),
       { name: 'Ed25519' },
       false,
       ['verify'],
@@ -138,8 +143,8 @@ export async function parseLicenseKey(
     const ok = await crypto.subtle.verify(
       'Ed25519',
       cryptoKey,
-      b64UrlToBytes(match[3]),
-      payloadBytes,
+      asBufferSource(b64UrlToBytes(match[3])),
+      asBufferSource(payloadBytes),
     );
     if (!ok) return null;
   } catch {

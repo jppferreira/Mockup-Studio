@@ -16,7 +16,8 @@ export function FeaturesPage() {
           <p className="section-kicker">Features</p>
           <h1>Everything in the studio.</h1>
           <p className="page-lede">
-            Devices, light, motion, and export — arranged so you can stay with the shot instead of hunting panels.
+            Devices, custom backgrounds, light, motion, templates, props, and export — arranged so you can stay with the
+            shot instead of hunting panels.
           </p>
         </header>
 

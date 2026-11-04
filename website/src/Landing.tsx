@@ -108,14 +108,8 @@ export function Landing() {
           </div>
 
           <div className="hero-shot-wrap">
-            <div className="hero-aurora" aria-hidden style={parallax.layer(0.05, 16, 520)}>
-              <span className="hero-aurora-band hero-aurora-a" />
-              <span className="hero-aurora-band hero-aurora-b" />
-              <span className="hero-aurora-band hero-aurora-c" />
-              <span className="hero-aurora-band hero-aurora-d" />
-            </div>
             <div className="hero-shot-cut">
-              <AppScreenshot style={parallax.layer(0.22, 10, 560)} />
+              <AppScreenshot style={parallax.layer(-0.22, 0, 560)} />
             </div>
           </div>
         </section>
@@ -130,8 +124,8 @@ export function Landing() {
               <p className="section-kicker">Product</p>
               <h2>Everything you need to finish the shot.</h2>
               <p className="features-lede">
-                Devices, motion, templates, export, and local files — arranged like a modern creative tool, not a render
-                farm.
+                Devices, custom backgrounds, light, motion, templates, props, export, and local files — arranged like a
+                modern creative tool, not a render farm.
               </p>
             </div>
             <ul className="feature-grid">
@@ -261,6 +255,7 @@ export function Landing() {
           <Link to="/privacy">Privacy</Link>
           <Link to="/terms">Terms</Link>
           <Link to="/credits">Credits</Link>
+          <Link to="/recover">Recover key</Link>
           <button type="button" className="footer-text-btn" onClick={() => setContactOpen(true)}>
             Contact
           </button>
