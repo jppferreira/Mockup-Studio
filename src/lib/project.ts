@@ -191,6 +191,9 @@ export function validateProject(value: unknown): MockupProject {
       : input.edgeBlurEnabled === true,
     edgeBlurAmount: number(input.edgeBlurAmount, DEFAULT_PROJECT.edgeBlurAmount, 4, 64),
     cameraView: ['front', 'left', 'right', 'top'].includes(String(input.cameraView)) ? input.cameraView! : 'front',
+    cameraLens: (['ultrawide', 'wide', 'standard', 'telephoto'] as const).includes(input.cameraLens as never)
+      ? (input.cameraLens as MockupProject['cameraLens'])
+      : DEFAULT_PROJECT.cameraLens,
     compositionMode,
     devices,
     selectedDeviceId,

@@ -40,11 +40,25 @@ export const FEATURES = [
       'Built-in device library covers current iPhone, Pixel, and Galaxy models. Tune glass reflection, body finish, and studio lighting until the frame feels finished — without hunting for stock mockups.',
   },
   {
+    icon: 'devices' as const,
+    title: 'iPhone Mirror',
+    copy: 'Plug in your iPhone over USB and mirror the live screen onto the 3D mockup — then Snapshot when the frame is right.',
+    detail:
+      'No AirDrop round-trips. Connect with a data cable, unlock and Trust the Mac, hit Mirror, and the phone screen streams onto the device. Snapshot freezes that frame as your screenshot.',
+  },
+  {
+    icon: 'devices' as const,
+    title: 'Android Mirror',
+    copy: 'USB-debug a Pixel or Samsung, mirror the screen over ADB, then Snapshot a full-resolution screencap onto the mockup.',
+    detail:
+      'Prototype path uses Android Debug Bridge screencap. Pixel and Samsung are preferred first. Live preview is a scaled stream; Snapshot pulls the full phone resolution. Requires the Mac app and platform-tools.',
+  },
+  {
     icon: 'backgrounds' as const,
     title: 'Customizable backgrounds',
     copy: 'Swap studio presets, dial your own gradients, go transparent, or drop in a custom backdrop that matches the brand.',
     detail:
-      'Built-in scenes cover soft studio, midnight, and more. Edit gradient stops, save custom colors, or export with a transparent plate for design tools.',
+      'Built-in scenes cover soft studio, midnight, and more. Edit gradient stops, save custom colors, or export a transparent plate — PNG/WebP stills, or WebM/GIF video with alpha.',
   },
   {
     icon: 'lighting' as const,
@@ -93,10 +107,10 @@ export const FEATURES = [
 export const STEPS = [
   {
     n: '01',
-    title: 'Drop a screenshot',
-    copy: 'PNG, JPG, or WebP onto the screen. Templates get you composing in seconds.',
+    title: 'Drop a screenshot — or Mirror',
+    copy: 'PNG, JPG, or WebP onto the screen. Or plug in an iPhone and mirror it live.',
     detail:
-      'Drag media onto the device screen or pick a file. Start from a template if you want a layout already framed for store or social sizes.',
+      'Drag media onto the device screen, pick a file, or use USB Mirror + Snapshot. Start from a template if you want a layout already framed for store or social sizes.',
   },
   {
     n: '02',

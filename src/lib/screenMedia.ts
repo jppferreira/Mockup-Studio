@@ -35,6 +35,101 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+const CLIPBOARD_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/svg+xml'];
+
+function isClipboardImageType(type: string) {
+  return CLIPBOARD_IMAGE_TYPES.some((allowed) => type === allowed || type.startsWith(`${allowed};`));
+}
+
+async function rasterizeSvgToPngDataUrl(svgText: string): Promise<string> {
+  const blob = new Blob([svgText], { type: 'image/svg+xml' });
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Could not read SVG from clipboard'));
+      img.src = objectUrl;
+    });
+    const width = Math.max(1, Math.round(image.naturalWidth || image.width || 1));
+    const height = Math.max(1, Math.round(image.naturalHeight || image.height || 1));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Could not rasterize clipboard SVG');
+    ctx.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL('image/png');
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function fileOrBlobToScreenDataUrl(blob: Blob, nameHint = 'clipboard.png'): Promise<{ dataUrl: string; name: string }> {
+  if (blob.type.includes('svg')) {
+    const svgText = await blob.text();
+    return { dataUrl: await rasterizeSvgToPngDataUrl(svgText), name: nameHint.replace(/\.svg$/i, '.png') };
+  }
+  const file = blob instanceof File
+    ? blob
+    : new File([blob], nameHint, { type: blob.type || 'image/png' });
+  if (!isImageFile(file) && !file.type.startsWith('image/')) {
+    throw new Error('Clipboard does not contain an image');
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    throw new Error('Use an image under 20 MB.');
+  }
+  return { dataUrl: await readFileAsDataUrl(file), name: file.name || nameHint };
+}
+
+/** Read an image from a paste event — works with Figma “Copy as PNG” / Cmd+C. */
+export async function readImageFromPasteEvent(event: ClipboardEvent): Promise<{ dataUrl: string; name: string } | null> {
+  const items = event.clipboardData?.items;
+  if (items) {
+    for (const item of Array.from(items)) {
+      if (!isClipboardImageType(item.type) && item.kind !== 'file') continue;
+      if (item.kind === 'file' || item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (!file) continue;
+        if (!isImageFile(file) && !file.type.startsWith('image/') && !file.type.includes('svg')) continue;
+        return fileOrBlobToScreenDataUrl(file, file.name || 'figma-paste.png');
+      }
+    }
+  }
+
+  const files = event.clipboardData?.files;
+  if (files) {
+    for (const file of Array.from(files)) {
+      if (!isImageFile(file) && !file.type.startsWith('image/') && !file.type.includes('svg')) continue;
+      return fileOrBlobToScreenDataUrl(file, file.name || 'figma-paste.png');
+    }
+  }
+
+  return null;
+}
+
+/** Async clipboard read (button / when paste event has no image payload). */
+export async function readImageFromClipboard(): Promise<{ dataUrl: string; name: string }> {
+  if (!navigator.clipboard?.read) {
+    throw new Error('Paste with ⌘V — copy a frame in Figma first (Copy as PNG).');
+  }
+  const items = await navigator.clipboard.read();
+  for (const item of items) {
+    const type = item.types.find((candidate) => isClipboardImageType(candidate));
+    if (!type) continue;
+    const blob = await item.getType(type);
+    const ext = type.includes('jpeg') || type.includes('jpg')
+      ? 'jpg'
+      : type.includes('webp')
+        ? 'webp'
+        : type.includes('svg')
+          ? 'svg'
+          : 'png';
+    return fileOrBlobToScreenDataUrl(blob, `figma-paste.${ext}`);
+  }
+  throw new Error('No image on the clipboard. In Figma: select a frame → Copy as PNG, then paste here.');
+}
+
 export function coverDraw(
   ctx: CanvasRenderingContext2D,
   source: CanvasImageSource,

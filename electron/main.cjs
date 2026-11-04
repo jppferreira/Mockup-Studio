@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, systemPreferences } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { registerAndroidMirrorIpc, stopAndroidMirrorSession } = require('./androidMirror.cjs');
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -35,7 +36,46 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 }
 
+function allowMediaPermission(permission) {
+  return permission === 'media' || permission === 'mediaKeySystem' || permission === 'display-capture';
+}
+
 app.whenReady().then(() => {
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(allowMediaPermission(permission));
+  });
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowMediaPermission(permission));
+
+  ipcMain.handle('media:ensureCameraAccess', async () => {
+    if (process.platform !== 'darwin') {
+      return { granted: true };
+    }
+    try {
+      const status = systemPreferences.getMediaAccessStatus('camera');
+      if (status === 'granted') return { granted: true, status };
+      if (status === 'denied' || status === 'restricted') {
+        return {
+          granted: false,
+          status,
+          reason: 'Camera access is blocked. Open System Settings → Privacy & Security → Camera and enable Mockup Studio.',
+        };
+      }
+      const granted = await systemPreferences.askForMediaAccess('camera');
+      return {
+        granted,
+        status: granted ? 'granted' : 'denied',
+        reason: granted
+          ? undefined
+          : 'Camera access was not granted. Enable it in System Settings → Privacy & Security → Camera.',
+      };
+    } catch (err) {
+      return {
+        granted: false,
+        reason: err instanceof Error ? err.message : 'Could not request camera access',
+      };
+    }
+  });
+
   ipcMain.handle('project:save', async (_event, { contents, proposedName }) => {
     if (typeof contents !== 'string' || contents.length > 45_000_000) throw new Error('Invalid project size');
     const { canceled, filePath } = await dialog.showSaveDialog({
@@ -108,6 +148,70 @@ app.whenReady().then(() => {
     return { ok: true };
   });
 
+  ipcMain.handle('figma:request', async (_event, { apiPath, token }) => {
+    if (typeof token !== 'string' || token.length < 8 || token.length > 512) {
+      throw new Error('Invalid Figma token');
+    }
+    if (typeof apiPath !== 'string' || !apiPath.startsWith('/') || apiPath.length > 2048) {
+      throw new Error('Invalid Figma path');
+    }
+    if (apiPath.includes('://') || apiPath.includes('..')) {
+      throw new Error('Invalid Figma path');
+    }
+    const url = `https://api.figma.com/v1${apiPath}`;
+    const response = await fetch(url, {
+      headers: {
+        'X-Figma-Token': token,
+        Accept: 'application/json',
+      },
+    });
+    const body = await response.text();
+    if (body.length > 40_000_000) throw new Error('Figma response is too large');
+    return { status: response.status, body };
+  });
+
+  registerAndroidMirrorIpc(ipcMain);
+
+  ipcMain.handle('figma:fetchImage', async (_event, { imageUrl, token }) => {
+    if (typeof imageUrl !== 'string' || imageUrl.length > 4096) {
+      return { ok: false, error: 'Invalid image URL' };
+    }
+    let parsed;
+    try {
+      parsed = new URL(imageUrl);
+    } catch {
+      return { ok: false, error: 'Invalid image URL' };
+    }
+    if (parsed.protocol !== 'https:') {
+      return { ok: false, error: 'Only HTTPS image URLs are allowed' };
+    }
+    const host = parsed.hostname.toLowerCase();
+    const allowed =
+      host === 'figma.com'
+      || host.endsWith('.figma.com')
+      || host.endsWith('.figma.site')
+      || host.endsWith('.amazonaws.com')
+      || host.endsWith('.cloudfront.net');
+    if (!allowed) {
+      return { ok: false, error: 'Image host is not allowed' };
+    }
+    const headers = { Accept: 'image/*,*/*' };
+    if (typeof token === 'string' && token.length >= 8 && token.length <= 512) {
+      headers['X-Figma-Token'] = token;
+    }
+    const response = await fetch(parsed.toString(), { headers });
+    if (!response.ok) {
+      return { ok: false, error: `Image download failed (${response.status})` };
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > 40_000_000) {
+      return { ok: false, error: 'Exported image is too large' };
+    }
+    const contentType = (response.headers.get('content-type') || 'image/png').split(';')[0];
+    const mime = contentType.startsWith('image/') ? contentType : 'image/png';
+    return { ok: true, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` };
+  });
+
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -132,6 +236,10 @@ function mediaFilters(ext, mimeType) {
   if (ext === 'webp') return [{ name: 'WebP Image', extensions: ['webp'] }];
   return [{ name: mimeType || 'Media', extensions: [ext] }];
 }
+
+app.on('before-quit', () => {
+  stopAndroidMirrorSession();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

@@ -30,6 +30,8 @@ The output will be under `release/`, including an Apple Silicon `.dmg` and a `.z
 - Procedurally modelled smartphone with metallic frame, camera details and screen cutout
 - Interactive 3D orbit and zoom; camera presets and rotation/scale sliders
 - Screenshot replacement from PNG/JPG/WebP via file picker or drag/drop
+- iPhone / iPad USB screen Mirror (macOS camera capture) with Snapshot onto the 3D device
+- Android USB Mirror prototype via ADB screencap (Pixel & Samsung preferred) with full-res Snapshot
 - Four device finishes, five background presets, lighting adjustment
 - High-resolution WebGL PNG export: TikTok/Shorts, Reels, Instagram Feed, YouTube, Apple App Store, Google Play sizes
 - Save/open local `.mockup.json` project, including screenshot image data

@@ -13,9 +13,9 @@ import ProceduralDevice from './ProceduralDevice';
 import RotationBall, { type GizmoMode } from './RotationBall';
 import SceneProps from './SceneProps';
 import {
-  DEVICE_COLORS,
-  type BackgroundPreset, type CameraView, type DeviceColor, type DeviceInstance, type GradientColors,
-  type MockupProject, type Vec3,
+  DEVICE_COLORS, cameraLensFov,
+  type BackgroundPreset, type CameraLens, type CameraView, type DeviceColor, type DeviceInstance,
+  type GradientColors, type MockupProject, type Vec3,
 } from '../types';
 
 const SceneEnvMapContext = createContext<THREE.Texture | null>(null);
@@ -41,6 +41,8 @@ interface Props {
   gizmoMode?: GizmoMode;
   /** Preview playback — keeps screen videos moving with the timeline */
   mediaPlaying?: boolean;
+  /** Live USB iPhone/iPad mirror stream painted onto device screens */
+  liveStream?: MediaStream | null;
   /** Evaluated camera position when camera tracks are active */
   cameraPosition?: Vec3 | null;
   onSelectDevice?: (payload: DeviceSelectPayload) => void;
@@ -364,6 +366,7 @@ function GltfDeviceContent({
   url,
   deviceId,
   screenshot,
+  liveStream,
   glassReflection,
   deviceColor,
   clayMode,
@@ -372,6 +375,7 @@ function GltfDeviceContent({
   url: string;
   deviceId: string;
   screenshot: string | null;
+  liveStream?: MediaStream | null;
   glassReflection: number;
   deviceColor: DeviceColor;
   clayMode: boolean;
@@ -473,6 +477,7 @@ function GltfDeviceContent({
     material: screen?.material ?? null,
     originalEmissiveMap: screen?.originalEmissiveMap ?? null,
     screenshot,
+    liveStream,
     width: device.screenSize.width,
     height: device.screenSize.height,
     inset: device.screenInset,
@@ -486,6 +491,7 @@ function GltfDeviceContent({
 function DeviceModelView({
   instance,
   screenshot,
+  liveStream,
   selected,
   onSelect,
   onGizmoObject,
@@ -496,6 +502,7 @@ function DeviceModelView({
 }: {
   instance: DeviceInstance;
   screenshot: string | null;
+  liveStream?: MediaStream | null;
   selected: boolean;
   onSelect?: (payload: DeviceSelectPayload) => void;
   onGizmoObject?: (object: THREE.Object3D | null) => void;
@@ -558,6 +565,7 @@ function DeviceModelView({
         <ProceduralDevice
           device={device}
           screenshot={screenshot}
+          liveStream={liveStream}
           finishHex={(DEVICE_COLORS.find((c) => c.id === deviceColor) ?? DEVICE_COLORS[0]).hex}
           clayMode={clayMode}
           mediaPlaying={mediaPlaying}
@@ -568,6 +576,7 @@ function DeviceModelView({
           url={device.url}
           deviceId={device.id}
           screenshot={screenshot}
+          liveStream={liveStream}
           glassReflection={instance.glassReflection ?? 0.55}
           deviceColor={deviceColor}
           clayMode={clayMode}
@@ -734,16 +743,26 @@ function isTypingTarget(target: EventTarget | null) {
 
 function CameraRig({
   view,
+  lens,
   split,
   animatedPosition,
 }: {
   view: CameraView;
+  lens: CameraLens;
   split: boolean;
   animatedPosition?: Vec3 | null;
 }) {
   const { camera, gl } = useThree();
   const controls = useRef<any>(null);
   const [spacePan, setSpacePan] = useState(false);
+  const fov = cameraLensFov(lens);
+
+  useEffect(() => {
+    if (camera instanceof THREE.PerspectiveCamera && camera.fov !== fov) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
+  }, [camera, fov]);
 
   useEffect(() => {
     if (animatedPosition) {
@@ -966,6 +985,7 @@ function SceneDevices({
   project,
   gizmoMode,
   mediaPlaying,
+  liveStream,
   onSelectDevice,
   onRotateDevice,
   onMoveDevice,
@@ -974,6 +994,7 @@ function SceneDevices({
   project: MockupProject;
   gizmoMode: GizmoMode;
   mediaPlaying?: boolean;
+  liveStream?: MediaStream | null;
   onSelectDevice?: (payload: DeviceSelectPayload) => void;
   onRotateDevice?: (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
   onMoveDevice?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
@@ -1004,6 +1025,7 @@ function SceneDevices({
           key={`${instance.id}-${instance.deviceId}`}
           instance={instance}
           screenshot={project.screenshot}
+          liveStream={liveStream}
           selected={instance.id === selectedId}
           onSelect={onSelectDevice}
           gizmoDraggingRef={gizmoDraggingRef}
@@ -1041,6 +1063,7 @@ export default function DeviceCanvas({
   captureRef,
   gizmoMode = 'rotate',
   mediaPlaying = false,
+  liveStream = null,
   cameraPosition = null,
   onSelectDevice,
   onClearSelection,
@@ -1109,6 +1132,7 @@ export default function DeviceCanvas({
             project={project}
             gizmoMode={gizmoMode}
             mediaPlaying={mediaPlaying}
+            liveStream={liveStream}
             onSelectDevice={onSelectDevice}
             onRotateDevice={onRotateDevice}
             onMoveDevice={onMoveDevice}
@@ -1128,6 +1152,7 @@ export default function DeviceCanvas({
       )}
       <CameraRig
         view={project.cameraView}
+        lens={project.cameraLens ?? 'standard'}
         split={project.compositionMode === 'split'}
         animatedPosition={cameraPosition}
       />

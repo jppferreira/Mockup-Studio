@@ -58,6 +58,9 @@
     ],
     "mac": {
       "category": "public.app-category.graphics-design",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Mockup Studio uses camera access to mirror your iPhone or iPad screen over USB into the 3D mockup."
+      },
       "target": [
         {
           "target": "dmg",
