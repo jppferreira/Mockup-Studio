@@ -95,6 +95,7 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
         screenshot: shot,
         deviceColor: normalizeDeviceColor(item.deviceColor, projectColor),
         clayMode: typeof item.clayMode === 'boolean' ? item.clayMode : projectClay,
+        lidOpen: number(item.lidOpen, 1, 0, 1),
       });
     });
   }
@@ -223,7 +224,11 @@ export function validateProject(value: unknown): MockupProject {
     overlays,
     rotation: { ...selected.rotation },
     scale: selected.scale,
-    lightIntensity: number(input.lightIntensity, 2.5, 0.5, 5),
+    lightIntensity: number(input.lightIntensity, DEFAULT_PROJECT.lightIntensity, 0.5, 5),
+    lightPosition: vec3(input.lightPosition, DEFAULT_PROJECT.lightPosition),
+    lightColor: typeof input.lightColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(input.lightColor)
+      ? input.lightColor
+      : DEFAULT_PROJECT.lightColor,
     fillIntensity: number(input.fillIntensity, DEFAULT_PROJECT.fillIntensity, 0, 2.5),
     shadowSoftness: number(input.shadowSoftness, DEFAULT_PROJECT.shadowSoftness, 0.2, 8),
     shadowOpacity: number(input.shadowOpacity, DEFAULT_PROJECT.shadowOpacity, 0, 0.85),

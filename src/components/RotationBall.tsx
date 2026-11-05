@@ -6,8 +6,15 @@ import type { Vec3 } from '../types';
 
 export type GizmoMode = 'rotate' | 'translate';
 
+export type GizmoTargets = {
+  /** Outer pivot — translate only. */
+  position: THREE.Object3D;
+  /** Inner pivot — rotate / scale. */
+  rotation: THREE.Object3D;
+};
+
 interface Props {
-  object: THREE.Object3D | null;
+  targets: GizmoTargets | null;
   active: boolean;
   mode: GizmoMode;
   onRotate: (rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
@@ -25,8 +32,7 @@ type ControlsHandle = THREE.Object3D & {
 
 /**
  * Clean up picker planes; fatten translate arrows only.
- * Do NOT non-uniform-scale rotate rings — that warps hit targets and makes
- * axis grabs feel random.
+ * Do NOT non-uniform-scale rotate rings — that warps hit targets.
  */
 function styleGizmo(controls: ControlsHandle | null | undefined, kind: Tool) {
   if (!controls) return;
@@ -40,12 +46,6 @@ function styleGizmo(controls: ControlsHandle | null | undefined, kind: Tool) {
       || name.includes('Plane')
       || (child as THREE.Object3D & { isTransformControlsPlane?: boolean }).isTransformControlsPlane;
     if (isPickerPlane) {
-      child.visible = false;
-      return;
-    }
-
-    // Screen-space "E" free-rotate torus fights precise per-axis spins — hide it.
-    if (kind === 'rotate' && (name === 'E' || name.endsWith('E'))) {
       child.visible = false;
       return;
     }
@@ -106,7 +106,6 @@ function readRotation(object: THREE.Object3D): Vec3 {
   const euler = new THREE.Euler().setFromQuaternion(object.quaternion, 'XYZ');
   const toDeg = (rad: number) => {
     let deg = THREE.MathUtils.radToDeg(rad);
-    // Wrap to (-180, 180] so inspector / clamps stay continuous.
     deg = ((deg + 180) % 360 + 360) % 360 - 180;
     return Number(deg.toFixed(1));
   };
@@ -122,12 +121,11 @@ function readPosition(object: THREE.Object3D): Vec3 {
 }
 
 /**
- * Spline-style gizmo: rotation rings + translate arrows.
- * One tool mutates at a time; rotation commits on pointer-up so TransformControls
- * can spin in quaternion space without Euler writeback fighting mid-drag.
+ * Spline-style gizmo: rotation rings + translate arrows on separate pivots so
+ * the two TransformControls never fight over the same Object3D.
  */
 export default function RotationBall({
-  object,
+  targets,
   active,
   mode,
   onRotate,
@@ -140,21 +138,21 @@ export default function RotationBall({
   const [ready, setReady] = useState(false);
   const [dragTool, setDragTool] = useState<Tool | null>(null);
   const dragToolRef = useRef<Tool | null>(null);
-  const poseLockRef = useRef<{ rotation: THREE.Euler; position: THREE.Vector3 } | null>(null);
   const orbit = controls as unknown as { enabled: boolean } | null;
   const orbitRef = useRef(orbit);
   orbitRef.current = orbit;
 
+  const positionObject = targets?.position ?? null;
+  const rotationObject = targets?.rotation ?? null;
+
   useEffect(() => {
-    setReady(Boolean(object) && active);
+    setReady(Boolean(targets) && active);
     dragToolRef.current = null;
-    poseLockRef.current = null;
     setDragTool(null);
-  }, [object, active]);
+  }, [targets, active]);
 
   useEffect(() => () => {
     dragToolRef.current = null;
-    poseLockRef.current = null;
     if (orbitRef.current) orbitRef.current.enabled = true;
     onDraggingChange?.(false);
   }, [onDraggingChange]);
@@ -165,15 +163,14 @@ export default function RotationBall({
       styleGizmo(rotateRef.current, 'rotate');
       styleGizmo(translateRef.current, 'translate');
       if (!dragToolRef.current) {
-        // Prefer the active UI mode for picking, but keep the other tool available.
         setControlsEnabled(translateRef.current, true);
         setControlsEnabled(rotateRef.current, true);
       }
     });
     return () => cancelAnimationFrame(id);
-  }, [ready, mode, object, dragTool]);
+  }, [ready, mode, targets, dragTool]);
 
-  if (!ready || !object) return null;
+  if (!ready || !positionObject || !rotationObject) return null;
 
   const beginDrag = (tool: Tool) => {
     if (dragToolRef.current && dragToolRef.current !== tool) return;
@@ -189,27 +186,16 @@ export default function RotationBall({
       setControlsEnabled(translateRef.current, false);
       setControlsEnabled(rotateRef.current, true);
     }
-    poseLockRef.current = {
-      rotation: object.rotation.clone(),
-      position: object.position.clone(),
-    };
   };
 
   const endDrag = (tool: Tool) => {
     if (dragToolRef.current && dragToolRef.current !== tool) return;
     if (tool === 'translate') {
-      const lock = poseLockRef.current;
-      if (lock) object.rotation.copy(lock.rotation);
-      // Record keys only on pointer-up — mid-drag onMove is live pose only.
-      onMove(readPosition(object), { recordKeys: true });
+      onMove(readPosition(positionObject), { recordKeys: true });
     } else {
-      const lock = poseLockRef.current;
-      if (lock) object.position.copy(lock.position);
-      // Final commit after quaternion drag (keys recorded here, not on every frame).
-      onRotate(readRotation(object), { recordKeys: true });
+      onRotate(readRotation(rotationObject), { recordKeys: true });
     }
     dragToolRef.current = null;
-    poseLockRef.current = null;
     setDragTool(null);
     setControlsEnabled(translateRef.current, true);
     setControlsEnabled(rotateRef.current, true);
@@ -221,14 +207,13 @@ export default function RotationBall({
   const rotateEnabled = dragTool === null || dragTool === 'rotate';
 
   const translateSize = mode === 'translate' || dragTool === 'translate' ? 2.55 : 2.35;
-  // Larger rings for hit area without mesh.scale distortion.
   const rotateSize = mode === 'rotate' || dragTool === 'rotate' ? 1.9 : 1.7;
 
   return (
     <>
       <TransformControls
         ref={rotateRef as never}
-        object={object}
+        object={rotationObject}
         mode="rotate"
         size={rotateSize}
         space="local"
@@ -240,15 +225,12 @@ export default function RotationBall({
         onMouseUp={() => endDrag('rotate')}
         onObjectChange={() => {
           if (dragToolRef.current !== 'rotate') return;
-          // Keep position pinned; live-push Euler so linked dual panes stay in sync mid-drag.
-          const lock = poseLockRef.current;
-          if (lock) object.position.copy(lock.position);
-          onRotate(readRotation(object), { recordKeys: false });
+          onRotate(readRotation(rotationObject), { recordKeys: false });
         }}
       />
       <TransformControls
         ref={translateRef as never}
-        object={object}
+        object={positionObject}
         mode="translate"
         size={translateSize}
         space="world"
@@ -260,10 +242,7 @@ export default function RotationBall({
         onMouseUp={() => endDrag('translate')}
         onObjectChange={() => {
           if (dragToolRef.current !== 'translate') return;
-          const lock = poseLockRef.current;
-          if (lock) object.rotation.copy(lock.rotation);
-          // Live pose only — writing keyframes every frame caused an anim feedback loop.
-          onMove(readPosition(object), { recordKeys: false });
+          onMove(readPosition(positionObject), { recordKeys: false });
         }}
       />
     </>

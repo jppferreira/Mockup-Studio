@@ -1,0 +1,17 @@
+<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="381" height="180" viewBox="0 0 381 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="New project / Illustration">
+<rect width="381" height="180" rx="12" fill="url(#paint0_linear_0_33)"/>
+<circle id="Halo 1" opacity="0.4" cx="195" cy="80" r="61" fill="#286A55"/>
+<circle id="Halo 2" opacity="0.22" cx="196.5" cy="80.5" r="41.5" fill="#3B9975"/>
+<circle id="Add new" cx="191" cy="93" r="27" fill="#5CECB6"/>
+<g id="Icon / plus">
+<path id="Vector" d="M191 85.4167V93M191 93V100.583M191 93H183.417M191 93H198.583" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke="#0E2A24"/>
+</g>
+</g>
+<defs>
+<linearGradient id="paint0_linear_0_33" x1="0" y1="90" x2="381" y2="90" gradientUnits="userSpaceOnUse">
+<stop stop-color="#1B3430"/>
+<stop offset="1" stop-color="#164A3D"/>
+</linearGradient>
+</defs>
+</svg>

@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   Diamond, Gauge, KeyRound, Music2, PanelBottomClose, PanelBottomOpen, Pause, Play, Plus,
-  Repeat, SkipBack, Sparkles, Trash2, X, ZoomIn, ZoomOut,
+  Repeat, SkipBack, Sparkles, Square, Trash2, X, ZoomIn, ZoomOut,
 } from 'lucide-react';
 import {
   createTrack,
-  formatTimecode,
   moveKeyframesByDelta,
   readProperty,
   removeKeyframes,
@@ -143,21 +142,26 @@ type MusicDrag =
 
 type KeyRef = { trackId: string; keyframeId: string };
 
-const TRACK_COLORS: Record<AnimProperty, string> = {
-  'rotation.x': '#ff5a5a',
-  'rotation.y': '#5dff6e',
-  'rotation.z': '#4db8ff',
-  'position.x': '#c9a8ff',
-  'position.y': '#ff8ec8',
-  'position.z': '#7aecff',
-  scale: '#ffb020',
-  'camera.x': '#9ad0ff',
-  'camera.y': '#7ec8ff',
-  'camera.z': '#5ab8ff',
-};
+const KEYFRAME_IDLE = '#dce4ed';
+const KEYFRAME_ACTIVE = '#5cecb6';
 
-const LONG_PRESS_MS = 280;
-const MOVE_THRESHOLD_PX = 6;
+function clockLabel(seconds: number) {
+  const safe = Math.max(0, seconds);
+  const mins = Math.floor(safe / 60);
+  const secs = Math.floor(safe % 60);
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function rulerLabel(seconds: number) {
+  const safe = Math.max(0, seconds);
+  const mins = Math.floor(safe / 60);
+  const whole = Math.floor(safe % 60);
+  const frac = safe - Math.floor(safe);
+  if (frac > 0.049) return `${mins}:${String(whole).padStart(2, '0')}.${Math.round(frac * 10)}`;
+  return `${mins}:${String(whole).padStart(2, '0')}`;
+}
+
+const MOVE_THRESHOLD_PX = 4;
 const RULER_H = 32;
 const LANE_H = 32;
 const ZOOM_MIN = 1;
@@ -244,11 +248,16 @@ export default function AnimationTimeline({
   const promptInputRef = useRef<HTMLInputElement>(null);
   const promptShellRef = useRef<HTMLDivElement>(null);
 
-  const pressTimerRef = useRef<number | null>(null);
   const pressOriginRef = useRef<{ x: number; y: number; pointerId: number } | null>(null);
   const marqueeModeRef = useRef(false);
   const marqueeRef = useRef(marquee);
   marqueeRef.current = marquee;
+  const selectedKeysRef = useRef(selectedKeys);
+  selectedKeysRef.current = selectedKeys;
+  const hoveredKeyIdRef = useRef(hoveredKeyId);
+  hoveredKeyIdRef.current = hoveredKeyId;
+  const selectedTrackIdRef = useRef(selectedTrackId);
+  selectedTrackIdRef.current = selectedTrackId;
 
   const musicSelected = selectedTrackId === MUSIC_TRACK_ID;
   const musicClip = useMemo(() => {
@@ -414,13 +423,6 @@ export default function AnimationTimeline({
   const visibleTracksRef = useRef(visibleTracks);
   visibleTracksRef.current = visibleTracks;
 
-  const clearPressTimer = () => {
-    if (pressTimerRef.current != null) {
-      window.clearTimeout(pressTimerRef.current);
-      pressTimerRef.current = null;
-    }
-  };
-
   useEffect(() => {
     if (!playing || scrubbing || draggingKeys || marquee) return undefined;
     let frame = 0;
@@ -496,6 +498,7 @@ export default function AnimationTimeline({
     const bottom = Math.max(box.y0, box.y1) - rect.top;
     if (right - left < 2 && bottom - top < 2) return [];
 
+    const hitPad = 12;
     const hits: KeyRef[] = [];
     visibleTracksRef.current.forEach((track, laneIndex) => {
       const live = clipRef.current.tracks.find(
@@ -506,8 +509,8 @@ export default function AnimationTimeline({
       const laneBottom = laneTop + LANE_H;
       if (laneBottom < top || laneTop > bottom) return;
       for (const kf of live.keyframes) {
-        const x = (kf.time / clipRef.current.duration) * rect.width;
-        if (x >= left - 8 && x <= right + 8) {
+        const x = (kf.time / Math.max(0.001, clipRef.current.duration)) * rect.width;
+        if (x >= left - hitPad && x <= right + hitPad) {
           hits.push({ trackId: live.id, keyframeId: kf.id });
         }
       }
@@ -523,31 +526,28 @@ export default function AnimationTimeline({
     event.stopPropagation();
     onPlayingChange(false);
 
-    if (opts?.fromPlayhead) {
-      clearPressTimer();
+    const lanesRect = scrubRef.current?.getBoundingClientRect();
+    const onRuler = Boolean(
+      opts?.fromPlayhead
+      || (lanesRect && event.clientY - lanesRect.top < RULER_H),
+    );
+
+    if (onRuler) {
       pressOriginRef.current = null;
       marqueeModeRef.current = false;
+      setMarquee(null);
       setScrubbing(true);
       onSeek(xToTime(event.clientX));
       (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
       return;
     }
 
-    // Pending: short drag → scrub; long-press then drag → marquee multi-select
-    clearPressTimer();
+    // Empty lane: tap seeks; drag draws a marquee and multi-selects keyframes
     marqueeModeRef.current = false;
     setMarquee(null);
+    setScrubbing(false);
     pressOriginRef.current = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
     (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-
-    pressTimerRef.current = window.setTimeout(() => {
-      const origin = pressOriginRef.current;
-      if (!origin) return;
-      marqueeModeRef.current = true;
-      setScrubbing(false);
-      setSelectedKeys([]);
-      setMarquee({ x0: origin.x, y0: origin.y, x1: origin.x, y1: origin.y });
-    }, LONG_PRESS_MS);
   };
 
   const onScrubMove = (event: ReactPointerEvent) => {
@@ -556,10 +556,10 @@ export default function AnimationTimeline({
       const dx = event.clientX - origin.x;
       const dy = event.clientY - origin.y;
       if (Math.hypot(dx, dy) > MOVE_THRESHOLD_PX) {
-        clearPressTimer();
-        setScrubbing(true);
-        setSelectedKeys([]);
-        onSeek(xToTime(event.clientX));
+        marqueeModeRef.current = true;
+        const next = { x0: origin.x, y0: origin.y, x1: event.clientX, y1: event.clientY };
+        setMarquee(next);
+        setSelectedKeys(keysInMarquee(next));
       }
       return;
     }
@@ -578,13 +578,19 @@ export default function AnimationTimeline({
   const endScrub = (event: ReactPointerEvent) => {
     const wasMarquee = marqueeModeRef.current;
     const hadPending = pressOriginRef.current != null && !scrubbing && !wasMarquee;
-    clearPressTimer();
     pressOriginRef.current = null;
     marqueeModeRef.current = false;
 
     if (wasMarquee) {
       const box = marqueeRef.current;
-      if (box) setSelectedKeys(keysInMarquee(box));
+      if (box) {
+        const hits = keysInMarquee(box);
+        setSelectedKeys(hits);
+        if (hits.length) {
+          setSelectedTrackId(hits[0].trackId);
+          panelRef.current?.focus({ preventScroll: true });
+        }
+      }
       setMarquee(null);
       try {
         (event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId);
@@ -595,7 +601,7 @@ export default function AnimationTimeline({
     }
 
     if (hadPending) {
-      // Tap without drag/long-press: seek + clear selection
+      // Tap without drag: seek + clear selection
       setSelectedKeys([]);
       onSeek(xToTime(event.clientX));
     }
@@ -752,25 +758,32 @@ export default function AnimationTimeline({
   ]);
 
   const deleteSelectedKeyframes = () => {
-    if (selectedKeys.length) {
-      onChange(removeKeyframes(clip, selectedKeys));
+    const keys = selectedKeysRef.current;
+    if (keys.length) {
+      onChange(removeKeyframes(clipRef.current, keys));
       setSelectedKeys([]);
-      return;
+      return true;
     }
-    if (hoveredKeyId) {
-      for (const track of clip.tracks) {
-        if (track.keyframes.some((k) => k.id === hoveredKeyId)) {
-          onChange(removeKeyframes(clip, [{ trackId: track.id, keyframeId: hoveredKeyId }]));
-          return;
+    const hovered = hoveredKeyIdRef.current;
+    if (hovered) {
+      for (const track of clipRef.current.tracks) {
+        if (track.keyframes.some((k) => k.id === hovered)) {
+          onChange(removeKeyframes(clipRef.current, [{ trackId: track.id, keyframeId: hovered }]));
+          setHoveredKeyId(null);
+          return true;
         }
       }
     }
-    if (!selectedTrackId) return;
-    const track = clip.tracks.find((t) => t.id === selectedTrackId);
-    if (!track?.keyframes.length) return;
-    const nearest = [...track.keyframes].sort((a, b) => Math.abs(a.time - currentTime) - Math.abs(b.time - currentTime))[0];
-    if (!nearest || Math.abs(nearest.time - currentTime) > 0.2) return;
-    onChange(removeKeyframes(clip, [{ trackId: track.id, keyframeId: nearest.id }]));
+    const trackId = selectedTrackIdRef.current;
+    if (!trackId) return false;
+    const track = clipRef.current.tracks.find((t) => t.id === trackId);
+    if (!track?.keyframes.length) return false;
+    const nearest = [...track.keyframes].sort(
+      (a, b) => Math.abs(a.time - currentTimeRef.current) - Math.abs(b.time - currentTimeRef.current),
+    )[0];
+    if (!nearest || Math.abs(nearest.time - currentTimeRef.current) > 0.2) return false;
+    onChange(removeKeyframes(clipRef.current, [{ trackId: track.id, keyframeId: nearest.id }]));
+    return true;
   };
 
   const applyEaseToSelection = (ease: AnimEase, bezier?: EaseBezier) => {
@@ -804,16 +817,14 @@ export default function AnimationTimeline({
       const clearKey = event.key === 'Delete' || event.key === 'Backspace' || event.key === 'Clear'
         || event.code === 'Delete' || event.code === 'Backspace' || event.code === 'NumpadDecimal';
       if (!clearKey) return;
-      if (!selectedKeys.length && !hoveredKeyId && !selectedTrackId) return;
+      if (!selectedKeysRef.current.length && !hoveredKeyIdRef.current && !selectedTrackIdRef.current) return;
       event.preventDefault();
       event.stopPropagation();
       deleteSelectedKeyframes();
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  });
-
-  useEffect(() => () => clearPressTimer(), []);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep the playhead visible while playing when zoomed in
   useEffect(() => {
@@ -1060,6 +1071,7 @@ export default function AnimationTimeline({
     <>
     <div className={`timeline-panel ${panelVisible ? 'is-open' : 'is-closed'}`} ref={panelRef} tabIndex={-1} aria-hidden={!panelVisible}>
       <div className={`timeline-chrome ${promptOpen ? 'is-prompting' : ''}`}>
+        {!promptOpen && <span className="timeline-title">Timeline</span>}
         <div
           ref={promptShellRef}
           className={`timeline-prompt ${promptOpen ? 'is-open' : 'is-compact'}`}
@@ -1067,13 +1079,13 @@ export default function AnimationTimeline({
           {!promptOpen ? (
             <button
               type="button"
-              className="timeline-prompt-trigger"
+              className="timeline-icon-btn timeline-prompt-trigger"
               onClick={openPrompt}
               aria-expanded={false}
               aria-controls="timeline-prompt-panel"
+              title="AI Animate"
             >
-              <Sparkles size={14} aria-hidden />
-              <span>AI Animate</span>
+              <Sparkles size={15} aria-hidden />
             </button>
           ) : (
             <form
@@ -1133,9 +1145,6 @@ export default function AnimationTimeline({
         {!promptOpen && (
           <div className="timeline-transport" aria-hidden={false}>
             <div className="timeline-transport-cluster" role="group" aria-label="Playback">
-              <button type="button" className="timeline-icon-btn" title="Go to start" onClick={() => { onPlayingChange(false); onSeek(0); }}>
-                <SkipBack size={14} />
-              </button>
               <button
                 type="button"
                 className={`timeline-play-btn ${playing ? 'is-playing' : ''}`}
@@ -1144,19 +1153,34 @@ export default function AnimationTimeline({
               >
                 {playing ? <Pause size={15} /> : <Play size={15} />}
               </button>
+              <button type="button" className="timeline-icon-btn" title="Stop" onClick={() => { onPlayingChange(false); onSeek(0); }}>
+                <Square size={12} />
+              </button>
               <button
                 type="button"
-                className={`timeline-icon-btn ${clip.loop ? 'is-active' : ''}`}
+                className="timeline-icon-btn"
+                title="Previous frame"
+                onClick={() => {
+                  onPlayingChange(false);
+                  onSeek(Math.max(0, currentTime - 1 / Math.max(1, clip.fps)));
+                }}
+              >
+                <SkipBack size={14} />
+              </button>
+              <button
+                type="button"
+                className={`timeline-text-btn ${clip.loop ? 'is-active' : ''}`}
                 title={clip.loop ? 'Loop on — click to play once' : 'Loop off — click to loop'}
                 aria-label={clip.loop ? 'Disable loop' : 'Enable loop'}
                 aria-pressed={clip.loop}
                 onClick={() => onChange({ ...clip, loop: !clip.loop })}
               >
                 <Repeat size={14} />
+                Loop
               </button>
               <span className="timeline-timecode" title={`${deviceLabel(selectedDevice.id)} playhead`}>
-                {formatTimecode(currentTime, clip.fps)}
-                <span>/ {formatTimecode(clip.duration, clip.fps)}</span>
+                {clockLabel(currentTime)}
+                <span> / {clockLabel(clip.duration)}</span>
               </span>
             </div>
 
@@ -1169,61 +1193,6 @@ export default function AnimationTimeline({
               <button type="button" className="timeline-icon-btn" onClick={() => addKeyframeAtPlayhead('rotation.y')} title="Key rotate Y">
                 <KeyRound size={13} />
               </button>
-              <div
-                ref={easeWrapRef}
-                className={`timeline-ease-wrap ${selectedKeys.length ? 'is-armed' : ''} ${easeGraphOpen ? 'is-open' : ''}`}
-              >
-                <label
-                  className={`timeline-ease-select ${selectedKeys.length ? 'is-armed' : ''}`}
-                  title="Ease from selected keyframe(s) to the next"
-                >
-                  <select
-                    value={selectedEase === 'mixed' ? '' : (selectedEase ?? 'easeInOut')}
-                    disabled={!selectedKeys.length}
-                    aria-label="Keyframe ease"
-                    onChange={(e) => applyEaseToSelection(e.target.value as AnimEase)}
-                  >
-                    {selectedEase === 'mixed' && <option value="" disabled>Mixed</option>}
-                    {ANIM_EASES.map((ease) => (
-                      <option key={ease.id} value={ease.id}>{ease.label}</option>
-                    ))}
-                  </select>
-                </label>
-                {selectedKeys.length > 0 && (
-                  <button
-                    type="button"
-                    className={`timeline-icon-btn timeline-ease-graph-toggle ${easeGraphOpen ? 'is-open' : ''} ${selectedEase === 'custom' ? 'is-custom' : ''}`}
-                    title={easeGraphOpen ? 'Hide ease graph' : 'Edit custom ease curve'}
-                    aria-expanded={easeGraphOpen}
-                    onClick={() => {
-                      if (selectedEase !== 'custom') {
-                        applyEaseToSelection('custom');
-                        return;
-                      }
-                      setEaseGraphOpen((open) => !open);
-                    }}
-                  >
-                    <Gauge size={13} />
-                  </button>
-                )}
-                {easeGraphOpen && selectedKeys.length > 0 && (
-                  <div
-                    className="timeline-ease-popover"
-                    role="dialog"
-                    aria-label="Custom ease curve"
-                    onPointerDown={(e) => e.stopPropagation()}
-                  >
-                    <div className="timeline-ease-popover-head">
-                      <span>Custom ease</span>
-                      <button type="button" className="timeline-ease-popover-close" onClick={() => setEaseGraphOpen(false)} title="Close (Esc)">×</button>
-                    </div>
-                    <EaseGraphEditor
-                      value={selectedBezier ?? DEFAULT_CUSTOM_BEZIER}
-                      onChange={applyBezierToSelection}
-                    />
-                  </div>
-                )}
-              </div>
               <button
                 type="button"
                 className={`timeline-icon-btn timeline-delete-btn ${selectedKeys.length || hoveredKeyId ? 'is-armed' : ''}`}
@@ -1271,6 +1240,7 @@ export default function AnimationTimeline({
                 </div>
               )}
               <div className="timeline-zoom" title="Scroll over the timeline to zoom">
+                <span className="timeline-zoom-label">Zoom</span>
                 <button
                   type="button"
                   className="timeline-icon-btn"
@@ -1280,14 +1250,17 @@ export default function AnimationTimeline({
                 >
                   <ZoomOut size={13} />
                 </button>
-                <button
-                  type="button"
-                  className="timeline-zoom-level"
-                  title="Reset zoom"
-                  onClick={() => applyZoom(1)}
-                >
-                  {Math.round(zoom * 100)}%
-                </button>
+                <input
+                  className="timeline-zoom-range"
+                  type="range"
+                  min={ZOOM_MIN}
+                  max={ZOOM_MAX}
+                  step={0.1}
+                  value={zoom}
+                  aria-label="Zoom"
+                  style={{ ['--zoom-pct' as string]: `${((zoom - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN)) * 100}%` }}
+                  onChange={(e) => applyZoom(Number(e.target.value))}
+                />
                 <button
                   type="button"
                   className="timeline-icon-btn"
@@ -1297,8 +1270,11 @@ export default function AnimationTimeline({
                 >
                   <ZoomIn size={13} />
                 </button>
+                <button type="button" className="timeline-text-btn" title="Fit timeline" onClick={() => applyZoom(1)}>
+                  Fit
+                </button>
               </div>
-              <label className="timeline-duration" title="Clip duration">
+              <label className="timeline-meta-pill timeline-duration" title="Clip duration">
                 <input
                   type="number"
                   min={1}
@@ -1308,8 +1284,64 @@ export default function AnimationTimeline({
                   aria-label="Duration in seconds"
                   onChange={(e) => onChange({ ...clip, duration: Math.min(30, Math.max(1, Number(e.target.value) || 4)) })}
                 />
-                <span>s</span>
+                <span>seconds</span>
               </label>
+              <span className="timeline-meta-pill">{clip.fps} fps</span>
+              <div
+                ref={easeWrapRef}
+                className={`timeline-ease-wrap ${selectedKeys.length ? 'is-armed' : ''} ${easeGraphOpen ? 'is-open' : ''}`}
+              >
+                <label
+                  className={`timeline-ease-select ${selectedKeys.length ? 'is-armed' : ''}`}
+                  title="Ease from selected keyframe(s) to the next"
+                >
+                  <select
+                    value={selectedEase === 'mixed' ? '' : (selectedEase ?? 'easeInOut')}
+                    disabled={!selectedKeys.length}
+                    aria-label="Keyframe ease"
+                    onChange={(e) => applyEaseToSelection(e.target.value as AnimEase)}
+                  >
+                    {selectedEase === 'mixed' && <option value="" disabled>Mixed</option>}
+                    {ANIM_EASES.map((ease) => (
+                      <option key={ease.id} value={ease.id}>{ease.id === 'easeInOut' ? 'Ease in / out' : ease.label}</option>
+                    ))}
+                  </select>
+                </label>
+                {selectedKeys.length > 0 && (
+                  <button
+                    type="button"
+                    className={`timeline-icon-btn timeline-ease-graph-toggle ${easeGraphOpen ? 'is-open' : ''} ${selectedEase === 'custom' ? 'is-custom' : ''}`}
+                    title={easeGraphOpen ? 'Hide ease graph' : 'Edit custom ease curve'}
+                    aria-expanded={easeGraphOpen}
+                    onClick={() => {
+                      if (selectedEase !== 'custom') {
+                        applyEaseToSelection('custom');
+                        return;
+                      }
+                      setEaseGraphOpen((open) => !open);
+                    }}
+                  >
+                    <Gauge size={13} />
+                  </button>
+                )}
+                {easeGraphOpen && selectedKeys.length > 0 && (
+                  <div
+                    className="timeline-ease-popover"
+                    role="dialog"
+                    aria-label="Custom ease curve"
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <div className="timeline-ease-popover-head">
+                      <span>Custom ease</span>
+                      <button type="button" className="timeline-ease-popover-close" onClick={() => setEaseGraphOpen(false)} title="Close (Esc)">×</button>
+                    </div>
+                    <EaseGraphEditor
+                      value={selectedBezier ?? DEFAULT_CUSTOM_BEZIER}
+                      onChange={applyBezierToSelection}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1332,7 +1364,7 @@ export default function AnimationTimeline({
 
       <div className="timeline-body">
         <div className="timeline-labels">
-          <div className="timeline-ruler-spacer">Tracks</div>
+          <div className="timeline-ruler-spacer" aria-hidden />
           {visibleTracks.map((track) => {
             const meta = ANIM_PROPERTIES.find((p) => p.id === track.property);
             return (
@@ -1341,7 +1373,7 @@ export default function AnimationTimeline({
                 className={`timeline-label-row ${selectedTrackId === track.id ? 'selected' : ''}`}
                 onClick={() => setSelectedTrackId(track.id)}
               >
-                <span className="timeline-swatch" style={{ background: TRACK_COLORS[track.property] }} />
+                <span className="timeline-swatch" />
                 <span>{meta?.label ?? track.property}</span>
                 <button
                   type="button"
@@ -1454,7 +1486,7 @@ export default function AnimationTimeline({
             {ticks.map((t) => (
               <span key={t} className="timeline-tick" style={{ left: `${(t / clip.duration) * 100}%` }}>
                 <i />
-                {t % 1 === 0 || zoom >= 3 ? `${t % 1 === 0 ? t : t.toFixed(2)}s` : ''}
+                {t % 1 === 0 || zoom >= 3 ? rulerLabel(t) : ''}
               </span>
             ))}
           </div>
@@ -1475,7 +1507,16 @@ export default function AnimationTimeline({
                   setSelectedTrackId(live.id);
                 }}
               >
-                <div className="timeline-lane-fill" style={{ background: `${TRACK_COLORS[track.property]}22` }} />
+                <div className="timeline-lane-rail" />
+                {selectedTrackId === live.id && sorted.length >= 2 && (
+                  <div
+                    className="timeline-lane-segment"
+                    style={{
+                      left: `${(sorted[0].time / clip.duration) * 100}%`,
+                      width: `${((sorted[sorted.length - 1].time - sorted[0].time) / clip.duration) * 100}%`,
+                    }}
+                  />
+                )}
                 {sorted.slice(0, -1).map((kf, index) => {
                   const next = sorted[index + 1];
                   const leftPct = (kf.time / clip.duration) * 100;
@@ -1489,7 +1530,7 @@ export default function AnimationTimeline({
                       style={{
                         left: `${leftPct}%`,
                         width: `${Math.max(widthPct, 0)}%`,
-                        color: TRACK_COLORS[track.property],
+                        color: KEYFRAME_ACTIVE,
                       }}
                       title={`${easeLabel(ease)} → next key${ease === 'custom' ? ' · double-click to edit graph' : ''}`}
                       onPointerDown={(e) => e.stopPropagation()}
@@ -1538,8 +1579,8 @@ export default function AnimationTimeline({
                         isHovered ? 'is-hovered' : '',
                         isDragging ? 'is-dragging' : '',
                       ].filter(Boolean).join(' ')}
-                      style={{ left: `${(kf.time / clip.duration) * 100}%`, color: TRACK_COLORS[track.property] }}
-                      title={`${kf.value.toFixed(1)} @ ${kf.time.toFixed(2)}s · ${easeLabel(kf.ease)} — Shift-click add, long-press drag to multi-select`}
+                      style={{ left: `${(kf.time / clip.duration) * 100}%`, color: isSelected ? KEYFRAME_ACTIVE : KEYFRAME_IDLE }}
+                      title={`${kf.value.toFixed(1)} @ ${kf.time.toFixed(2)}s · ${easeLabel(kf.ease)} — Drag empty lanes to multi-select · Delete to remove`}
                       aria-pressed={isSelected}
                       onMouseEnter={() => setHoveredKeyId(kf.id)}
                       onMouseLeave={() => setHoveredKeyId((id) => (id === kf.id ? null : id))}
@@ -1548,7 +1589,6 @@ export default function AnimationTimeline({
                         e.preventDefault();
                         onPlayingChange(false);
                         setSelectedTrackId(live.id);
-                        clearPressTimer();
                         marqueeModeRef.current = false;
                         setMarquee(null);
                         setScrubbing(false);
@@ -1779,7 +1819,9 @@ export default function AnimationTimeline({
             onPointerDown={(e) => beginScrub(e, { fromPlayhead: true })}
           >
             <button type="button" className="timeline-playhead-handle" aria-label="Drag playhead" tabIndex={-1}>
-              <span className="timeline-playhead-knob" />
+              <span className="timeline-playhead-chip">
+                {`${Math.floor(Math.max(0, currentTime) / 60)}:${String(Math.floor(Math.max(0, currentTime) % 60)).padStart(2, '0')}`}
+              </span>
             </button>
             <i className="timeline-playhead-line" />
           </div>

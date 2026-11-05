@@ -9,3 +9,7 @@ dist
 !**/.env.example
 scripts/.license-private-key.pem
 server/data/
+signing/*.key
+signing/*.p12
+signing/*.cer
+signing/*.pem

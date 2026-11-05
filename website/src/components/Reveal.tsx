@@ -14,17 +14,36 @@ function useReveal<T extends HTMLElement>() {
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
+
+    const show = () => setVisible(true);
+
+    // Tall blocks (e.g. credits tables) often never hit a high threshold when only
+    // their top edge is on screen — keep threshold at 0 so any peek reveals them.
     const io = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          setVisible(true);
+          show();
           io.disconnect();
         }
       },
-      { threshold: 0.16, rootMargin: '0px 0px -6% 0px' },
+      { threshold: 0, rootMargin: '0px 0px -8px 0px' },
     );
     io.observe(node);
-    return () => io.disconnect();
+
+    // Cover the first paint before the observer callback runs.
+    const rect = node.getBoundingClientRect();
+    if (rect.top < window.innerHeight && rect.bottom > 0) {
+      show();
+      io.disconnect();
+    }
+
+    // Safety net: never leave content permanently invisible.
+    const fallback = window.setTimeout(show, 1200);
+
+    return () => {
+      io.disconnect();
+      window.clearTimeout(fallback);
+    };
   }, []);
 
   return { ref, visible };

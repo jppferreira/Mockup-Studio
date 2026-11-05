@@ -2,11 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { flushSync } from 'react-dom';
 import {
   Aperture, ArrowDownToLine, ArrowLeftRight, Box, Camera, Check, ChevronDown, CircleHelp,
-  Clock3, Columns2, Command, Copy, Download, FileImage, Film, FolderOpen, Gauge, ImagePlus, KeyRound, Layers3,
-  LayoutTemplate, Lock, MessageSquarePlus, Minus, MonitorSmartphone, MoreHorizontal, MousePointer2, PanelLeftClose, PanelLeftOpen,
-  Plus, RotateCcw, Rotate3D, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Trash2, Upload, X,
+  Columns2, Command, Copy, Download, FileImage, Film, Gauge, Glasses, Headphones,
+  ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, Lock, MessageSquarePlus, Minus,
+  MonitorSmartphone, MoreHorizontal, MousePointer2, PanelLeftClose, PanelLeftOpen,
+  Plus, RotateCcw, Rotate3D, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, Upload, Watch, X,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import AnimationTimeline from './components/AnimationTimeline';
+import ProjectsDashboard from './components/ProjectsDashboard';
+import TemplatePreview from './components/TemplatePreview';
 import CropFocusOverlay from './components/CropFocusOverlay';
 import CustomDevicePanel from './components/CustomDevicePanel';
 import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload } from './components/DeviceCanvas';
@@ -16,6 +20,7 @@ import FigmaExploreModal from './components/FigmaExploreModal';
 import LicenseModal from './components/LicenseModal';
 import SvgExplodeModal from './components/SvgExplodeModal';
 import ProgressiveBlurOverlay from './components/ProgressiveBlurOverlay';
+import LightDirectionControl from './components/LightDirectionControl';
 import ReflectionMapPicker from './components/ReflectionMapPicker';
 import {
   hydrateCustomDeviceUrls,
@@ -29,7 +34,28 @@ import {
   upsertKeyframe,
 } from './lib/animation';
 import { applyAnimationPreset, getAnimationPreset } from './lib/animationPresets';
-import { DEVICE_MODELS, getDevice, isCustomDeviceId, listAllDevices, screenSizeLabel } from './lib/devices';
+import {
+  DEVICE_CATEGORY_ICON,
+  DEVICE_CATEGORY_TABS,
+  DEVICE_MODELS,
+  filterDevicesByCategory,
+  getDevice,
+  isCustomDeviceId,
+  listAllDevices,
+  screenSizeLabel,
+  type DeviceCategoryFilter,
+  type DeviceCategoryIconKey,
+} from './lib/devices';
+
+const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
+  'layout-grid': LayoutGrid,
+  smartphone: Smartphone,
+  tablet: Tablet,
+  laptop: Laptop,
+  watch: Watch,
+  headphones: Headphones,
+  glasses: Glasses,
+};
 import { createOverlay, drawOverlays, overlayVisibleAt, type SceneOverlay } from './lib/overlays';
 import {
   isImageFile, isVideoFile, readFileAsDataUrl, readImageFromClipboard, readImageFromPasteEvent,
@@ -89,7 +115,7 @@ import {
   type ProjectTab,
 } from './lib/projectTabs';
 import {
-  formatRecentTime, loadRecentProjects, rememberRecentProject, removeRecentProject,
+  loadRecentProjects, rememberRecentProject, removeRecentProject,
   type RecentProjectEntry,
 } from './lib/recentProjects';
 import { PROMPT_SUGGESTIONS, promptToAnimation } from './lib/promptAnimate';
@@ -160,58 +186,6 @@ function createInitialWorkspace(): Workspace {
     }],
   });
   return { tabs: [tab], activeId: tab.id };
-}
-
-function TemplatePreview({ layout }: { layout: CompositionTemplate['preview'] }) {
-  return (
-    <div className={`template-preview layout-${layout}`} aria-hidden>
-      {layout === 'solo' && <span className="phone p1" />}
-      {layout === 'pair' && (<><span className="phone p1" /><span className="phone p2" /></>)}
-      {layout === 'split' && (<><span className="phone p1" /><span className="phone p2" /></>)}
-      {layout === 'stack' && (<><span className="phone p1" /><span className="phone p2" /></>)}
-      {layout === 'trio' && (<><span className="phone p1" /><span className="phone p2" /><span className="phone p3" /></>)}
-      {layout === 'fan' && (<><span className="phone p1" /><span className="phone p2" /><span className="phone p3" /></>)}
-      {layout === 'depth' && (<><span className="phone p1" /><span className="phone p2" /><span className="phone p3" /></>)}
-      {layout === 'clay' && (
-        <>
-          <span className="prop clay sphere s1" />
-          <span className="prop clay cube c1" />
-          <span className="prop clay torus t1" />
-          <span className="phone p1" />
-        </>
-      )}
-      {layout === 'concrete' && (
-        <>
-          <span className="prop wall" />
-          <span className="prop slab" />
-          <span className="phone p1" />
-        </>
-      )}
-      {layout === 'pedestal' && (
-        <>
-          <span className="prop pedestal" />
-          <span className="prop clay torus t1" />
-          <span className="phone p1" />
-        </>
-      )}
-      {layout === 'desk' && (
-        <>
-          <span className="prop clay sphere s1" />
-          <span className="prop clay cyl" />
-          <span className="phone p1" />
-          <span className="phone p2" />
-        </>
-      )}
-      {layout === 'studio' && (
-        <>
-          <span className="prop studio-wall" />
-          <span className="prop studio-floor" />
-          <span className="phone p1" />
-          <span className="prop studio-shadow" />
-        </>
-      )}
-    </div>
-  );
 }
 
 function SliderField({ label, value, min, max, step = 1, unit = '°', onChange }: {
@@ -366,12 +340,15 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [deviceMenu, setDeviceMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [gizmoDragging, setGizmoDragging] = useState(false);
+  /** When true, show the key-light translate handle in the 3D viewer. */
+  const [lightGizmoActive, setLightGizmoActive] = useState(false);
   /** Dual-canvas shared orbit so both panes keep the same viewing angle (offset from device). */
   const [sharedOrbit, setSharedOrbit] = useState<{ offset: Vec3 } | null>(null);
   /** Bumped on format/device changes so both panes snap to center instantly. */
   const [cameraRecenterToken, setCameraRecenterToken] = useState(0);
   const [openSectionId, setOpenSectionId] = useState<string | null>('device');
   const [deviceDropdownOpen, setDeviceDropdownOpen] = useState(false);
+  const [deviceCategoryFilter, setDeviceCategoryFilter] = useState<DeviceCategoryFilter>('all');
   /** Which platform's device menu is open in split mode (`null` = closed). */
   const [splitDeviceMenu, setSplitDeviceMenu] = useState<PublishTarget | null>(null);
   const [aspectDropdownOpen, setAspectDropdownOpen] = useState(false);
@@ -469,6 +446,10 @@ export default function App() {
   }, []);
 
   const allDevices = useMemo(() => listAllDevices(), [customDevices, devicesTick]);
+  const filteredDevices = useMemo(
+    () => filterDevicesByCategory(allDevices, deviceCategoryFilter),
+    [allDevices, deviceCategoryFilter],
+  );
   const entitlementsMaxDevices = maxDevicesFor(license.tier);
   const videoAllowed = canExportVideo(license.tier);
 
@@ -803,6 +784,33 @@ export default function App() {
       { ...entry.project, name: uniqueProjectName(entry.project.name || entry.name) },
       `Opened “${entry.name}”`,
     );
+  };
+
+  const startWithDevice = (deviceId: string) => {
+    if (!isDeviceUnlocked(license.tier, deviceId)) {
+      notify(upgradeCopy('The full device library'));
+      setLicenseOpen(true);
+      return;
+    }
+    const model = getDevice(deviceId);
+    const shot = placeholderForDevice(deviceId);
+    const instance = createDeviceInstance({
+      deviceId,
+      screenshot: shot,
+      deviceColor: DEFAULT_PROJECT.deviceColor,
+      clayMode: DEFAULT_PROJECT.clayMode,
+    });
+    const name = uniqueProjectName(model.label);
+    openProjectInTab({
+      ...DEFAULT_PROJECT,
+      name,
+      deviceId,
+      screenshot: shot,
+      publishTarget: model.platform,
+      devices: [instance],
+      selectedDeviceId: instance.id,
+      animation: createDefaultAnimation(instance.id),
+    }, `Started “${name}”`);
   };
 
   const startFromTemplate = (template: CompositionTemplate) => {
@@ -1994,6 +2002,7 @@ export default function App() {
         screenshot: deviceScreenMedia(selected, current.screenshot),
         deviceColor: selected.deviceColor ?? current.deviceColor,
         clayMode: selected.clayMode ?? current.clayMode,
+        lidOpen: selected.lidOpen,
       });
       return syncProjectFromSelected({ ...current, devices: [...current.devices, copy] }, copy);
     });
@@ -2226,7 +2235,8 @@ export default function App() {
   };
 
   return (
-    <div className={`app-shell ${hasOpenProject ? 'has-project' : ''}`}>
+    <div className={`app-shell ${hasOpenProject ? 'has-project' : 'is-dashboard'}`}>
+      {hasOpenProject && (
       <header className="topbar">
         <div className="brand-area" title="Mockup Studio">
           <div className="brand-mark" aria-label="Mockup Studio">
@@ -2304,77 +2314,33 @@ export default function App() {
           </div>
         </div>
       </header>
+      )}
 
       {!hasOpenProject ? (
-        <main className="recent-home">
-          <div className="recent-home-inner">
-            <div className="recent-home-hero">
-              <div className="recent-home-mark"><Clock3 size={22} /></div>
-              <h1>Recent projects</h1>
-              <p>Close a tab anytime to return here. Open a recent composition, start from a template, or open a file.</p>
-              <div className="recent-home-actions">
-                <button type="button" className="button primary-button" onClick={() => setTemplatePickerOpen(true)}>
-                  <LayoutTemplate size={16} /> New from template
-                </button>
-                <button type="button" className="button subtle-button" onClick={() => void onOpen()}>
-                  <FolderOpen size={16} /> Open file
-                </button>
-              </div>
-            </div>
-
-            <div className="recent-grid">
-              {recentProjects.map((entry) => {
-                const device = getDevice(entry.deviceId);
-                return (
-                  <div key={entry.id} className="recent-card">
-                    <button
-                      type="button"
-                      className="recent-card-main"
-                      onClick={() => openRecentProject(entry)}
-                      title={`Open ${entry.name}`}
-                    >
-                      <div className="recent-thumb">
-                        {entry.preview ? (
-                          <img src={entry.preview} alt="" />
-                        ) : (
-                          <div className="recent-thumb-fallback"><Smartphone size={28} /></div>
-                        )}
-                      </div>
-                      <div className="recent-card-body">
-                        <strong>{entry.name}</strong>
-                        <span>{device.label} · {entry.deviceCount > 1 ? `${entry.deviceCount} devices` : '1 device'}</span>
-                        <em>{formatRecentTime(entry.updatedAt)}</em>
-                      </div>
-                    </button>
-                    <button
-                      type="button"
-                      className="recent-card-remove"
-                      title="Remove from recent"
-                      aria-label={`Remove ${entry.name} from recent`}
-                      onClick={() => setRecentProjects(removeRecentProject(entry.id))}
-                    >
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                );
-              })}
-
-              <button
-                type="button"
-                className="recent-card recent-card-new"
-                onClick={() => setTemplatePickerOpen(true)}
-                title="Create a new project from a template"
-              >
-                <span className="recent-new-icon" aria-hidden>
-                  <Plus size={26} strokeWidth={2.2} />
-                </span>
-                <strong>New project</strong>
-              </button>
-            </div>
-          </div>
-        </main>
+        <ProjectsDashboard
+          recentProjects={recentProjects}
+          recentScreenshots={recentScreenshots}
+          devices={allDevices}
+          license={license}
+          licensingDisabled={LICENSING_DISABLED}
+          onOpenProject={openRecentProject}
+          onRemoveProject={(id) => setRecentProjects(removeRecentProject(id))}
+          onNewProject={() => setTemplatePickerOpen(true)}
+          onOpenFile={() => void onOpen()}
+          onStartTemplate={startFromTemplate}
+          onStartDevice={startWithDevice}
+          onExplorePro={() => {
+            if (LICENSING_DISABLED) {
+              notify('Pro features are unlocked in this build');
+              return;
+            }
+            setLicenseOpen(true);
+          }}
+          onFeedback={() => setFeedbackOpen(true)}
+          deviceUnlocked={(deviceId) => isDeviceUnlocked(license.tier, deviceId)}
+        />
       ) : (
-      <div className={`workspace ${sidePanelsHidden ? 'panels-hidden' : ''} ${leftPanelHidden && !sidePanelsHidden ? 'left-panel-hidden' : ''}`}>
+      <div className={`workspace ${sidePanelsHidden ? 'panels-hidden' : ''} ${leftPanelHidden && !sidePanelsHidden ? 'left-panel-hidden' : ''} ${timelineOpen && !sidePanelsHidden ? 'timeline-open' : ''}`}>
         <aside className="left-panel" aria-hidden={sidePanelsHidden || leftPanelHidden}>
           <div className="panel-title-row">
             <h2>Workspace</h2>
@@ -2894,6 +2860,29 @@ export default function App() {
           onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }} onDrop={onDrop}>
           <div className={`canvas-stage ${sidePanelsHidden ? 'chrome-hidden' : timelineOpen ? 'with-timeline' : ''}`}>
             <div className="canvas-top-right">
+              <div className="view-buttons canvas-view-buttons" role="group" aria-label="Camera views">
+                {(['front', 'left', 'right', 'top'] as CameraView[]).map((view) => (
+                  <button
+                    key={view}
+                    type="button"
+                    onClick={() => updateProject({ cameraView: view })}
+                    className={project.cameraView === view ? 'active' : ''}
+                  >
+                    {view[0].toUpperCase() + view.slice(1)}
+                  </button>
+                ))}
+                <span className="view-buttons-divider" aria-hidden />
+                <button
+                  type="button"
+                  className={`view-mirror-btn ${lightGizmoActive ? 'active' : ''}`}
+                  title={lightGizmoActive ? 'Hide light handle' : 'Move key light'}
+                  aria-label={lightGizmoActive ? 'Hide light handle' : 'Move key light'}
+                  aria-pressed={lightGizmoActive}
+                  onClick={() => setLightGizmoActive((on) => !on)}
+                >
+                  <Sun size={14} />
+                </button>
+              </div>
               {mirrorStream ? (
                 <div className="mirror-live-chip" role="status">
                   <span className="mirror-live-dot" aria-hidden />
@@ -2941,6 +2930,8 @@ export default function App() {
                         sharedOrbit={sharedOrbit}
                         onSharedOrbitChange={setSharedOrbit}
                         recenterToken={cameraRecenterToken}
+                        lightGizmoActive={lightGizmoActive && activePublishTarget === 'ios'}
+                        onLightPositionChange={(position) => updateProject({ lightPosition: position })}
                         onSelectDevice={onSelectDevice}
                         onClearSelection={() => setDeviceMenu(null)}
                         onRotateDevice={onRotateDevice}
@@ -2969,6 +2960,8 @@ export default function App() {
                         sharedOrbit={sharedOrbit}
                         onSharedOrbitChange={setSharedOrbit}
                         recenterToken={cameraRecenterToken}
+                        lightGizmoActive={lightGizmoActive && activePublishTarget === 'android'}
+                        onLightPositionChange={(position) => updateProject({ lightPosition: position })}
                         onSelectDevice={onSelectDevice}
                         onClearSelection={() => setDeviceMenu(null)}
                         onRotateDevice={onRotateDevice}
@@ -2986,6 +2979,9 @@ export default function App() {
                   liveStream={mirrorStream}
                   liveStreamDeviceId={liveStreamDeviceId}
                   cameraPosition={animatedCamera}
+                  recenterToken={cameraRecenterToken}
+                  lightGizmoActive={lightGizmoActive}
+                  onLightPositionChange={(position) => updateProject({ lightPosition: position })}
                   onSelectDevice={onSelectDevice}
                   onClearSelection={() => setDeviceMenu(null)}
                   onRotateDevice={onRotateDevice}
@@ -3188,12 +3184,7 @@ export default function App() {
                   </button>
                 </div>
               </nav>
-              <div className="view-buttons" role="group" aria-label="Camera views">
-                <button type="button" onClick={() => updateProject({ cameraView: 'front' })} className={project.cameraView === 'front' ? 'active' : ''}>Front</button>
-                <button type="button" onClick={() => updateProject({ cameraView: 'left' })} className={project.cameraView === 'left' ? 'active' : ''}>Left</button>
-                <button type="button" onClick={() => updateProject({ cameraView: 'right' })} className={project.cameraView === 'right' ? 'active' : ''}>Right</button>
-                <button type="button" onClick={() => updateProject({ cameraView: 'top' })} className={project.cameraView === 'top' ? 'active' : ''}>Top</button>
-                <span className="view-buttons-divider" aria-hidden />
+              <div className="view-buttons" role="group" aria-label="Viewer tools">
                 <button
                   type="button"
                   className={`view-mirror-btn ${mirrorStream ? 'active' : ''}`}
@@ -3228,51 +3219,37 @@ export default function App() {
               </div>
             </div>
           )}
-          <AnimationTimeline
-            open={timelineOpen}
-            chromeHidden={sidePanelsHidden}
-            onToggle={toggleTimeline}
-            clip={animation}
-            onChange={(next) => updateProject({ animation: next })}
-            currentTime={animTime}
-            onSeek={setAnimTime}
-            playing={animPlaying}
-            onPlayingChange={setAnimPlaying}
-            selectedDevice={displaySelected}
-            devices={project.devices}
-            soundtrackName={project.soundtrackName ?? null}
-            soundtrackData={project.soundtrackData ?? null}
-            soundtrackStart={project.soundtrackStart ?? DEFAULT_PROJECT.soundtrackStart}
-            soundtrackOffset={project.soundtrackOffset ?? DEFAULT_PROJECT.soundtrackOffset}
-            soundtrackDuration={project.soundtrackDuration ?? project.animation.duration}
-            soundtrackFadeIn={project.soundtrackFadeIn ?? DEFAULT_PROJECT.soundtrackFadeIn}
-            soundtrackFadeOut={project.soundtrackFadeOut ?? DEFAULT_PROJECT.soundtrackFadeOut}
-            onSoundtrackChange={(next) => updateProject(next
-              ? {
-                soundtrackName: next.name,
-                soundtrackData: next.dataUrl,
-                soundtrackStart: 0,
-                soundtrackOffset: 0,
-                soundtrackDuration: project.animation.duration,
-                soundtrackFadeIn: DEFAULT_PROJECT.soundtrackFadeIn,
-                soundtrackFadeOut: DEFAULT_PROJECT.soundtrackFadeOut,
-              }
-              : {
-                soundtrackName: null,
-                soundtrackData: null,
-                soundtrackStart: DEFAULT_PROJECT.soundtrackStart,
-                soundtrackOffset: DEFAULT_PROJECT.soundtrackOffset,
-                soundtrackDuration: DEFAULT_PROJECT.soundtrackDuration,
-                soundtrackFadeIn: DEFAULT_PROJECT.soundtrackFadeIn,
-                soundtrackFadeOut: DEFAULT_PROJECT.soundtrackFadeOut,
-              })}
-            onSoundtrackPatch={(patch) => updateProject(patch)}
-          />
         </main>
 
         <aside className="right-panel" aria-hidden={sidePanelsHidden}>
           <div className="inspector-scroll">
             <SettingsSection id="device" title="Device" icon={Smartphone} open={openSectionId === 'device'} onToggle={toggleSection}>
+              <div className="device-category-bar" role="tablist" aria-label="Device categories">
+                {DEVICE_CATEGORY_TABS.map((tab) => {
+                  const active = deviceCategoryFilter === tab.id;
+                  const Icon = DEVICE_CATEGORY_LUCIDE[DEVICE_CATEGORY_ICON[tab.id]];
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      className={`device-category-tab ${active ? 'is-active' : ''}`}
+                      onClick={() => {
+                        setDeviceCategoryFilter(tab.id);
+                        // Keep the picker open so the filtered list is visible immediately.
+                        setDeviceDropdownOpen(true);
+                        if (project.compositionMode === 'split') {
+                          setSplitDeviceMenu(activePublishTarget);
+                        }
+                      }}
+                    >
+                      <Icon size={12} strokeWidth={1.9} aria-hidden />
+                      <span>{tab.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
               <div className="option-toggle-row">
                 <span>iOS + Android</span>
                 <SwitchControl
@@ -3332,7 +3309,7 @@ export default function App() {
                   ]).map(({ platform, device, finish, title }) => {
                     const model = getDevice(device.deviceId);
                     const menuOpen = splitDeviceMenu === platform;
-                    const platformDevices = allDevices.filter((d) => d.platform === platform);
+                    const platformDevices = filteredDevices.filter((d) => d.platform === platform);
                     const isAssetTarget = activePublishTarget === platform;
                     return (
                       <div
@@ -3360,7 +3337,9 @@ export default function App() {
                           </button>
                           {menuOpen && (
                             <div className="device-dropdown-menu" role="listbox" aria-label={`${title} models`}>
-                              {platformDevices.map((option) => {
+                              {platformDevices.length === 0 ? (
+                                <div className="device-dropdown-empty">No devices in this category</div>
+                              ) : platformDevices.map((option) => {
                                 const unlocked = isDeviceUnlocked(license.tier, option.id);
                                 const selected = device.deviceId === option.id;
                                 return (
@@ -3423,69 +3402,62 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  <div className={`device-dropdown ${deviceDropdownOpen ? 'is-open' : ''}`}>
-                    <button
-                      type="button"
-                      className="device-dropdown-trigger"
-                      aria-expanded={deviceDropdownOpen}
-                      aria-haspopup="listbox"
-                      title="Choose device"
-                      onClick={() => setDeviceDropdownOpen((open) => !open)}
-                    >
+                  <div className="device-dropdown is-open device-picker-inline">
+                    <div className="device-dropdown-trigger" aria-hidden>
                       <span className="device-dropdown-copy">
                         <strong>{getDevice(project.deviceId).label}</strong>
                         <span>
                           {isCustomDeviceId(project.deviceId) ? 'Custom' : getDevice(project.deviceId).platform === 'ios' ? 'iOS' : 'Android'}
                           {' · '}
                           {screenSizeLabel(getDevice(project.deviceId).screenSize)}
+                          {deviceCategoryFilter !== 'all'
+                            ? ` · ${DEVICE_CATEGORY_TABS.find((t) => t.id === deviceCategoryFilter)?.label ?? ''}`
+                            : ''}
                         </span>
                       </span>
-                      <ChevronDown size={14} className="device-dropdown-chevron" />
-                    </button>
-                    {deviceDropdownOpen && (
-                      <div className="device-dropdown-menu" role="listbox" aria-label="Devices">
-                        {allDevices.map((device) => {
-                          const unlocked = isDeviceUnlocked(license.tier, device.id);
-                          return (
-                            <button
-                              key={device.id}
-                              type="button"
-                              role="option"
-                              aria-selected={project.deviceId === device.id}
-                              className={`device-dropdown-option ${project.deviceId === device.id ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
-                              title={unlocked
-                                ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)}`
-                                : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
-                              onClick={() => {
-                                if (!unlocked) {
-                                  notify(upgradeCopy('The full device library'));
-                                  setLicenseOpen(true);
-                                  setDeviceDropdownOpen(false);
-                                  return;
-                                }
-                                patchSelectedDevice({ deviceId: device.id });
-                                setDeviceChosen(true);
-                                if (isPlaceholderScreenshot(activeEnvScreenshot)) {
-                                  applyScreenImage(placeholderForDevice(device), device.label, 'Size guide updated');
-                                }
-                                setDeviceDropdownOpen(false);
-                              }}
-                            >
-                              <span className="device-dropdown-copy">
-                                <strong>{device.label}</strong>
-                                <span>
-                                  {isCustomDeviceId(device.id) ? 'Custom' : device.platform === 'ios' ? 'iOS' : 'Android'}
-                                  {' · '}
-                                  {screenSizeLabel(device.screenSize)}
-                                  {!unlocked && ' · Pro'}
-                                </span>
+                    </div>
+                    <div className="device-dropdown-menu device-picker-list" role="listbox" aria-label="Devices">
+                      {filteredDevices.length === 0 ? (
+                        <div className="device-dropdown-empty">No devices in this category</div>
+                      ) : filteredDevices.map((device) => {
+                        const unlocked = isDeviceUnlocked(license.tier, device.id);
+                        return (
+                          <button
+                            key={device.id}
+                            type="button"
+                            role="option"
+                            aria-selected={project.deviceId === device.id}
+                            className={`device-dropdown-option ${project.deviceId === device.id ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
+                            title={unlocked
+                              ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)}`
+                              : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
+                            onClick={() => {
+                              if (!unlocked) {
+                                notify(upgradeCopy('The full device library'));
+                                setLicenseOpen(true);
+                                return;
+                              }
+                              patchSelectedDevice({ deviceId: device.id });
+                              setDeviceChosen(true);
+                              if (isPlaceholderScreenshot(activeEnvScreenshot)) {
+                                applyScreenImage(placeholderForDevice(device), device.label, 'Size guide updated');
+                              }
+                            }}
+                          >
+                            <span className="device-dropdown-copy">
+                              <strong>{device.label}</strong>
+                              <span>
+                                {isCustomDeviceId(device.id) ? 'Custom' : device.platform === 'ios' ? 'iOS' : 'Android'}
+                                {' · '}
+                                {screenSizeLabel(device.screenSize)}
+                                {!unlocked && ' · Pro'}
                               </span>
-                              {project.deviceId === device.id ? <Check size={13} /> : !unlocked ? <Lock size={13} /> : null}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
+                            </span>
+                            {project.deviceId === device.id ? <Check size={13} /> : !unlocked ? <Lock size={13} /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                   <CustomDevicePanel
                     selectedDeviceId={project.deviceId}
@@ -3554,6 +3526,17 @@ export default function App() {
                 patchSelectedDevice({ scale: v });
                 if (timelineOpen) keyPropertyAtPlayhead('scale', v);
               }} />
+              {getDevice(displaySelected.deviceId).lid ? (
+                <SliderField
+                  label="Lid"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  unit=""
+                  value={displaySelected.lidOpen ?? 1}
+                  onChange={(v) => patchSelectedDevice({ lidOpen: v })}
+                />
+              ) : null}
               <div className="field-caption" style={{ marginTop: 4 }}>MATERIALS</div>
               <SliderField
                 label="Glass reflection"
@@ -3770,6 +3753,30 @@ export default function App() {
                       value={project.lightIntensity}
                       onChange={(v) => updateProject({ lightIntensity: v })}
                     />
+                    <label className="gradient-color-field" style={{ marginTop: 4 }}>
+                      <span className="gradient-color-label">Key color</span>
+                      <input
+                        type="color"
+                        value={project.lightColor ?? DEFAULT_PROJECT.lightColor}
+                        onChange={(e) => updateProject({ lightColor: e.target.value })}
+                        aria-label="Key light color"
+                      />
+                    </label>
+                    <LightDirectionControl
+                      position={project.lightPosition ?? DEFAULT_PROJECT.lightPosition}
+                      color={project.lightColor ?? DEFAULT_PROJECT.lightColor}
+                      focus={displaySelected?.position ?? { x: 0, y: 0, z: 0 }}
+                      deviceYawDeg={displaySelected?.rotation.y ?? 0}
+                      onChange={(lightPosition) => updateProject({ lightPosition })}
+                    />
+                    <div className="option-toggle-row" style={{ marginTop: 6 }}>
+                      <span>Light handle</span>
+                      <SwitchControl
+                        checked={lightGizmoActive}
+                        label="Show light handle"
+                        onChange={setLightGizmoActive}
+                      />
+                    </div>
                     <SliderField
                       label="Fill light"
                       min={0}
@@ -3805,6 +3812,8 @@ export default function App() {
                   className="text-button env-quiet-action"
                   onClick={() => updateProject({
                     lightIntensity: DEFAULT_PROJECT.lightIntensity,
+                    lightPosition: { ...DEFAULT_PROJECT.lightPosition },
+                    lightColor: DEFAULT_PROJECT.lightColor,
                     fillIntensity: DEFAULT_PROJECT.fillIntensity,
                     shadowSoftness: DEFAULT_PROJECT.shadowSoftness,
                     shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
@@ -4086,6 +4095,46 @@ export default function App() {
             hint={previewAspect.hint}
           />
         )}
+        <AnimationTimeline
+          open={timelineOpen}
+          chromeHidden={sidePanelsHidden}
+          onToggle={toggleTimeline}
+          clip={animation}
+          onChange={(next) => updateProject({ animation: next })}
+          currentTime={animTime}
+          onSeek={setAnimTime}
+          playing={animPlaying}
+          onPlayingChange={setAnimPlaying}
+          selectedDevice={displaySelected}
+          devices={project.devices}
+          soundtrackName={project.soundtrackName ?? null}
+          soundtrackData={project.soundtrackData ?? null}
+          soundtrackStart={project.soundtrackStart ?? DEFAULT_PROJECT.soundtrackStart}
+          soundtrackOffset={project.soundtrackOffset ?? DEFAULT_PROJECT.soundtrackOffset}
+          soundtrackDuration={project.soundtrackDuration ?? project.animation.duration}
+          soundtrackFadeIn={project.soundtrackFadeIn ?? DEFAULT_PROJECT.soundtrackFadeIn}
+          soundtrackFadeOut={project.soundtrackFadeOut ?? DEFAULT_PROJECT.soundtrackFadeOut}
+          onSoundtrackChange={(next) => updateProject(next
+            ? {
+              soundtrackName: next.name,
+              soundtrackData: next.dataUrl,
+              soundtrackStart: 0,
+              soundtrackOffset: 0,
+              soundtrackDuration: project.animation.duration,
+              soundtrackFadeIn: DEFAULT_PROJECT.soundtrackFadeIn,
+              soundtrackFadeOut: DEFAULT_PROJECT.soundtrackFadeOut,
+            }
+            : {
+              soundtrackName: null,
+              soundtrackData: null,
+              soundtrackStart: DEFAULT_PROJECT.soundtrackStart,
+              soundtrackOffset: DEFAULT_PROJECT.soundtrackOffset,
+              soundtrackDuration: DEFAULT_PROJECT.soundtrackDuration,
+              soundtrackFadeIn: DEFAULT_PROJECT.soundtrackFadeIn,
+              soundtrackFadeOut: DEFAULT_PROJECT.soundtrackFadeOut,
+            })}
+          onSoundtrackPatch={(patch) => updateProject(patch)}
+        />
       </div>
       )}
 

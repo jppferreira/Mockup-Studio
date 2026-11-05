@@ -1,27 +1,52 @@
-# Credits
+# Device model credits
 
-The 3D device models in `public/models/` are third-party assets from [Sketchfab](https://sketchfab.com/),
-each licensed under [Creative Commons Attribution 4.0 (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
-unless noted. They are not covered by this project's proprietary license — reuse them under their own terms.
+Third-party GLBs shipped with Mockup Studio. Prefer CC BY 4.0; keep attribution.
+
+## MacBook Pro & MacBook Air
 
 | File | Model | Author | License | Source |
-|------|-------|--------|---------|--------|
-| `public/models/iphone_15_pro_max.glb` | iPhone 15 Pro | [Sketcher (@jnanbr07)](https://sketchfab.com/jnanbr07) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/iphone-15-pro-9e045e469d514fea9dda2ccd161f5fa3) |
-| `public/models/iphone_16_pro_max.glb` | iPhone 16 Pro Max | [MajdyModels (@MG990)](https://sketchfab.com/MG990) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/iphone-16-pro-max-41a071ae12794b668502f58d1e0fd1a3) |
-| `public/models/iphone_17_pro.glb` | iPhone 17 Pro | [Ranguel](https://sketchfab.com/Ranguel) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/iphone-17-pro-4541aa8a28324b33a2baaf81d263aaec) |
-| `public/models/iphone_17_pro_max.glb` | iPhone 17 Pro Max | [MajdyModels (@MG990)](https://sketchfab.com/MG990) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/iphone-17-pro-max-87fc1df741384124a8ce0226d2b2058d) |
-| `public/models/iphone_duo.glb` | Apple iPhone Duo Fold Star White 2026 (Animated) | Sketchfab download (fan visualization) | See Sketchfab listing | [Sketchfab](https://sketchfab.com/3d-models/apple-iphone-duo-fold-star-white-2026-animated) |
-| `public/models/galaxy_s25_ultra.glb` | Samsung Galaxy S25 Ultra | Bundled via [Phone Mockup Studio](https://github.com/AxadXhabanTech/phone-mockup-studio) | CC BY 4.0 | See upstream CREDITS |
-| `public/models/pixel_9.glb` | Google Pixel 6 (stand-in mesh) | [Martin3D (@MartinCapkovic)](https://sketchfab.com/MartinCapkovic) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/google-pixel-6-01f4c735e9824d58813646d9167d5c42) |
-| `public/models/pixel_9_pro.glb` / `pixel_10_pro.glb` | Google Pixel 6 Pro (stand-in mesh) | [DatSketch](https://sketchfab.com/DatSketch) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/google-pixel-6-pro-b9b58ca40c254f8dafd8370869af74fb) |
-| `public/models/pixel_9_pro_xl.glb` | Google Pixel 7 Pro (stand-in mesh) | [Imaginequad](https://sketchfab.com/Imaginequad) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Sketchfab](https://sketchfab.com/3d-models/google-pixel-7-pro-3d5d6ad9b86c462f94bf1d0b08295b30) |
+| --- | --- | --- | --- | --- |
+| `macbook_pro_m3_16.glb` | MacBook Pro M3 16" (2024) — Bundled from Sketchfab CC BY download. | jackbaeten | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/8e34fc2b303144f78490007d91ff57c4) |
+| `macbook_pro_m3_space_black.glb` | MacBook Pro M3 Space Black 16" — Bundled from Sketchfab CC BY download. | EV_car2013 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/6b46aa09dc4d4e90a79ea06f1d0aa719) |
+| `macbook_pro_16_2021.glb` | Apple MacBook Pro 16" (2021) — Bundled from Sketchfab CC BY download. | jasperchui2007 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/6a42b31bac064b00a91fbfebec07c852) |
+| `macbook_pro_touchbar.glb` | MacBook Pro (Touch Bar era) — Bundled from Sketchfab CC BY download. | jasperchui2007 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/a2158f4d07c24861b268b170cb24c6d8) |
+| `macbook_pro_13_2020.glb` | MacBook Pro 13" (2020) — Bundled via SceneView mirror of the same Sketchfab CC BY source. | timblewee | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/macbook-pro-13-inch-2020-efab224280fd4c3993c808107f7c0b38) |
+| `macbook_air_13_2023.glb` | Apple MacBook Air 13" Space Gray (2023) — Bundled from Sketchfab CC BY download. | akshatmittal | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/907bf1c943f248399e93a613eedf4897) |
 
-Pixel 9 / 10 entries reuse the closest free CC BY Pixel meshes with finish tweaks when exact-generation GLBs were unavailable.
+## Shipped device models
 
-Confirm the live Sketchfab license for `iphone_duo.glb` before redistributing that mesh outside the app.
+| File | Model | Author | License | Source |
+| --- | --- | --- | --- | --- |
+| `iphone_15_pro_max.glb` | Apple iPhone 15 Pro Max Black — Attribution taken from embedded GLB extras (matches the shipped mesh). | polyman (@Polyman_3D) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-iphone-15-pro-max-black-df17520841214c1792fb8a44c6783ee7) |
+| `iphone_16_pro_max.glb` | iPhone 16 Pro Max | MajdyModels (@MG990) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/iphone-16-pro-max-41a071ae12794b668502f58d1e0fd1a3) |
+| `iphone_17_pro.glb` | iPhone 17 Pro | Ranguel | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/iphone-17-pro-4541aa8a28324b33a2baaf81d263aaec) |
+| `iphone_17_pro_max.glb` | iPhone 17 Pro Max | MajdyModels (@MG990) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/iphone-17-pro-max-87fc1df741384124a8ce0226d2b2058d) |
+| `iphone_13_pro_max.glb` | iPhone 13 Pro Max — Bundled via SceneView assets-v1 mirror. | DatSketch | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-iphone-13-pro-max-4328dea00e47497dbeac73c556121bc9) |
+| `galaxy_s21_ultra.glb` | Samsung Galaxy S21 Ultra — Bundled via SceneView assets-v1 mirror. | DatSketch | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/samsung-galaxy-s21-ultra-cd962832be7744efb6b37fe0ee2027e7) |
+| `pixel_9.glb` | Google Pixel 6 (stand-in mesh) | Martin3D (@MartinCapkovic) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/google-pixel-6-01f4c735e9824d58813646d9167d5c42) |
+| `pixel_9_pro.glb` | Google Pixel 6 Pro (stand-in mesh) | DatSketch | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/google-pixel-6-pro-b9b58ca40c254f8dafd8370869af74fb) |
+| `pixel_10_pro.glb` | Google Pixel 6 Pro (stand-in mesh for Pixel 10 Pro) | DatSketch | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/google-pixel-6-pro-b9b58ca40c254f8dafd8370869af74fb) |
+| `pixel_9_pro_xl.glb` | Google Pixel 7 Pro (stand-in mesh) | Imaginequad | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/google-pixel-7-pro-3d5d6ad9b86c462f94bf1d0b08295b30) |
+| `ipad_mini_6.glb` | iPad mini 6 — Bundled via SceneView assets-v1 mirror. | DatSketch | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/ipad-mini-6-2021-f363c2b1c74a462588db184bd4fb024e) |
+| `apple_watch_series_7.glb` | Apple Watch Series 7 — Bundled via SceneView assets-v1 mirror. | SDC PERFORMANCE™ | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-watch-series-7-free-watch-face-sdctm-cf15ecbf159f42a28df5e56bdfa666bb) |
+| `chronograph_watch.glb` | Chronograph Watch — Bundled via SceneView assets-v1 mirror. | Darmstadt Graphics Group GmbH (Eric Chadwick) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/ChronographWatch) |
+| `rolex_watch.glb` | Rolex Luxury Watch — Bundled via SceneView assets-v1 mirror. | sudo-self | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/rolex-watch-0fde5c5f56d841cda53ae4a01f66dfaf) |
+| `airpods_pro.glb` | AirPods Pro — Bundled via SceneView assets-v1 mirror. | JY_JY_ | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/airpods-pro-4478dddbfa244f6f9b93eebbd027a73b) |
+| `sony_mdr_7506.glb` | Sony MDR-7506 headphones — Bundled via SceneView assets-v1 mirror. | AndreiVNK | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/sony-mdr-7506-headphones-05735b74d3524f00b648231138122a28) |
+| `skullcandy_crusher.glb` | Skullcandy Crusher headphones — Bundled via SceneView assets-v1 mirror. | Ankledot | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/headphones-skullcandy-crusher-wireless-4e902017e4624547b440da0a6658a689) |
+| `jbl_tour_one_m3.glb` | JBL Tour One M3 Headphones — Bundled via SceneView assets-v1 mirror. | cubemodelex | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/jbl-tour-one-m3-black-45f0b3ccbee84492a05998d5daecff16) |
 
-These models are fan-made visualizations and are not official manufacturer assets.
-"iPhone" is a trademark of Apple Inc. "Galaxy" is a trademark of Samsung Electronics. "Pixel" is a trademark of Google LLC.
-This project is not affiliated with or endorsed by Apple Inc., Samsung Electronics, or Google LLC.
+## Newer phones
 
-The same table is rendered on the marketing site at `/credits` (from `shared/credits.ts`).
+| File | Model | Author | License | Source |
+| --- | --- | --- | --- | --- |
+| `iphone_18_pro_max.glb` | iPhone 18 Pro Max — Bundled from Sketchfab CC BY download. | Adreamyouvehadbefore | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/e6b0f5abdfd74de29f347805fb724e5b) |
+| `iphone_18_pro.glb` | iPhone 18 Pro — Bundled from Sketchfab CC BY download. | DUOPlyer | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/4a61ee52c29140449ee3d0a4368e5747) |
+| `galaxy_s26_ultra.glb` | Samsung Galaxy S26 Ultra — Bundled from Sketchfab CC BY download. | AbrasiveFowl4870 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/8c7727ebe83f46d1878ada94863875ca) |
+
+## Vision Pro & Watch Ultra
+
+| File | Model | Author | License | Source |
+| --- | --- | --- | --- | --- |
+| `apple_vision_pro.glb` | Apple Vision Pro — Bundled from Sketchfab CC BY download. | DextonOfficial | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-vision-pro-3341d1f3f75e41b59fcedd1f46f03d56) |
+| `apple_watch_ultra_2.glb` | Apple Watch Ultra 2 — Bundled from Sketchfab CC BY download. | Polyman_3D | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-watch-ultra-2-f33263c457664b43909200c5ed5e6fa2) |
