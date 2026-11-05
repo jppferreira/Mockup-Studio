@@ -1,4 +1,5 @@
 import { placeholderForDevice } from './demo';
+import { libraryDelete, libraryGet, libraryPut } from './libraryDb';
 import { validateProject } from './project';
 import type { MockupProject } from '../types';
 
@@ -75,27 +76,99 @@ export function loadRecentProjects(): RecentProjectEntry[] {
   }
 }
 
+const PROJECT_IDS_KEY = 'recent-project-ids';
+
+function projectWeight(project: MockupProject) {
+  let weight = 0;
+  const add = (value: string | null | undefined) => {
+    if (typeof value === 'string') weight += value.length;
+  };
+  add(project.screenshot);
+  add(project.reflectionMapImage);
+  for (const device of project.devices ?? []) add(device.screenshot);
+  return weight;
+}
+
+async function mirrorProjects(entries: RecentProjectEntry[]) {
+  const slice = entries.slice(0, MAX_RECENT);
+  const previous = await libraryGet<string[]>('meta', PROJECT_IDS_KEY);
+  const previousIds = Array.isArray(previous) ? previous.filter((id) => typeof id === 'string') : [];
+  const nextIds = slice.map((entry) => entry.id);
+  for (const id of previousIds) {
+    if (!nextIds.includes(id)) await libraryDelete('projects', id);
+  }
+  for (const entry of slice) await libraryPut('projects', entry.id, entry);
+  await libraryPut('meta', PROJECT_IDS_KEY, nextIds);
+}
+
 function writeRecent(entries: RecentProjectEntry[]) {
-  const payload = JSON.stringify(entries.slice(0, MAX_RECENT));
+  const slice = entries.slice(0, MAX_RECENT);
+  void mirrorProjects(slice).catch(() => undefined);
+  const payload = JSON.stringify(slice);
   try {
     localStorage.setItem(STORAGE_KEY, payload);
   } catch {
-    // Quota exceeded — drop previews and retry.
-    const stripped = entries.map((entry) => ({
+    // Quota exceeded — keep a light index. The full project, including screenshots, stays in IndexedDB.
+    const stripped = slice.map((entry) => ({
       ...entry,
       preview: null,
       project: {
         ...entry.project,
         screenshot: placeholderForDevice(entry.project.deviceId),
         reflectionMapImage: null,
+        devices: entry.project.devices.map((device) => ({
+          ...device,
+          screenshot: placeholderForDevice(device.deviceId),
+        })),
       },
     }));
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped.slice(0, MAX_RECENT)));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped));
     } catch {
       /* give up quietly */
     }
   }
+}
+
+function richerProject(local: MockupProject, stored: MockupProject) {
+  return projectWeight(stored) > projectWeight(local) ? stored : local;
+}
+
+/** Replace localStorage copies that lost their images with the IndexedDB originals. */
+export async function hydrateRecentProjects(current = loadRecentProjects()): Promise<RecentProjectEntry[]> {
+  const storedIds = await libraryGet<string[]>('meta', PROJECT_IDS_KEY);
+  const ids = new Set<string>([
+    ...current.map((entry) => entry.id),
+    ...(Array.isArray(storedIds) ? storedIds.filter((id) => typeof id === 'string') : []),
+  ]);
+  const byId = new Map(current.map((entry) => [entry.id, entry]));
+  const next: RecentProjectEntry[] = [];
+  for (const id of ids) {
+    const local = byId.get(id) ?? null;
+    let stored: RecentProjectEntry | null = null;
+    try {
+      const raw = await libraryGet<RecentProjectEntry>('projects', id);
+      if (raw?.project) {
+        const project = validateProject(raw.project);
+        stored = {
+          id,
+          name: typeof raw.name === 'string' ? raw.name : project.name,
+          updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : local?.updatedAt ?? Date.now(),
+          deviceId: typeof raw.deviceId === 'string' ? raw.deviceId : project.deviceId,
+          deviceCount: typeof raw.deviceCount === 'number' ? raw.deviceCount : project.devices.length,
+          preview: typeof raw.preview === 'string' ? raw.preview : local?.preview ?? null,
+          project,
+        };
+      }
+    } catch {
+      stored = null;
+    }
+    if (stored && local) {
+      next.push({ ...stored, project: richerProject(local.project, stored.project), updatedAt: Math.max(local.updatedAt, stored.updatedAt) });
+    } else if (stored) next.push(stored);
+    else if (local) next.push(local);
+  }
+  return next.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_RECENT);
 }
 
 /** Upsert a project into the recent list (by name match, else prepend). */

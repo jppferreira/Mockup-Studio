@@ -16,19 +16,22 @@ export default function ChangeLogPanel({ entries, onRestore }: ChangeLogPanelPro
       ) : (
         <ol className="change-log">
           {entries.map((entry, index) => (
-            <li key={entry.id} className="change-log-item">
+            <li key={entry.id} className={`change-log-item ${index === 0 ? 'is-latest' : ''}`}>
+              <span className="change-log-rail" aria-hidden />
               <div className="change-log-copy">
-                <strong>{entry.summary}</strong>
+                <div className="change-log-title-row">
+                  <strong>{entry.summary}</strong>
+                  <button
+                    type="button"
+                    className="change-log-restore"
+                    title="Put the composition back to before this edit"
+                    onClick={() => onRestore(entry.id)}
+                  >
+                    {index === 0 ? 'Undo' : 'Restore'}
+                  </button>
+                </div>
                 <time dateTime={new Date(entry.at).toISOString()}>{formatChangeTime(entry.at)}</time>
               </div>
-              <button
-                type="button"
-                className="change-log-restore"
-                title="Put the composition back to before this edit"
-                onClick={() => onRestore(entry.id)}
-              >
-                {index === 0 ? 'Undo' : 'Restore'}
-              </button>
             </li>
           ))}
         </ol>

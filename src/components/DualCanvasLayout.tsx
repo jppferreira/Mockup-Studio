@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import FormatSwitchBadge, { type FormatSwitchOption } from './FormatSwitchBadge';
 
 type PaneSize = { width: number; height: number };
 
@@ -43,6 +44,9 @@ interface Props {
   ratio: number | null;
   label?: string;
   hint?: string;
+  activeFormatId?: string;
+  formats?: FormatSwitchOption[];
+  onSelectFormat?: (id: string) => void;
   pad?: number;
   gap?: number;
   ios: PaneSlot;
@@ -57,6 +61,9 @@ export default function DualCanvasLayout({
   ratio,
   label,
   hint,
+  activeFormatId,
+  formats = [],
+  onSelectFormat,
   pad = 18,
   gap = 14,
   ios,
@@ -100,21 +107,24 @@ export default function DualCanvasLayout({
       </div>
       <div className={`dual-canvas-viewport ${framed ? 'is-framed' : ''}`}>
         {slot.children}
-        {framed && (
-          <div className="format-sized-chrome" aria-hidden>
-            <span className="crop-focus-corner tl" />
-            <span className="crop-focus-corner tr" />
-            <span className="crop-focus-corner bl" />
-            <span className="crop-focus-corner br" />
-            {(label || hint) && (
-              <div className="crop-focus-badge">
-                {label ? <strong>{label}</strong> : null}
-                {hint ? <span>{hint}</span> : null}
-              </div>
-            )}
-          </div>
-        )}
       </div>
+      {framed && (
+        <div className="format-sized-chrome">
+          <span className="crop-focus-corner tl" aria-hidden />
+          <span className="crop-focus-corner tr" aria-hidden />
+          <span className="crop-focus-corner bl" aria-hidden />
+          <span className="crop-focus-corner br" aria-hidden />
+          {label && hint && activeFormatId && onSelectFormat && formats.length > 0 && (
+            <FormatSwitchBadge
+              label={label}
+              hint={hint}
+              activeId={activeFormatId}
+              options={formats}
+              onSelect={onSelectFormat}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 

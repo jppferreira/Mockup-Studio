@@ -35,6 +35,8 @@ export interface CompositionTemplate {
   fillIntensity?: number;
   shadowOpacity?: number;
   shadowSoftness?: number;
+  /** Soft ground disc under devices; omit/true keeps the default plate. */
+  showGroundBase?: boolean;
   /** Motion preset applied from each device’s studio angle. `clear` leaves the shot still. */
   motion?: string;
   /** Saved compositions keep the split link instead of inferring it from rotation. */
@@ -660,6 +662,7 @@ export function projectFromTemplate(
     fillIntensity: template.fillIntensity ?? DEFAULT_PROJECT.fillIntensity,
     shadowOpacity: template.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity,
     shadowSoftness: template.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness,
+    showGroundBase: template.showGroundBase !== false,
     compositionMode: template.compositionMode,
     devices,
     selectedDeviceId: primary.id,

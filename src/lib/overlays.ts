@@ -1,6 +1,7 @@
 import type { MockupProject } from '../types';
 
-export type OverlayKind = 'text' | 'image';
+export type OverlayKind = 'text' | 'image' | 'comment' | 'shape' | 'path';
+export type FlatShape = 'rect' | 'ellipse' | 'triangle';
 
 export interface SceneOverlay {
   id: string;
@@ -18,6 +19,8 @@ export interface SceneOverlay {
   color?: string;
   /** Relative font size vs frame short edge */
   fontSize?: number;
+  /** 0 keeps type flat. Above 0 extrudes it into the 3D scene. */
+  extrusion?: number;
   imageData?: string | null;
 }
 
@@ -32,11 +35,28 @@ export function createOverlay(partial?: Partial<SceneOverlay> & { kind?: Overlay
     opacity: partial?.opacity ?? 1,
     startTime: partial?.startTime ?? 0,
     endTime: partial?.endTime ?? 30,
-    text: partial?.text ?? (kind === 'text' ? 'Your headline' : undefined),
+    text: partial?.text ?? (kind === 'comment' ? 'Comment' : kind === 'shape' ? 'rect' : kind === 'text' ? 'Your headline' : undefined),
     color: partial?.color ?? '#ffffff',
     fontSize: partial?.fontSize ?? 0.055,
+    extrusion: partial?.extrusion ?? 0,
     imageData: partial?.imageData ?? null,
   };
+}
+
+export function flatShapeOf(overlay: SceneOverlay): FlatShape {
+  if (overlay.text === 'ellipse' || overlay.text === 'triangle') return overlay.text;
+  return 'rect';
+}
+
+export function pathOffsets(text: string | undefined): { x: number; y: number }[] {
+  if (!text) return [];
+  return text.split(' ').flatMap((pair) => {
+    const [xs, ys] = pair.split(',');
+    const x = Number(xs);
+    const y = Number(ys);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
+    return [{ x, y }];
+  });
 }
 
 export function overlayVisibleAt(overlay: SceneOverlay, time: number) {
@@ -80,21 +100,70 @@ export async function drawOverlays(
     const cx = overlay.x * width;
     const cy = overlay.y * height;
 
-    if (overlay.kind === 'text' && overlay.text?.trim()) {
+    if ((overlay.kind === 'text' || overlay.kind === 'comment') && overlay.text?.trim() && !(overlay.kind === 'text' && (overlay.extrusion ?? 0) > 0.001)) {
       const size = Math.max(12, shortEdge * (overlay.fontSize ?? 0.055) * overlay.scale);
       ctx.font = `600 ${size}px "SF Pro Display", "Segoe UI", system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = overlay.color || '#ffffff';
-      ctx.shadowColor = 'rgba(0,0,0,0.45)';
-      ctx.shadowBlur = size * 0.35;
-      ctx.shadowOffsetY = size * 0.06;
       const lines = overlay.text.split('\n').slice(0, 4);
       const lineHeight = size * 1.15;
+      if (overlay.kind === 'comment') {
+        const widest = Math.max(...lines.map((line) => ctx.measureText(line).width), size * 2);
+        const boxW = Math.min(width * 0.7, widest + size * 1.4);
+        const boxH = lines.length * lineHeight + size * 0.7;
+        const radius = Math.min(14, size * 0.45);
+        ctx.fillStyle = '#f4e7c3';
+        ctx.beginPath();
+        ctx.roundRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH, radius);
+        ctx.fill();
+        ctx.fillStyle = overlay.color || '#2a2418';
+        ctx.shadowColor = 'transparent';
+      } else {
+        ctx.fillStyle = overlay.color || '#ffffff';
+        ctx.shadowColor = 'rgba(0,0,0,0.45)';
+        ctx.shadowBlur = size * 0.35;
+        ctx.shadowOffsetY = size * 0.06;
+      }
       const startY = cy - ((lines.length - 1) * lineHeight) / 2;
       lines.forEach((line, i) => {
         ctx.fillText(line, cx, startY + i * lineHeight, width * 0.9);
       });
+    }
+
+    if (overlay.kind === 'shape') {
+      const size = shortEdge * 0.18 * overlay.scale;
+      const shape = flatShapeOf(overlay);
+      ctx.fillStyle = overlay.color || '#d7dde4';
+      ctx.beginPath();
+      if (shape === 'ellipse') {
+        ctx.ellipse(cx, cy, size / 2, size / 2, 0, 0, Math.PI * 2);
+      } else if (shape === 'triangle') {
+        ctx.moveTo(cx, cy - size / 2);
+        ctx.lineTo(cx + size / 2, cy + size / 2);
+        ctx.lineTo(cx - size / 2, cy + size / 2);
+        ctx.closePath();
+      } else {
+        ctx.roundRect(cx - size / 2, cy - size / 2, size, size, size * 0.12);
+      }
+      ctx.fill();
+    }
+
+    if (overlay.kind === 'path') {
+      const offsets = pathOffsets(overlay.text);
+      if (offsets.length > 1) {
+        ctx.beginPath();
+        offsets.forEach((point, index) => {
+          const x = cx + point.x * width;
+          const y = cy + point.y * height;
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = overlay.color || '#d7dde4';
+        ctx.lineWidth = Math.max(2, shortEdge * 0.004 * overlay.scale);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+      }
     }
 
     if (overlay.kind === 'image' && overlay.imageData) {

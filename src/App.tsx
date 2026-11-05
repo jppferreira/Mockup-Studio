@@ -1,24 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { flushSync } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import {
-  Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Box, Camera, Check, ChevronDown, CircleHelp,
-  ClipboardPaste, Columns2, Command, Copy, Download, FileImage, Film, FlipHorizontal2, Gauge, Glasses, Headphones,
+  Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Box, Camera, CaseSensitive, Check, ChevronDown, Circle, CircleHelp,
+  Cone, Cylinder, Dna, Film, Hand, MessageSquare, MoveHorizontal, MousePointer2, PenTool, Pyramid, Square, Torus, Triangle, Type, ZoomIn,
+  ClipboardPaste, Columns2, Command, Copy, Download, FileImage, FlipHorizontal2, Gauge, Glasses, Headphones,
   ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, MessageSquarePlus, Minus,
-  MonitorSmartphone, MoreHorizontal, MousePointer2, Orbit, PanelLeftClose, PanelLeftOpen,
-  Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, Upload, Watch, Waves, X, ZoomIn,
+  Menu, MonitorSmartphone, MoreHorizontal, Orbit, PanelLeftClose, PanelLeftOpen,
+  Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, Upload, Watch, Waves, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import AnimationTimeline from './components/AnimationTimeline';
+import ViewAxisGizmo from './components/ViewAxisGizmo';
 import CloudSyncPanel, { type CloudTarget } from './components/CloudSyncPanel';
 import ProjectsDashboard from './components/ProjectsDashboard';
 import ChangeLogPanel from './components/ChangeLogPanel';
-import SceneHierarchy from './components/SceneHierarchy';
+import SceneHierarchy, { sameLayerSelection, type SceneLayerSelection } from './components/SceneHierarchy';
 import iconPlus from './assets/scene-hierarchy/icon-plus.svg';
 import { DeviceModelThumbHost } from './components/DeviceModelThumb';
 import TemplateThumb, { TemplateThumbHost } from './components/TemplateThumb';
 import CropFocusOverlay from './components/CropFocusOverlay';
 import CustomDevicePanel, { type CustomDevicePanelHandle } from './components/CustomDevicePanel';
-import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload } from './components/DeviceCanvas';
+import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload, type ViewGesture } from './components/DeviceCanvas';
 import DualCanvasLayout from './components/DualCanvasLayout';
 import FeedbackModal from './components/FeedbackModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
@@ -66,7 +68,7 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
   headphones: Headphones,
   glasses: Glasses,
 };
-import { createOverlay, drawOverlays, overlayVisibleAt, type SceneOverlay } from './lib/overlays';
+import { createOverlay, drawOverlays, flatShapeOf, overlayVisibleAt, pathOffsets, type FlatShape, type SceneOverlay } from './lib/overlays';
 import {
   isImageFile, isVideoFile, readFileAsDataUrl, readImageFromClipboard, readImageFromPasteEvent,
   screenMediaKind, seekAllScreenMedia,
@@ -109,7 +111,7 @@ import {
 } from './lib/cloudLibrary';
 import { downloadBlob, safeFilename, validateProject } from './lib/project';
 import {
-  loadRecentScreenshots, recentForPlatform, rememberRecentScreenshot,
+  hydrateRecentScreenshots, loadRecentScreenshots, recentForPlatform, rememberRecentScreenshot,
   type RecentScreenshot,
 } from './lib/recentScreenshots';
 import {
@@ -129,9 +131,13 @@ import {
   type ProjectTab,
 } from './lib/projectTabs';
 import {
-  loadRecentProjects, rememberRecentProject, removeRecentProject,
+  hydrateRecentProjects, loadRecentProjects, rememberRecentProject, removeRecentProject,
   type RecentProjectEntry,
 } from './lib/recentProjects';
+import {
+  loadSessionWorkspace, sanitizeSessionFrameSize, saveSessionWorkspace,
+  type SessionFrameSize,
+} from './lib/sessionWorkspace';
 import { PROMPT_SUGGESTIONS } from './lib/promptAnimate';
 import { promptToAnimationSmart } from './lib/promptAnimateLocal';
 import { deleteCustomScenePreset, loadCustomScenePresets, saveCustomScenePreset } from './lib/scenePresets';
@@ -149,12 +155,12 @@ import {
   EXPORT_ASPECTS, EXPORT_ASPECT_GROUPS, EXPORT_FPS_OPTIONS, EXPORT_RESOLUTIONS,
   EXPORT_SIZE_LIMITS, MAX_COMPOSITION_SCENES, MAX_DEVICES, exportAspectFixedSize, exportAspectHasFixed,
   resolveExportDimensions, addCompositionScene, createDefaultAnimation,
-  createDeviceInstance, ensureCompositionScenes, getSelectedDevice,
+  createDeviceInstance, createSceneProp, ensureCompositionScenes, getSelectedDevice,
   patchActiveCompositionScene, removeCompositionScene, renameCompositionScene,
   switchCompositionScene, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimProperty, type BackgroundPreset, type CameraView, type DeviceColor, type ExportAspectId,
   type ExportResolutionId, type GradientColors, type MockupProject, type PublishTarget,
-  type ReflectionMapSetting, type ScenePreset, type Vec3,
+  type ReflectionMapSetting, type ScenePreset, type ScenePropKind, type Vec3,
 } from './types';
 
 /** Top-left pinned tabs: scene objects vs Assets library. */
@@ -163,8 +169,33 @@ type Workspace = { tabs: ProjectTab[]; activeId: string | null };
 type ExportScale = 0.5 | 1 | 2 | 3 | 4;
 type ExportMediaMode = 'static' | 'animated';
 type ExportEntry = { id: string; kind: ExportKind; scale: ExportScale };
+type CanvasTool = 'composition' | 'animate' | 'type' | 'comments' | 'pen';
 
 const EXPORT_SCALES: ExportScale[] = [0.5, 1, 2, 3, 4];
+
+const FLAT_SHAPES: { id: FlatShape; label: string; icon: LucideIcon }[] = [
+  { id: 'rect', label: 'Rectangle', icon: Square },
+  { id: 'ellipse', label: 'Ellipse', icon: Circle },
+  { id: 'triangle', label: 'Triangle', icon: Triangle },
+];
+
+const VIEW_GESTURES: { id: ViewGesture; label: string; icon: LucideIcon }[] = [
+  { id: 'pan', label: 'Pan', icon: Hand },
+  { id: 'zoom', label: 'Pinch to zoom', icon: ZoomIn },
+  { id: 'rotate', label: 'Rotate', icon: RotateCw },
+  { id: 'longpress', label: 'Long-press', icon: MousePointer2 },
+  { id: 'swipe', label: 'Swipe', icon: MoveHorizontal },
+];
+
+const INSERT_SHAPES: { kind: ScenePropKind; label: string; icon: LucideIcon }[] = [
+  { kind: 'clay_cube', label: 'Cube', icon: Box },
+  { kind: 'clay_sphere', label: 'Sphere', icon: Circle },
+  { kind: 'clay_cylinder', label: 'Cylinder', icon: Cylinder },
+  { kind: 'clay_torus', label: 'Torus', icon: Torus },
+  { kind: 'clay_helix', label: 'Helix', icon: Dna },
+  { kind: 'clay_cone', label: 'Cone', icon: Cone },
+  { kind: 'clay_pyramid', label: 'Pyramid', icon: Pyramid },
+];
 const CANVAS_HINT_KEY = 'mockup-studio.canvas-usage-hint-seen';
 
 function canvasHintAlreadySeen() {
@@ -215,6 +246,11 @@ function createInitialWorkspace(): Workspace {
     }],
   });
   return { tabs: [tab], activeId: tab.id };
+}
+
+function commentNumber(overlays: SceneOverlay[] | undefined, id: string) {
+  const index = (overlays ?? []).filter((item) => item.kind === 'comment').findIndex((item) => item.id === id);
+  return index < 0 ? 1 : index + 1;
 }
 
 function SliderField({ label, value, min, max, step = 1, unit = '°', onChange }: {
@@ -461,6 +497,62 @@ function DeviceMenuOptions({
   );
 }
 
+function PenCapture({ onCommit }: { onCommit: (points: { x: number; y: number }[]) => void }) {
+  const [draft, setDraft] = useState<{ x: number; y: number }[]>([]);
+  const drag = useRef<{ x: number; y: number }[] | null>(null);
+
+  const localPoint = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) / Math.max(1, rect.width),
+      y: (event.clientY - rect.top) / Math.max(1, rect.height),
+    };
+  };
+
+  return (
+    <div
+      className="canvas-pen-layer"
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        const points = [localPoint(event)];
+        drag.current = points;
+        setDraft(points);
+      }}
+      onPointerMove={(event) => {
+        if (!drag.current) return;
+        const next = [...drag.current, localPoint(event)];
+        drag.current = next;
+        setDraft(next);
+      }}
+      onPointerUp={() => {
+        const points = drag.current;
+        drag.current = null;
+        setDraft([]);
+        if (!points || points.length < 2) return;
+        onCommit(points);
+      }}
+      onPointerCancel={() => {
+        drag.current = null;
+        setDraft([]);
+      }}
+    >
+      {draft.length > 1 && (
+        <svg className="canvas-pen-draft" viewBox="0 0 1 1" preserveAspectRatio="none">
+          <polyline
+            fill="none"
+            stroke="#d7dde4"
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            points={draft.map((point) => `${point.x},${point.y}`).join(' ')}
+          />
+        </svg>
+      )}
+    </div>
+  );
+}
+
 function frameMeta(id: string, sizes: SavedAssetSize[]) {
   const builtin = EXPORT_ASPECTS.find((item) => item.id === id);
   if (builtin) {
@@ -506,6 +598,8 @@ export default function App() {
   const [changeLogVersion, setChangeLogVersion] = useState(0);
   const changeLogsRef = useRef(new Map<string, ChangeLogEntry[]>());
   const liveProjectRef = useRef<MockupProject>(DEFAULT_PROJECT);
+  const sessionReadyRef = useRef(false);
+  const skipSessionRestoreRef = useRef(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -532,6 +626,18 @@ export default function App() {
   const [previewFrame, setPreviewFrame] = useState<string>('tiktok');
   const [exportResolution, setExportResolution] = useState<ExportResolutionId>('fhd');
   const [customExportSize, setCustomExportSize] = useState({ width: 1080, height: 1920 });
+  const frameSizeRef = useRef<SessionFrameSize>({
+    exportAspectIds: ['tiktok'],
+    previewFrame: 'tiktok',
+    exportResolution: 'fhd',
+    customExportSize: { width: 1080, height: 1920 },
+  });
+  frameSizeRef.current = {
+    exportAspectIds,
+    previewFrame,
+    exportResolution,
+    customExportSize,
+  };
   const [exportMode, setExportMode] = useState<'combined' | 'separate'>('combined');
   const [exportMediaMode, setExportMediaMode] = useState<ExportMediaMode>('static');
   const [staticExportEntries, setStaticExportEntries] = useState<ExportEntry[]>(() => [createExportEntry('png')]);
@@ -549,13 +655,18 @@ export default function App() {
       /* private mode */
     }
   }, []);
+  const spacePannedRef = useRef(false);
+  const noteSpacePan = useCallback(() => {
+    spacePannedRef.current = true;
+    dismissCanvasHint();
+  }, [dismissCanvasHint]);
   const [toast, setToast] = useState<string | null>(null);
   const [deviceMenu, setDeviceMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [gizmoDragging, setGizmoDragging] = useState(false);
   /** When true, show the key-light translate handle in the 3D viewer. */
   const [lightGizmoActive, setLightGizmoActive] = useState(false);
   /** Dual-canvas shared orbit so both panes keep the same viewing angle (offset from device). */
-  const [sharedOrbit, setSharedOrbit] = useState<{ offset: Vec3 } | null>(null);
+  const [sharedOrbit, setSharedOrbit] = useState<{ offset: Vec3; lookOffset?: Vec3 } | null>(null);
   /** Bumped on format/device changes so both panes snap to center instantly. */
   const [cameraRecenterToken, setCameraRecenterToken] = useState(0);
   const [openSectionId, setOpenSectionId] = useState<string | null>('device');
@@ -577,8 +688,24 @@ export default function App() {
   const [cloudProjects, setCloudProjects] = useState<CloudProjectEntry[]>([]);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
+  const [canvasTool, setCanvasTool] = useState<CanvasTool>('composition');
+  const [shapeMenu, setShapeMenu] = useState<'flat' | 'solid' | null>(null);
+  const shapeMenuRef = useRef<HTMLDivElement>(null);
+  const floatingMenuRef = useRef<HTMLDivElement>(null);
+  const flatShapeBtnRef = useRef<HTMLButtonElement>(null);
+  const solidShapeBtnRef = useRef<HTMLButtonElement>(null);
+  const [shapeMenuBox, setShapeMenuBox] = useState<{ top: number; left: number } | null>(null);
+  const [viewGesture, setViewGesture] = useState<ViewGesture>('rotate');
+  const [stageSize, setStageSize] = useState({ w: 1, h: 1 });
+  const canvasStageRef = useRef<HTMLDivElement>(null);
   const [recentScreenshots, setRecentScreenshots] = useState<RecentScreenshot[]>(() => loadRecentScreenshots());
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
+  const [layerSelection, setLayerSelection] = useState<SceneLayerSelection>({ kind: 'device', id: '' });
+  const [layerPin, setLayerPin] = useState<{ kind: 'device' | 'prop' | 'overlay'; id: string; token: number } | null>(null);
+  const onLayerSelection = useCallback((next: SceneLayerSelection) => {
+    setLayerSelection((current) => (sameLayerSelection(current, next) ? current : next));
+  }, []);
   const [mirrorStream, setMirrorStream] = useState<MediaStream | null>(null);
   const [mirrorSource, setMirrorSource] = useState<'ios' | 'android' | null>(null);
   const [mirrorDevice, setMirrorDevice] = useState<MirrorDevice | null>(null);
@@ -608,6 +735,7 @@ export default function App() {
   const projectInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
   const syncMenuRef = useRef<HTMLDivElement>(null);
+  const fileMenuRef = useRef<HTMLDivElement>(null);
   const cloudRef = useRef(cloud);
   const workspaceRef = useRef(workspace);
   const activeIdRef = useRef(workspace.activeId);
@@ -702,6 +830,10 @@ export default function App() {
   const animTime = activeTab?.animTime ?? 0;
   const animPlaying = activeTab?.animPlaying ?? false;
   const timelineOpen = activeTab?.timelineOpen ?? false;
+  const timelineOpenRef = useRef(timelineOpen);
+  timelineOpenRef.current = timelineOpen;
+  const animTimeRef = useRef(animTime);
+  animTimeRef.current = animTime;
 
   useEffect(() => {
     const el = leftScrollRef.current;
@@ -766,6 +898,78 @@ export default function App() {
     setRecentProjects(rememberRecentProject(nextProject));
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const [saved, shots, projects] = await Promise.all([
+        loadSessionWorkspace().catch(() => null),
+        hydrateRecentScreenshots().catch(() => [] as RecentScreenshot[]),
+        hydrateRecentProjects().catch(() => loadRecentProjects()),
+      ]);
+      if (cancelled) return;
+      if (saved?.tabs.length && !skipSessionRestoreRef.current) setWorkspace(saved);
+      const frame = saved?.frameSize ? sanitizeSessionFrameSize(saved.frameSize) : null;
+      if (frame && !skipSessionRestoreRef.current) {
+        const knownSizes = new Set(loadSavedSizes().map((item) => item.id));
+        const aspects = frame.exportAspectIds.filter((id) => (
+          !id.startsWith('size-') || knownSizes.has(id)
+        ));
+        const exportAspectIdsNext = aspects.length ? aspects : ['tiktok'];
+        let previewNext = frame.previewFrame;
+        if (
+          previewNext !== 'free'
+          && previewNext.startsWith('size-')
+          && !knownSizes.has(previewNext)
+        ) {
+          previewNext = exportAspectIdsNext[0] ?? 'tiktok';
+        }
+        setExportAspectIds(exportAspectIdsNext);
+        setPreviewFrame(previewNext);
+        setExportResolution(frame.exportResolution);
+        setCustomExportSize(frame.customExportSize);
+      }
+      setRecentScreenshots((current) => {
+        const byId = new Map<string, RecentScreenshot>();
+        for (const shot of shots) byId.set(shot.id, shot);
+        for (const shot of current) {
+          const previous = byId.get(shot.id);
+          if (!previous || shot.addedAt >= previous.addedAt) byId.set(shot.id, shot);
+        }
+        return [...byId.values()].sort((a, b) => b.addedAt - a.addedAt).slice(0, 4);
+      });
+      setRecentProjects((current) => {
+        const byId = new Map(projects.map((entry) => [entry.id, entry]));
+        for (const entry of current) {
+          const previous = byId.get(entry.id);
+          if (!previous || entry.updatedAt >= previous.updatedAt) byId.set(entry.id, entry);
+        }
+        return [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 12);
+      });
+      sessionReadyRef.current = true;
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sessionReadyRef.current) return undefined;
+    const timer = window.setTimeout(() => {
+      void saveSessionWorkspace(workspaceRef.current, frameSizeRef.current).catch(() => undefined);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [workspace, exportAspectIds, previewFrame, exportResolution, customExportSize]);
+
+  useEffect(() => {
+    const flush = () => {
+      if (!sessionReadyRef.current) return;
+      void saveSessionWorkspace(workspaceRef.current, frameSizeRef.current).catch(() => undefined);
+    };
+    window.addEventListener('pagehide', flush);
+    import.meta.hot?.dispose(flush);
+    return () => window.removeEventListener('pagehide', flush);
+  }, []);
+
   cloudRef.current = cloud;
   workspaceRef.current = workspace;
   activeIdRef.current = workspace.activeId;
@@ -780,6 +984,7 @@ export default function App() {
   }
 
   const setProject = useCallback((updater: MockupProject | ((current: MockupProject) => MockupProject)) => {
+    if (!sessionReadyRef.current) skipSessionRestoreRef.current = true;
     const tabId = activeIdRef.current;
     if (!tabId) return;
     const current = liveProjectRef.current;
@@ -919,6 +1124,31 @@ export default function App() {
     );
   }, [animActive, animation, animTime, project.cameraView]);
 
+  const liveCameraPose = useMemo(() => {
+    const focus = displaySelected.position ?? { x: 0, y: 0, z: 0 };
+    if (animatedCamera) return animatedCamera;
+    if (sharedOrbit) {
+      return {
+        x: focus.x + sharedOrbit.offset.x,
+        y: focus.y + sharedOrbit.offset.y,
+        z: focus.z + sharedOrbit.offset.z,
+      };
+    }
+    const base = defaultCameraPosition(project.cameraView, false);
+    return {
+      x: focus.x + base.x,
+      y: focus.y + base.y,
+      z: focus.z + base.z,
+    };
+  }, [
+    animatedCamera,
+    sharedOrbit,
+    displaySelected.position?.x,
+    displaySelected.position?.y,
+    displaySelected.position?.z,
+    project.cameraView,
+  ]);
+
   // Format / camera-preset / composition changes: snap both panes to center.
   // Per-pane device model/finish swaps must NOT clear sharedOrbit — linked angle stays.
   useEffect(() => {
@@ -948,9 +1178,22 @@ export default function App() {
 
   const toggleTimeline = () => {
     setTimelineOpen((open) => {
+      const next = !open;
+      setCanvasTool((tool) => (next ? 'animate' : tool === 'animate' ? 'composition' : tool));
       if (open) {
         setAnimPlaying(false);
         bakeAnimationPose();
+        if (hasCameraAnimation(animation)) {
+          const pose = evaluateCamera(animation, animTime, project.cameraView, false);
+          const focus = getSelectedDevice(project).position ?? { x: 0, y: 0, z: 0 };
+          setSharedOrbit({
+            offset: {
+              x: Number((pose.x - focus.x).toFixed(4)),
+              y: Number((pose.y - focus.y).toFixed(4)),
+              z: Number((pose.z - focus.z).toFixed(4)),
+            },
+          });
+        }
       } else {
         setAspectDropdownOpen(false);
       }
@@ -974,6 +1217,149 @@ export default function App() {
     });
   }, [setProject]);
 
+  const openShapeMenu = (kind: 'flat' | 'solid', button: HTMLButtonElement | null) => {
+    if (shapeMenu === kind) {
+      setShapeMenu(null);
+      return;
+    }
+    if (button) {
+      const rect = button.getBoundingClientRect();
+      setShapeMenuBox({ top: rect.bottom + 8, left: rect.left + rect.width / 2 });
+    }
+    setShapeMenu(kind);
+  };
+
+  const pinLayer = (kind: 'device' | 'prop' | 'overlay', id: string) => {
+    setLayerSelection({ kind, id });
+    setLayerPin({ kind, id, token: Date.now() });
+    setSelectedOverlayId(kind === 'overlay' ? id : null);
+  };
+
+  const addInsertShape = (kind: ScenePropKind) => {
+    const existing = project.sceneProps ?? [];
+    if (existing.length >= 24) {
+      notify('This composition already has the maximum number of shapes');
+      return;
+    }
+    const slot = existing.length;
+    const prop = createSceneProp({
+      kind,
+      position: { x: 1.15 + (slot % 3) * 0.15, y: 0.15, z: (slot % 2) * 0.2 },
+      color: '#d8cfc4',
+    });
+    updateProject({ sceneProps: [...existing, prop] });
+    pinLayer('prop', prop.id);
+    setShapeMenu(null);
+  };
+
+  const addFlatShape = (shape: FlatShape) => {
+    const next = createOverlay({
+      kind: 'shape',
+      text: shape,
+      x: 0.5,
+      y: 0.42,
+      color: '#d7dde4',
+      endTime: animation.duration,
+    });
+    updateProject({ overlays: [...(project.overlays ?? []), next] });
+    pinLayer('overlay', next.id);
+    setOpenSectionId('overlays');
+    setShapeMenu(null);
+  };
+
+  const commitPenPath = (points: { x: number; y: number }[]) => {
+    const step = Math.max(1, Math.ceil(points.length / 360));
+    const sampled = points.filter((point, index) => index % step === 0 || index === points.length - 1);
+    const cx = sampled.reduce((sum, point) => sum + point.x, 0) / sampled.length;
+    const cy = sampled.reduce((sum, point) => sum + point.y, 0) / sampled.length;
+    const next = createOverlay({
+      kind: 'path',
+      text: sampled.map((point) => `${(point.x - cx).toFixed(4)},${(point.y - cy).toFixed(4)}`).join(' '),
+      x: Math.min(1, Math.max(0, cx)),
+      y: Math.min(1, Math.max(0, cy)),
+      color: '#d7dde4',
+      endTime: animation.duration,
+    });
+    updateProject({ overlays: [...(project.overlays ?? []), next] });
+    pinLayer('overlay', next.id);
+    setOpenSectionId('overlays');
+  };
+
+  const showComposition = () => {
+    setCanvasTool('composition');
+    if (timelineOpen) toggleTimeline();
+  };
+
+  const showAnimate = () => {
+    setCanvasTool('animate');
+    if (!timelineOpen) toggleTimeline();
+  };
+
+  const showType = () => {
+    setCanvasTool('type');
+    setOpenSectionId('overlays');
+    if (timelineOpen) toggleTimeline();
+    const existing = (project.overlays ?? []).filter((item) => item.kind === 'text');
+    if (existing.length) pinLayer('overlay', existing[existing.length - 1].id);
+  };
+
+  const showComments = () => {
+    setCanvasTool('comments');
+    setOpenSectionId('overlays');
+    if (timelineOpen) toggleTimeline();
+    const existing = (project.overlays ?? []).filter((item) => item.kind === 'comment');
+    if (existing.length) {
+      pinLayer('overlay', existing[existing.length - 1].id);
+      return;
+    }
+    addInsertComment();
+  };
+
+  const togglePen = () => {
+    setCanvasTool((tool) => (tool === 'pen' ? 'composition' : 'pen'));
+  };
+
+  const onViewSwipe = (direction: 'left' | 'right') => {
+    const order: CameraView[] = ['front', 'right', 'top', 'left'];
+    const index = Math.max(0, order.indexOf(project.cameraView));
+    const next = direction === 'right'
+      ? order[(index + 1) % order.length]
+      : order[(index + order.length - 1) % order.length];
+    setSharedOrbit(null);
+    updateProject({ cameraView: next });
+  };
+
+  const onViewLongPress = (point: { clientX: number; clientY: number }) => {
+    const selected = getSelectedDevice(project);
+    setDeviceMenu({ id: selected.id, x: point.clientX, y: point.clientY });
+  };
+
+  const addInsertText = () => {
+    const next = createOverlay({
+      kind: 'text',
+      endTime: animation.duration,
+    });
+    updateProject({ overlays: [...(project.overlays ?? []), next] });
+    pinLayer('overlay', next.id);
+    setOpenSectionId('overlays');
+  };
+
+  const addInsertComment = () => {
+    const index = (project.overlays ?? []).filter((item) => item.kind === 'comment').length;
+    const next = createOverlay({
+      kind: 'comment',
+      text: 'Comment',
+      color: '#2a2418',
+      x: index === 0 ? 0.5 : Math.min(0.78, 0.24 + (index % 3) * 0.22),
+      y: index === 0 ? 0.82 : Math.min(0.9, 0.7 + Math.floor(index / 3) * 0.1),
+      fontSize: 0.032,
+      endTime: animation.duration,
+    });
+    updateProject({ overlays: [...(project.overlays ?? []), next] });
+    pinLayer('overlay', next.id);
+    setOpenSectionId('overlays');
+  };
+
   const patchOverlay = useCallback((id: string, patch: Partial<SceneOverlay>) => {
     setProject((current) => ({
       ...current,
@@ -995,7 +1381,7 @@ export default function App() {
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     overlayDragRef.current = { id: overlayId, pointerId: e.pointerId };
-    setSelectedOverlayId(overlayId);
+    pinLayer('overlay', overlayId);
     setOpenSectionId('overlays');
   };
 
@@ -1100,6 +1486,19 @@ export default function App() {
     setAnimPlaying(false);
     changeLogsRef.current.delete(id);
     setChangeLogVersion((version) => version + 1);
+  };
+
+  const goToRecentProjects = () => {
+    for (const tab of workspaceRef.current.tabs) trackRecent(tab.project);
+    changeLogsRef.current.clear();
+    setChangeLogVersion((version) => version + 1);
+    setWorkspace({ tabs: [], activeId: null });
+    setDeviceMenu(null);
+    setRenamingTabId(null);
+    setExportOpen(false);
+    setAnimPlaying(false);
+    setFileMenuOpen(false);
+    setLeftWorkspaceTab('scenes');
   };
 
   const openProjectInTab = (nextProject: MockupProject, notice?: string, syncPath?: string | null) => {
@@ -1578,6 +1977,49 @@ export default function App() {
     };
   }, [syncMenuOpen]);
 
+  useEffect(() => {
+    if (!shapeMenu) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!shapeMenuRef.current?.contains(target) && !floatingMenuRef.current?.contains(target)) setShapeMenu(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShapeMenu(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [shapeMenu]);
+
+  useEffect(() => {
+    if (!fileMenuOpen) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!fileMenuRef.current?.contains(event.target as Node)) setFileMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFileMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [fileMenuOpen]);
+
+  useEffect(() => {
+    const el = canvasStageRef.current;
+    if (!el) return undefined;
+    const update = () => setStageSize({ w: el.clientWidth || 1, h: el.clientHeight || 1 });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasOpenProject]);
+
   useEffect(() => () => {
     if (toastTimer.current != null) window.clearTimeout(toastTimer.current);
   }, []);
@@ -1842,35 +2284,44 @@ export default function App() {
     }
   };
 
-  const keyCameraAtPlayhead = () => {
-    const base = animatedCamera
-      ?? defaultCameraPosition(project.cameraView, false);
-    setTimelineOpen(true);
-    updateProject({
-      animation: {
-        ...animation,
-        tracks: (['camera.x', 'camera.y', 'camera.z'] as const).reduce((tracks, property) => {
-          const existing = tracks.find((t) => t.targetId === CAMERA_TARGET_ID && t.property === property);
-          const value = property === 'camera.x' ? base.x : property === 'camera.y' ? base.y : base.z;
-          if (existing) {
-            return tracks.map((t) => (t.id === existing.id ? upsertKeyframe(t, animTime, value) : t));
-          }
-          return [
-            ...tracks,
-            {
-              id: `track-camera-${property}`,
-              targetId: CAMERA_TARGET_ID,
-              property,
-              keyframes: upsertKeyframe(
-                { id: 'tmp', targetId: CAMERA_TARGET_ID, property, keyframes: [] },
-                animTime,
-                value,
-              ).keyframes,
-            },
-          ];
-        }, animation.tracks),
-      },
+  const keyCameraPosition = useCallback((position: Vec3, time: number) => {
+    const rounded = {
+      x: Number(position.x.toFixed(4)),
+      y: Number(position.y.toFixed(4)),
+      z: Number(position.z.toFixed(4)),
+    };
+    setProject((current) => {
+      let tracks = current.animation.tracks;
+      (['camera.x', 'camera.y', 'camera.z'] as const).forEach((property) => {
+        const value = property === 'camera.x' ? rounded.x : property === 'camera.y' ? rounded.y : rounded.z;
+        const existing = tracks.find((t) => t.targetId === CAMERA_TARGET_ID && t.property === property);
+        const base = existing ?? {
+          id: `track-camera-${property}`,
+          targetId: CAMERA_TARGET_ID,
+          property,
+          keyframes: [],
+        };
+        const updated = upsertKeyframe(base, time, value);
+        tracks = existing
+          ? tracks.map((t) => (t.id === existing.id ? updated : t))
+          : [...tracks, updated];
+      });
+      return { ...current, animation: { ...current.animation, tracks } };
     });
+  }, [setProject]);
+
+  const onCameraCommit = useCallback((position: Vec3) => {
+    if (!timelineOpenRef.current) return;
+    keyCameraPosition(position, animTimeRef.current);
+  }, [keyCameraPosition]);
+
+  const onOrbitStart = useCallback(() => {
+    setAnimPlaying(false);
+  }, [setAnimPlaying]);
+
+  const keyCameraAtPlayhead = () => {
+    setTimelineOpen(true);
+    keyCameraPosition(liveCameraPose, animTime);
     notify('Camera keyframed');
   };
 
@@ -2153,6 +2604,26 @@ export default function App() {
 
   const previewAspect = previewFrame === 'free' ? null : frameMeta(previewFrame, savedSizes);
 
+  const canvasFormatOptions = useMemo(() => {
+    const saved = savedSizes.map((item) => ({
+      id: item.id,
+      label: item.label,
+      hint: `${item.width}×${item.height}`,
+      group: 'Your sizes',
+    }));
+    const builtins = EXPORT_ASPECT_GROUPS.flatMap((group) => (
+      EXPORT_ASPECTS
+        .filter((item) => item.group === group.id && item.id !== 'custom')
+        .map((item) => ({
+          id: item.id,
+          label: item.shortLabel,
+          hint: item.hint,
+          group: group.label,
+        }))
+    ));
+    return [...saved, ...builtins];
+  }, [savedSizes]);
+
   const aspectSlug = (aspectId: string) => {
     const meta = frameMeta(aspectId, savedSizes);
     return (meta?.shortLabel ?? aspectId).toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -2163,14 +2634,13 @@ export default function App() {
     if (saved) {
       setPreviewFrame(saved.id);
       setExportResolution('native');
-      setCustomExportSize({ width: saved.width, height: saved.height });
+      // Keep the user's custom px — platform/native sizes must not overwrite it.
       return;
     }
     const fixed = exportAspectFixedSize(id as ExportAspectId);
     if (fixed) {
       setPreviewFrame(id);
       setExportResolution('native');
-      setCustomExportSize(fixed);
       return;
     }
     if (id === 'custom') {
@@ -2658,6 +3128,7 @@ export default function App() {
   };
 
   const onSelectDevice = (payload: DeviceSelectPayload) => {
+    pinLayer('device', payload.id);
     setDeviceChosen(true);
     setProject((current) => {
       const selected = current.devices.find((d) => d.id === payload.id) ?? getSelectedDevice(current);
@@ -2741,11 +3212,12 @@ export default function App() {
     });
   };
 
-  const duplicateSelectedDevice = () => {
-    let message = 'Device duplicated';
+  const addDeviceToScene = (opts?: { quiet?: boolean }) => {
+    let message = 'Device added';
+    let added = false;
     setProject((current) => {
       if (current.compositionMode === 'split') {
-        message = 'Switch to single mode to duplicate freely';
+        message = 'Switch off iOS + Android to add more devices in one canvas';
         return current;
       }
       if (current.devices.length >= entitlementsMaxDevices) {
@@ -2759,22 +3231,44 @@ export default function App() {
         return current;
       }
       const selected = getSelectedDevice(current);
+      const slot = current.devices.length;
       const copy = createDeviceInstance({
         deviceId: selected.deviceId,
-        rotation: { ...selected.rotation, y: selected.rotation.y + 18 },
+        rotation: { ...selected.rotation, y: selected.rotation.y + (slot % 2 === 0 ? 18 : -18) },
         scale: selected.scale,
-        position: { x: selected.position.x + 1.15, y: selected.position.y, z: selected.position.z },
+        position: {
+          x: selected.position.x + 1.15,
+          y: selected.position.y,
+          z: selected.position.z - slot * 0.08,
+        },
         glassReflection: selected.glassReflection,
         screenshot: deviceScreenMedia(selected, current.screenshot),
         deviceColor: selected.deviceColor ?? current.deviceColor,
         clayMode: selected.clayMode ?? current.clayMode,
         lidOpen: selected.lidOpen,
       });
+      added = true;
+      message = `${current.devices.length + 1} devices in this composition`;
       return syncProjectFromSelected({ ...current, devices: [...current.devices, copy] }, copy);
     });
     setDeviceMenu(null);
     if (message.includes('Pro')) setLicenseOpen(true);
-    notify(message);
+    if (!opts?.quiet || added) notify(message);
+    return added;
+  };
+
+  const duplicateSelectedDevice = () => {
+    addDeviceToScene();
+  };
+
+  const removeSceneProp = (id: string) => {
+    updateProject({
+      sceneProps: (project.sceneProps ?? []).filter((item) => item.id !== id),
+    });
+    if (layerSelection.kind === 'prop' && layerSelection.id === id) {
+      onLayerSelection({ kind: 'device', id: project.selectedDeviceId });
+    }
+    notify('Shape removed');
   };
 
   const rotateSelectedDevice = () => {
@@ -2792,16 +3286,22 @@ export default function App() {
     notify('Rotated 45°');
   };
 
-  const deleteSelectedDevice = () => {
+  const deleteDeviceById = (id: string) => {
     setProject((current) => {
       if (current.compositionMode === 'split' || current.devices.length <= 1) {
         notify('Keep at least one device in the scene');
         return current;
       }
-      const remaining = current.devices.filter((d) => d.id !== current.selectedDeviceId);
-      return syncProjectFromSelected({ ...current, devices: remaining }, remaining[0]);
+      if (!current.devices.some((device) => device.id === id)) return current;
+      const remaining = current.devices.filter((device) => device.id !== id);
+      const nextSelected = remaining.find((device) => device.id === current.selectedDeviceId) ?? remaining[0];
+      return syncProjectFromSelected({ ...current, devices: remaining }, nextSelected);
     });
     setDeviceMenu(null);
+  };
+
+  const deleteSelectedDevice = () => {
+    deleteDeviceById(project.selectedDeviceId);
   };
 
   useEffect(() => {
@@ -2812,13 +3312,10 @@ export default function App() {
 
       if (event.code === 'Space' || event.key === ' ') {
         if (typing || event.metaKey || event.ctrlKey || event.altKey) return;
+        // Hold Space to pan. A tap (no drag) still plays and pauses.
         event.preventDefault();
-        setTimelineOpen(true);
-        setAnimPlaying((playing) => {
-          if (playing) return false;
-          setAnimTime((time) => (time >= animation.duration - 0.001 ? 0 : time));
-          return true;
-        });
+        if (event.repeat) return;
+        spacePannedRef.current = false;
         return;
       }
 
@@ -2838,6 +3335,29 @@ export default function App() {
           }
           return nextHidden;
         });
+        return;
+      }
+
+      if ((event.key === 'Backspace' || event.key === 'Delete') && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        if (typing || !hasOpenProject || event.defaultPrevented || event.repeat) return;
+        if (layerSelection.kind === 'prop' && layerSelection.id) {
+          event.preventDefault();
+          removeSceneProp(layerSelection.id);
+          return;
+        }
+        if (layerSelection.kind === 'overlay' && layerSelection.id) {
+          event.preventDefault();
+          const id = layerSelection.id;
+          updateProject({
+            overlays: (project.overlays ?? []).filter((item) => item.id !== id),
+          });
+          if (selectedOverlayId === id) setSelectedOverlayId(null);
+          return;
+        }
+        if (layerSelection.kind === 'device') {
+          event.preventDefault();
+          deleteDeviceById(layerSelection.id || project.selectedDeviceId);
+        }
         return;
       }
 
@@ -2870,8 +3390,30 @@ export default function App() {
         closeTab(workspace.activeId);
       }
     };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== 'Space' && event.key !== ' ') return;
+      const upTarget = event.target as HTMLElement | null;
+      const upTyping = upTarget
+        && (upTarget.tagName === 'INPUT' || upTarget.tagName === 'TEXTAREA' || upTarget.isContentEditable);
+      if (upTyping || event.metaKey || event.ctrlKey || event.altKey) return;
+      event.preventDefault();
+      if (spacePannedRef.current) {
+        spacePannedRef.current = false;
+        return;
+      }
+      setTimelineOpen(true);
+      setAnimPlaying((playing) => {
+        if (playing) return false;
+        setAnimTime((time) => (time >= animation.duration - 0.001 ? 0 : time));
+        return true;
+      });
+    };
     window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handler);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   });
 
   useEffect(() => {
@@ -3022,12 +3564,13 @@ export default function App() {
     notify('Angle removed');
   };
 
-  const onSaveComposition = () => {
+  const onSaveComposition = (opts?: { openLibrary?: boolean }) => {
     const saved = saveComposition(compositionName, project);
     setSavedCompositions(loadSavedCompositions());
     setCompositionName('');
     setTemplateCategory('saved');
-    notify(`Saved “${saved.label}” composition`);
+    if (opts?.openLibrary) setTemplatePickerOpen(true);
+    notify(`Saved “${saved.label}” · ${project.devices.length} device${project.devices.length === 1 ? '' : 's'}`);
   };
 
   const onDeleteComposition = (id: string) => {
@@ -3063,16 +3606,53 @@ export default function App() {
     <div className={`app-shell ${hasOpenProject ? 'has-project' : 'is-dashboard'}`}>
       {hasOpenProject && (
       <header className="topbar">
-        <div className="brand-area" title="Mockup Studio">
-          <div className="brand-mark" aria-label="Mockup Studio">
-            <svg viewBox="0 0 36 36" width="18" height="18" fill="none" aria-hidden>
-              <rect x="6.5" y="8" width="14" height="20" rx="3" transform="rotate(-12 13.5 18)" stroke="currentColor" strokeWidth="1.75" opacity="0.45" />
-              <rect x="11" y="7" width="14" height="22" rx="3.2" stroke="currentColor" strokeWidth="1.75" opacity="0.72" />
-              <rect x="15.5" y="8.5" width="13.5" height="19" rx="3" transform="rotate(10 22.25 18)" fill="currentColor" />
-            </svg>
-          </div>
-        </div>
         <div className="document-area">
+          <div className="file-menu-wrap" ref={fileMenuRef}>
+            <button
+              type="button"
+              className={`file-menu-button ${fileMenuOpen || leftWorkspaceTab === 'log' ? 'is-open' : ''}`}
+              aria-label="File menu"
+              aria-haspopup="menu"
+              aria-expanded={fileMenuOpen}
+              title="File menu"
+              onClick={() => setFileMenuOpen((open) => !open)}
+            >
+              <Menu size={16} />
+            </button>
+            {fileMenuOpen && (
+              <div className="file-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={compositionScenes.length >= MAX_COMPOSITION_SCENES}
+                  onClick={() => {
+                    setLeftWorkspaceTab('scenes');
+                    setFileMenuOpen(false);
+                    onAddCompositionScene();
+                  }}
+                >
+                  New Scene
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setLeftWorkspaceTab('log');
+                    setFileMenuOpen(false);
+                  }}
+                >
+                  Version History
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={goToRecentProjects}
+                >
+                  Recent Projects
+                </button>
+              </div>
+            )}
+          </div>
           <div className="project-tabs" role="tablist" aria-label="Open projects">
             {workspace.tabs.map((tab) => {
               const active = tab.id === workspace.activeId;
@@ -3118,7 +3698,6 @@ export default function App() {
                         beginRenameTab(tab.id, tab.project.name);
                       }}
                     >
-                      <Layers3 size={13} />
                       <span>{tabLabel(tab.project)}</span>
                     </button>
                   )}
@@ -3217,15 +3796,6 @@ export default function App() {
               >
                 Assets
               </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={leftWorkspaceTab === 'log'}
-                className={leftWorkspaceTab === 'log' ? 'panel-tab selected' : 'panel-tab'}
-                onClick={() => setLeftWorkspaceTab('log')}
-              >
-                Log
-              </button>
             </div>
             <button
               type="button"
@@ -3251,6 +3821,7 @@ export default function App() {
                   onRenameScene={onRenameCompositionScene}
                   onRemoveScene={onRemoveCompositionScene}
                   onSelectDevice={(device) => {
+                    pinLayer('device', device.id);
                     setDeviceChosen(true);
                     setProject((current) => {
                       const selected = current.devices.find((item) => item.id === device.id) ?? getSelectedDevice(current);
@@ -3261,8 +3832,16 @@ export default function App() {
                   onDeleteLook={onDeletePreset}
                   onOpenSection={(sectionId) => setOpenSectionId(sectionId)}
                   onOpenAssets={() => setLeftWorkspaceTab('assets')}
-                  onSelectOverlay={(overlayId) => setSelectedOverlayId(overlayId)}
+                  onSelectOverlay={(overlayId) => {
+                    pinLayer('overlay', overlayId);
+                    const overlay = (project.overlays ?? []).find((item) => item.id === overlayId);
+                    if (overlay?.kind === 'comment') setCanvasTool('comments');
+                  }}
+                  onSelectProp={(propId) => pinLayer('prop', propId)}
+                  onRemoveProp={removeSceneProp}
                   onFocusKeyLight={() => setLightGizmoActive(true)}
+                  onSelectionChange={onLayerSelection}
+                  layerPin={layerPin}
                 />
               </section>
             ) : leftWorkspaceTab === 'log' ? (
@@ -3453,8 +4032,696 @@ export default function App() {
           </div>
 
           <div className="left-panel-bottom">
+
+            <div className="left-panel-footer">
+              {!LICENSING_DISABLED && (
+                <button
+                  type="button"
+                  className="left-panel-settings"
+                  title={`License · ${planLabel(license.tier)} · Pro ${formatGbp(PLAN_PRICES_GBP.pro)}`}
+                  aria-label="License and plans"
+                  onClick={() => setLicenseOpen(true)}
+                >
+                  <KeyRound size={15} strokeWidth={1.9} />
+                  <span>{planLabel(license.tier)}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="left-panel-settings"
+                data-hide-with-timeline
+                title="Send feedback"
+                aria-label="Send feedback"
+                onClick={() => setFeedbackOpen(true)}
+              >
+                <MessageSquarePlus size={15} strokeWidth={1.9} />
+                <span>Feedback</span>
+              </button>
+              <button
+                type="button"
+                className="left-panel-settings"
+                data-hide-with-timeline
+                title="Settings & shortcuts"
+                aria-label="Settings & shortcuts"
+                onClick={() => setHelpOpen(true)}
+              >
+                <Settings2 size={15} strokeWidth={1.9} />
+                <span>Settings</span>
+              </button>
+            </div>
+          </div>
+
+        </aside>
+
+        {!sidePanelsHidden && (
+          <button
+            type="button"
+            className={`left-panel-edge-toggle ${leftPanelHidden ? 'is-floating' : 'is-docked'}`}
+            title={leftPanelHidden ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={leftPanelHidden ? 'Expand left sidebar' : 'Collapse left sidebar'}
+            aria-pressed={!leftPanelHidden}
+            onClick={() => setLeftPanelHidden((hidden) => !hidden)}
+          >
+            {leftPanelHidden ? (
+              <PanelLeftOpen size={15} strokeWidth={1.9} />
+            ) : (
+              <PanelLeftClose size={15} strokeWidth={1.9} />
+            )}
+          </button>
+        )}
+
+        <main
+          className="canvas-panel"
+          onDragOver={(e) => {
+            if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }}
+          onDrop={onDrop}
+        >
+          <div
+            className={`canvas-stage ${sidePanelsHidden ? 'chrome-hidden' : timelineOpen ? 'with-timeline' : ''}`}
+            ref={canvasStageRef}
+          >
+            <div className="canvas-top-right">
+              <div className="view-buttons canvas-gesture-bar" role="toolbar" aria-label="Gestures">
+                {VIEW_GESTURES.map((gesture) => {
+                  const Icon = gesture.icon;
+                  const active = viewGesture === gesture.id;
+                  return (
+                    <button
+                      key={gesture.id}
+                      type="button"
+                      className={`view-mirror-btn ${active ? 'active' : ''}`}
+                      title={gesture.label}
+                      aria-label={gesture.label}
+                      aria-pressed={active}
+                      onClick={() => setViewGesture(gesture.id)}
+                    >
+                      <Icon size={14} />
+                    </button>
+                  );
+                })}
+                <span className="view-buttons-divider" />
+                <button
+                  type="button"
+                  className="view-reset-btn"
+                  title="Reset camera position"
+                  aria-label="Reset camera position"
+                  onClick={resetDevice}
+                >
+                  <RotateCcw size={14} />
+                </button>
+              </div>
+              <div className="view-buttons canvas-view-buttons" role="group" aria-label="Viewer tools">
+                <button
+                  type="button"
+                  className={`view-mirror-btn ${lightGizmoActive ? 'active' : ''}`}
+                  title={lightGizmoActive ? 'Hide light handle' : 'Move key light'}
+                  aria-label={lightGizmoActive ? 'Hide light handle' : 'Move key light'}
+                  aria-pressed={lightGizmoActive}
+                  onClick={() => setLightGizmoActive((on) => !on)}
+                >
+                  <Sun size={14} />
+                </button>
+              </div>
+              {mirrorStream ? (
+                <div className="mirror-live-chip" role="status">
+                  <span className="mirror-live-dot" aria-hidden />
+                  {mirrorSource === 'android' ? 'Android' : 'iPhone'}
+                  {' · '}
+                  {mirrorSource === 'android'
+                    ? (androidMirrorLabel || 'device')
+                    : (mirrorDevice?.label || 'device')}
+                  <button type="button" disabled={mirrorBusy} onClick={() => void snapshotMirror()}>
+                    <Camera size={12} /> Snapshot
+                  </button>
+                  <button type="button" className="mirror-stop" disabled={mirrorBusy} onClick={() => { stopMirroring(); notify('Mirror stopped'); }}>
+                    Stop
+                  </button>
+                </div>
+              ) : canvasHintVisible ? (
+                <p className="canvas-usage-hint" role="status">
+                  Hold <kbd>Space</kbd> + drag to pan · Drag a device to move it · Drag the rings to rotate
+                  <button
+                    type="button"
+                    className="canvas-usage-hint-close"
+                    aria-label="Close hint"
+                    onClick={dismissCanvasHint}
+                  >
+                    <X size={11} />
+                  </button>
+                </p>
+              ) : null}
+            </div>
+            <div className={`canvas-render ${project.background === 'transparent' ? 'transparent-grid' : ''} ${isDualCanvas ? 'is-dual' : ''}`}>
+              {isDualCanvas && iosDisplayProject && androidDisplayProject ? (
+                <DualCanvasLayout
+                  ratio={previewAspect?.ratio ?? null}
+                  label={previewAspect?.label}
+                  hint={previewAspect?.hint}
+                  activeFormatId={previewFrame}
+                  formats={canvasFormatOptions}
+                  onSelectFormat={applyPlatformFrame}
+                  ios={{
+                    active: activePublishTarget === 'ios',
+                    editing: activePublishTarget === 'ios',
+                    platformLabel: 'iOS',
+                    onActivate: () => {
+                      if (activePublishTarget !== 'ios') switchPublishTarget('ios', { quiet: true });
+                    },
+                    children: (
+                      <DeviceCanvas
+                        canvasId="env-ios"
+                        project={iosDisplayProject}
+                        captureRef={iosCaptureRef}
+                        mediaPlaying={animPlaying}
+                        liveStream={mirrorSource === 'ios' || (!mirrorSource && activePublishTarget === 'ios') ? mirrorStream : null}
+                        liveStreamDeviceId={liveStreamDeviceId}
+                        cameraPosition={animatedCamera}
+                        gizmoActive={activePublishTarget === 'ios'}
+                        sharedOrbit={sharedOrbit}
+                        onSharedOrbitChange={setSharedOrbit}
+                        onCameraCommit={onCameraCommit}
+                        onOrbitStart={onOrbitStart}
+                        recenterToken={cameraRecenterToken}
+                        lightGizmoActive={lightGizmoActive && activePublishTarget === 'ios'}
+                        onLightPositionChange={(position) => updateProject({ lightPosition: position })}
+                        onSelectDevice={onSelectDevice}
+                        overlayTime={animTime}
+                        selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
+                        onSelectProp={(id) => pinLayer('prop', id)}
+                        onSelectOverlay={(id) => pinLayer('overlay', id)}
+                        onClearSelection={() => setDeviceMenu(null)}
+                        onRotateDevice={onRotateDevice}
+                        onMoveDevice={onMoveDevice}
+                        onGizmoDraggingChange={setGizmoDragging}
+                        screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
+                        onSpacePanDrag={noteSpacePan}
+                        viewGesture={viewGesture}
+                        onSwipe={onViewSwipe}
+                        onLongPress={onViewLongPress}
+                      />
+                    ),
+                  }}
+                  android={{
+                    active: activePublishTarget === 'android',
+                    editing: activePublishTarget === 'android',
+                    platformLabel: 'Android',
+                    onActivate: () => {
+                      if (activePublishTarget !== 'android') switchPublishTarget('android', { quiet: true });
+                    },
+                    children: (
+                      <DeviceCanvas
+                        canvasId="env-android"
+                        project={androidDisplayProject}
+                        captureRef={androidCaptureRef}
+                        mediaPlaying={animPlaying}
+                        liveStream={mirrorSource === 'android' || (!mirrorSource && activePublishTarget === 'android') ? mirrorStream : null}
+                        liveStreamDeviceId={liveStreamDeviceId}
+                        cameraPosition={animatedCamera}
+                        gizmoActive={activePublishTarget === 'android'}
+                        sharedOrbit={sharedOrbit}
+                        onSharedOrbitChange={setSharedOrbit}
+                        onCameraCommit={onCameraCommit}
+                        onOrbitStart={onOrbitStart}
+                        recenterToken={cameraRecenterToken}
+                        lightGizmoActive={lightGizmoActive && activePublishTarget === 'android'}
+                        onLightPositionChange={(position) => updateProject({ lightPosition: position })}
+                        onSelectDevice={onSelectDevice}
+                        overlayTime={animTime}
+                        selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
+                        onSelectProp={(id) => pinLayer('prop', id)}
+                        onSelectOverlay={(id) => pinLayer('overlay', id)}
+                        onClearSelection={() => setDeviceMenu(null)}
+                        onRotateDevice={onRotateDevice}
+                        onMoveDevice={onMoveDevice}
+                        onGizmoDraggingChange={setGizmoDragging}
+                        screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
+                        onSpacePanDrag={noteSpacePan}
+                        viewGesture={viewGesture}
+                        onSwipe={onViewSwipe}
+                        onLongPress={onViewLongPress}
+                      />
+                    ),
+                  }}
+                />
+              ) : (
+                <DeviceCanvas
+                  project={displayProject}
+                  captureRef={captureRef}
+                  mediaPlaying={animPlaying}
+                  liveStream={mirrorStream}
+                  liveStreamDeviceId={liveStreamDeviceId}
+                  cameraPosition={animatedCamera}
+                  sharedOrbit={sharedOrbit}
+                  onSharedOrbitChange={setSharedOrbit}
+                  onCameraCommit={onCameraCommit}
+                  onOrbitStart={onOrbitStart}
+                  recenterToken={cameraRecenterToken}
+                  lightGizmoActive={lightGizmoActive}
+                  onLightPositionChange={(position) => updateProject({ lightPosition: position })}
+                  onSelectDevice={onSelectDevice}
+                        overlayTime={animTime}
+                        selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
+                        onSelectProp={(id) => pinLayer('prop', id)}
+                        onSelectOverlay={(id) => pinLayer('overlay', id)}
+                  onClearSelection={() => setDeviceMenu(null)}
+                  onRotateDevice={onRotateDevice}
+                  onMoveDevice={onMoveDevice}
+                  onGizmoDraggingChange={setGizmoDragging}
+                  screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
+                  onSpacePanDrag={noteSpacePan}
+                  viewGesture={viewGesture}
+                  onSwipe={onViewSwipe}
+                  onLongPress={onViewLongPress}
+                />
+              )}
+              <ProgressiveBlurOverlay
+                top={displayProject.edgeBlurTop ?? false}
+                bottom={displayProject.edgeBlurBottom ?? false}
+                amount={displayProject.edgeBlurAmount ?? DEFAULT_PROJECT.edgeBlurAmount}
+                bottomClearance={
+                  sidePanelsHidden
+                    ? 'none'
+                    : timelineOpen
+                      ? 'open'
+                      : 'collapsed'
+                }
+              />
+              {canvasTool === 'pen' && <PenCapture onCommit={commitPenPath} />}
+              {(project.overlays ?? []).map((overlay) => (
+                overlayVisibleAt(overlay, animTime) ? (
+                  <div
+                    key={overlay.id}
+                    className={`canvas-overlay-layer ${selectedOverlayId === overlay.id ? 'is-selected' : ''} ${overlay.kind === 'text' ? 'is-text' : ''} ${(overlay.kind === 'text' && (overlay.extrusion ?? 0) > 0.001) ? 'is-extruded' : ''} ${overlay.kind === 'comment' ? 'is-comment' : ''} ${overlay.kind === 'shape' ? `is-shape is-${flatShapeOf(overlay)}` : ''} ${overlay.kind === 'path' ? 'is-path' : ''}`}
+                    style={{
+                      left: `${overlay.x * 100}%`,
+                      top: `${overlay.y * 100}%`,
+                      opacity: overlay.opacity,
+                      transform: `translate(-50%, -50%) scale(${overlay.scale})`,
+                      color: overlay.kind === 'text' && (overlay.extrusion ?? 0) > 0.001 ? 'transparent' : (overlay.color || '#fff'),
+                      fontSize: `${Math.max(14, (overlay.fontSize ?? 0.055) * 420)}px`,
+                    }}
+                    onPointerDown={(e) => onOverlayPointerDown(e, overlay.id)}
+                    onPointerMove={onOverlayPointerMove}
+                    onPointerUp={onOverlayPointerUp}
+                    onPointerCancel={onOverlayPointerUp}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      pinLayer('overlay', overlay.id);
+                      if (overlay.kind === 'comment') setCanvasTool('comments');
+                      setOpenSectionId('overlays');
+                    }}
+                  >
+                    {overlay.kind === 'comment' ? (
+                      <>
+                        <span className="canvas-comment-pin">{commentNumber(project.overlays, overlay.id)}</span>
+                        <span className="canvas-comment-text">{overlay.text}</span>
+                      </>
+                    ) : overlay.kind === 'text' ? overlay.text : null}
+                    {overlay.kind === 'path' ? (
+                      <svg width={stageSize.w} height={stageSize.h} aria-hidden>
+                        <polyline
+                          fill="none"
+                          stroke={overlay.color || '#d7dde4'}
+                          strokeWidth={Math.max(2, 2 * overlay.scale)}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          points={pathOffsets(overlay.text).map((point) => (
+                            `${stageSize.w / 2 + point.x * stageSize.w},${stageSize.h / 2 + point.y * stageSize.h}`
+                          )).join(' ')}
+                        />
+                      </svg>
+                    ) : null}
+                    {overlay.kind === 'image' && overlay.imageData ? (
+                      <img src={overlay.imageData} alt="" draggable={false} />
+                    ) : null}
+                  </div>
+                ) : null
+              ))}
+            </div>
+            {deviceMenu && (
+              <div className="device-action-menu" style={{ left: Math.min(deviceMenu.x, window.innerWidth - 240), top: Math.min(deviceMenu.y, window.innerHeight - 200) }}>
+                <div className="device-action-hint">
+                  Drag the device to move it · rings rotate · arrows slide on one axis
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeviceMenu(null);
+                    setLeftWorkspaceTab('assets');
+                    imageInputRef.current?.click();
+                  }}
+                >
+                  <ImagePlus size={14} /> Replace screenshot
+                </button>
+                <button
+                  type="button"
+                  disabled={mirrorBusy}
+                  onClick={() => {
+                    setDeviceMenu(null);
+                    setLeftWorkspaceTab('assets');
+                    void startPhoneMirroring();
+                  }}
+                >
+                  <MonitorSmartphone size={14} /> {mirrorStream ? 'Stop Phone Mirror' : 'Phone Mirror'}
+                </button>
+                {mirrorStream && (
+                  <button
+                    type="button"
+                    disabled={mirrorBusy}
+                    onClick={() => {
+                      setDeviceMenu(null);
+                      void snapshotMirror();
+                    }}
+                  >
+                    <Camera size={14} /> Snapshot
+                  </button>
+                )}
+                <button type="button" title="Add another device (⌘D)" onClick={duplicateSelectedDevice}><Copy size={14} /> Add device</button>
+                <button type="button" onClick={rotateSelectedDevice}><Rotate3D size={14} /> Snap +45°</button>
+                <button type="button" className="danger" onClick={deleteSelectedDevice} disabled={project.compositionMode === 'split' || project.devices.length <= 1}><Trash2 size={14} /> Remove</button>
+                <div className="device-action-meta">Ideal size {screenSizeLabel(getDevice(project.deviceId).screenSize)}</div>
+              </div>
+            )}
+            {dragOver && (
+              <div className="drag-overlay">
+                <Upload size={16} />
+                <b>Drop on the highlighted screen</b>
+                <span>Image or video · {screenSizeLabel(getDevice(getPublishEnvDevice(project).deviceId).screenSize)}</span>
+              </div>
+            )}
+            <ViewAxisGizmo
+              view={project.cameraView}
+              deviceRotation={displaySelected.rotation}
+              orbitOffset={animatedCamera ? {
+                x: animatedCamera.x - (displaySelected.position?.x ?? 0),
+                y: animatedCamera.y - (displaySelected.position?.y ?? 0),
+                z: animatedCamera.z - (displaySelected.position?.z ?? 0),
+              } : sharedOrbit?.offset ?? null}
+              onSelectView={(cameraView) => {
+                setSharedOrbit(null);
+                updateProject({ cameraView });
+              }}
+            />
+          </div>
+          {previewAspect && !isDualCanvas && (
+            <CropFocusOverlay
+              ratio={previewAspect.ratio}
+              label={previewAspect.label}
+              hint={previewAspect.hint}
+              activeId={previewFrame}
+              formats={canvasFormatOptions}
+              onSelectFormat={applyPlatformFrame}
+            />
+          )}
+          <div className="canvas-tool-bar">
+            <div className="canvas-tool-bar-row" role="toolbar" aria-label="Canvas tools">
+              <div className="canvas-tool-modes" role="tablist">
+                <button
+                  type="button"
+                  role="tab"
+                  title="Composition"
+                  aria-label="Composition"
+                  aria-selected={canvasTool === 'composition'}
+                  className={canvasTool === 'composition' ? 'is-active' : ''}
+                  onClick={showComposition}
+                >
+                  <Layers3 size={15} />
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  title="Animate"
+                  aria-label="Animate"
+                  aria-selected={canvasTool === 'animate'}
+                  className={canvasTool === 'animate' ? 'is-active' : ''}
+                  onClick={showAnimate}
+                >
+                  <Film size={15} />
+                </button>
+              </div>
+              <span className="canvas-tool-divider" />
+              <div className="canvas-tool-pops" ref={shapeMenuRef}>
+                <div className="canvas-tool-pop">
+                  <button
+                    ref={flatShapeBtnRef}
+                    type="button"
+                    title="2D shapes"
+                    aria-label="2D shapes"
+                    aria-expanded={shapeMenu === 'flat'}
+                    aria-haspopup="menu"
+                    className={shapeMenu === 'flat' ? 'is-active' : ''}
+                    onClick={() => openShapeMenu('flat', flatShapeBtnRef.current)}
+                  >
+                    <Square size={15} />
+                  </button>
+                </div>
+                <div className="canvas-tool-pop">
+                  <button
+                    ref={solidShapeBtnRef}
+                    type="button"
+                    title="3D shapes"
+                    aria-label="3D shapes"
+                    aria-expanded={shapeMenu === 'solid'}
+                    aria-haspopup="menu"
+                    className={shapeMenu === 'solid' ? 'is-active' : ''}
+                    onClick={() => openShapeMenu('solid', solidShapeBtnRef.current)}
+                  >
+                    <Box size={15} />
+                  </button>
+                </div>
+              </div>
+              {shapeMenu && shapeMenuBox && createPortal(
+                <div
+                  ref={floatingMenuRef}
+                  className="canvas-tool-menu"
+                  role="menu"
+                  aria-label={shapeMenu === 'flat' ? '2D shapes' : '3D shapes'}
+                  style={{ top: shapeMenuBox.top, left: shapeMenuBox.left }}
+                >
+                  {shapeMenu === 'flat'
+                    ? FLAT_SHAPES.map((shape) => {
+                      const Icon = shape.icon;
+                      return (
+                        <button
+                          key={shape.id}
+                          type="button"
+                          role="menuitem"
+                          title={shape.label}
+                          aria-label={`Add ${shape.label}`}
+                          onClick={() => {
+                            addFlatShape(shape.id);
+                            setShapeMenu(null);
+                          }}
+                        >
+                          <Icon size={15} />
+                        </button>
+                      );
+                    })
+                    : INSERT_SHAPES.map((shape) => {
+                      const Icon = shape.icon;
+                      return (
+                        <button
+                          key={shape.kind}
+                          type="button"
+                          role="menuitem"
+                          title={shape.label}
+                          aria-label={`Add ${shape.label}`}
+                          onClick={() => {
+                            addInsertShape(shape.kind);
+                            setShapeMenu(null);
+                          }}
+                        >
+                          <Icon size={15} />
+                        </button>
+                      );
+                    })}
+                </div>,
+                document.body,
+              )}
+              <span className="canvas-tool-divider" />
+              <button type="button" title="Text" aria-label="Text" onClick={addInsertText}>
+                <Type size={15} />
+              </button>
+              <button
+                type="button"
+                title="Pen"
+                aria-label="Pen"
+                aria-pressed={canvasTool === 'pen'}
+                className={canvasTool === 'pen' ? 'is-active' : ''}
+                onClick={togglePen}
+              >
+                <PenTool size={15} />
+              </button>
+              <button
+                type="button"
+                role="tab"
+                title="Type"
+                aria-label="Type"
+                aria-selected={canvasTool === 'type'}
+                className={canvasTool === 'type' ? 'is-active' : ''}
+                onClick={showType}
+              >
+                <CaseSensitive size={15} />
+              </button>
+              <button
+                type="button"
+                role="tab"
+                title="Comments"
+                aria-label="Comments"
+                aria-selected={canvasTool === 'comments'}
+                className={canvasTool === 'comments' ? 'is-active' : ''}
+                onClick={showComments}
+              >
+                <MessageSquare size={15} />
+              </button>
+            </div>
+          </div>
+          {!sidePanelsHidden && (
+            <div className={`workspace-bottom-chrome ${timelineOpen ? 'is-raised' : ''}`}>
+              <div
+                ref={studioAiShellRef}
+                className={`studio-ai ${studioAiOpen ? 'is-open' : 'is-compact'}`}
+              >
+                {!studioAiOpen ? (
+                  <button
+                    type="button"
+                    className="studio-ai-trigger"
+                    onClick={openStudioAi}
+                    aria-expanded={false}
+                    aria-controls="studio-ai-panel"
+                    title="AI assistant"
+                  >
+                    <span className="studio-ai-glow" aria-hidden />
+                    <Sparkles size={15} aria-hidden />
+                    <span>AI</span>
+                  </button>
+                ) : (
+                  <form
+                    id="studio-ai-panel"
+                    className="studio-ai-panel"
+                    onSubmit={(event: FormEvent) => {
+                      event.preventDefault();
+                      runStudioAiPrompt(studioAiPrompt);
+                    }}
+                  >
+                    <span className="studio-ai-glow studio-ai-glow-panel" aria-hidden />
+                    <div className="studio-ai-field">
+                      <Sparkles size={14} className="studio-ai-icon" aria-hidden />
+                      <input
+                        ref={studioAiInputRef}
+                        type="text"
+                        value={studioAiPrompt}
+                        onChange={(e) => {
+                          setStudioAiPrompt(e.target.value);
+                          if (studioAiStatus) setStudioAiStatus(null);
+                        }}
+                        placeholder={studioAiBusy ? 'Building motion…' : 'Ask AI to animate…'}
+                        aria-label="AI assistant prompt"
+                        disabled={studioAiBusy}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <button
+                        type="submit"
+                        className="studio-ai-go"
+                        disabled={studioAiBusy || !studioAiPrompt.trim()}
+                        title="Generate"
+                      >
+                        Go
+                      </button>
+                    </div>
+                    <div className="studio-ai-meta">
+                      {studioAiStatus ? (
+                        <span className="studio-ai-status">{studioAiStatus}</span>
+                      ) : (
+                        <div className="studio-ai-chips" role="list">
+                          {PROMPT_SUGGESTIONS.slice(0, 6).map((chip) => (
+                            <button
+                              key={chip}
+                              type="button"
+                              role="listitem"
+                              className="studio-ai-chip"
+                              onClick={() => runStudioAiPrompt(chip)}
+                              title={`Animate: ${chip}`}
+                            >
+                              {chip}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </form>
+                )}
+              </div>
+              <div className="workspace-mode-cluster">
+              <nav className="workspace-mode-dock" aria-label="Workspace mode">
+                <div className="workspace-mode-dock-tabs" role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={!timelineOpen}
+                    className={!timelineOpen ? 'is-active' : ''}
+                    onClick={showComposition}
+                  >
+                    Composition
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={timelineOpen}
+                    className={timelineOpen ? 'is-active' : ''}
+                    onClick={showAnimate}
+                  >
+                    Animate
+                  </button>
+                </div>
+              </nav>
+              </div>
+            </div>
+          )}
+        </main>
+
+        <aside className="right-panel" aria-hidden={sidePanelsHidden} ref={rightPanelRef}>
+          <div className="inspector-scroll" ref={inspectorScrollRef}>
+            <SettingsSection id="camera" title="Camera" hint="Control the camera view and lens" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection}>
+              <div className="field-caption">Angle</div>
+              <div className="camera-preset-grid">
+                {(['front', 'left', 'right', 'top'] as CameraView[]).map((view) => (
+                  <button key={view} onClick={() => updateProject({ cameraView: view })}
+                    className={project.cameraView === view ? 'selected' : ''}>{view[0].toUpperCase() + view.slice(1)}</button>
+                ))}
+              </div>
+              <div className="field-caption" style={{ marginTop: 12 }}>Lens</div>
+              <div className="camera-preset-grid">
+                {CAMERA_LENSES.map((lens) => (
+                  <button
+                    key={lens.id}
+                    type="button"
+                    title={`${lens.label} ${lens.hint}`}
+                    onClick={() => updateProject({ cameraLens: lens.id })}
+                    className={(project.cameraLens ?? 'standard') === lens.id ? 'selected' : ''}
+                  >
+                    {lens.label}
+                  </button>
+                ))}
+              </div>
+              <p className="field-caption" style={{ marginTop: 8 }}>
+                {CAMERA_LENSES.find((l) => l.id === (project.cameraLens ?? 'standard'))?.hint ?? '~35 mm'} · changes perspective FOV
+              </p>
+              <button type="button" className="button full-outline compact" style={{ marginTop: 10 }} onClick={keyCameraAtPlayhead}>
+                <Aperture size={14} /> Key camera at playhead
+              </button>
+              <p className="field-caption" style={{ marginTop: 8 }}>
+                With the timeline open, orbit or dolly the view to key Camera X, Y, and Z. Scrub, then orbit again for the next pose.
+              </p>
+            </SettingsSection>
+            <SettingsSection id="frame" title="Frame size" hint="Canvas aspect ratio and crop" icon={Columns2} open={openSectionId === 'frame'} onToggle={toggleSection}>
             <section
-              className="left-aspect-dock"
+              className="frame-size-block"
               aria-label="Aspect ratio"
               onPointerDown={(event) => {
                 const pill = (event.target as HTMLElement).closest('.aspect-format-pill, .aspect-ratio-trigger');
@@ -3672,453 +4939,7 @@ export default function App() {
                 )}
               </div>
             </section>
-
-            <div className="left-panel-footer">
-              {!LICENSING_DISABLED && (
-                <button
-                  type="button"
-                  className="left-panel-settings"
-                  title={`License · ${planLabel(license.tier)} · Pro ${formatGbp(PLAN_PRICES_GBP.pro)}`}
-                  aria-label="License and plans"
-                  onClick={() => setLicenseOpen(true)}
-                >
-                  <KeyRound size={15} strokeWidth={1.9} />
-                  <span>{planLabel(license.tier)}</span>
-                </button>
-              )}
-              <button
-                type="button"
-                className="left-panel-settings"
-                data-hide-with-timeline
-                title="Send feedback"
-                aria-label="Send feedback"
-                onClick={() => setFeedbackOpen(true)}
-              >
-                <MessageSquarePlus size={15} strokeWidth={1.9} />
-                <span>Feedback</span>
-              </button>
-              <button
-                type="button"
-                className="left-panel-settings"
-                data-hide-with-timeline
-                title="Settings & shortcuts"
-                aria-label="Settings & shortcuts"
-                onClick={() => setHelpOpen(true)}
-              >
-                <Settings2 size={15} strokeWidth={1.9} />
-                <span>Settings</span>
-              </button>
-            </div>
-          </div>
-
-        </aside>
-
-        {!sidePanelsHidden && (
-          <button
-            type="button"
-            className={`left-panel-edge-toggle ${leftPanelHidden ? 'is-floating' : 'is-docked'}`}
-            title={leftPanelHidden ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-label={leftPanelHidden ? 'Expand left sidebar' : 'Collapse left sidebar'}
-            aria-pressed={!leftPanelHidden}
-            onClick={() => setLeftPanelHidden((hidden) => !hidden)}
-          >
-            {leftPanelHidden ? (
-              <PanelLeftOpen size={15} strokeWidth={1.9} />
-            ) : (
-              <PanelLeftClose size={15} strokeWidth={1.9} />
-            )}
-          </button>
-        )}
-
-        <main
-          className="canvas-panel"
-          onDragOver={(e) => {
-            if (!Array.from(e.dataTransfer.types).includes('Files')) return;
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }}
-          onDrop={onDrop}
-        >
-          <div className={`canvas-stage ${sidePanelsHidden ? 'chrome-hidden' : timelineOpen ? 'with-timeline' : ''}`}>
-            <div className="canvas-top-right">
-              <div className="view-buttons canvas-view-buttons" role="group" aria-label="Camera views">
-                {(['front', 'left', 'right', 'top'] as CameraView[]).map((view) => (
-                  <button
-                    key={view}
-                    type="button"
-                    onClick={() => updateProject({ cameraView: view })}
-                    className={project.cameraView === view ? 'active' : ''}
-                  >
-                    {view[0].toUpperCase() + view.slice(1)}
-                  </button>
-                ))}
-                <span className="view-buttons-divider" aria-hidden />
-                <button
-                  type="button"
-                  className={`view-mirror-btn ${lightGizmoActive ? 'active' : ''}`}
-                  title={lightGizmoActive ? 'Hide light handle' : 'Move key light'}
-                  aria-label={lightGizmoActive ? 'Hide light handle' : 'Move key light'}
-                  aria-pressed={lightGizmoActive}
-                  onClick={() => setLightGizmoActive((on) => !on)}
-                >
-                  <Sun size={14} />
-                </button>
-              </div>
-              {mirrorStream ? (
-                <div className="mirror-live-chip" role="status">
-                  <span className="mirror-live-dot" aria-hidden />
-                  {mirrorSource === 'android' ? 'Android' : 'iPhone'}
-                  {' · '}
-                  {mirrorSource === 'android'
-                    ? (androidMirrorLabel || 'device')
-                    : (mirrorDevice?.label || 'device')}
-                  <button type="button" disabled={mirrorBusy} onClick={() => void snapshotMirror()}>
-                    <Camera size={12} /> Snapshot
-                  </button>
-                  <button type="button" className="mirror-stop" disabled={mirrorBusy} onClick={() => { stopMirroring(); notify('Mirror stopped'); }}>
-                    Stop
-                  </button>
-                </div>
-              ) : canvasHintVisible ? (
-                <p className="canvas-usage-hint" role="status">
-                  Hold <kbd>Space</kbd> + drag to pan · Drag a device to move it · Drag the rings to rotate
-                  <button
-                    type="button"
-                    className="canvas-usage-hint-close"
-                    aria-label="Close hint"
-                    onClick={dismissCanvasHint}
-                  >
-                    <X size={11} />
-                  </button>
-                </p>
-              ) : null}
-            </div>
-            <div className={`canvas-render ${project.background === 'transparent' ? 'transparent-grid' : ''} ${isDualCanvas ? 'is-dual' : ''}`}>
-              {isDualCanvas && iosDisplayProject && androidDisplayProject ? (
-                <DualCanvasLayout
-                  ratio={previewAspect?.ratio ?? null}
-                  label={previewAspect?.label}
-                  hint={previewAspect?.hint}
-                  ios={{
-                    active: activePublishTarget === 'ios',
-                    editing: activePublishTarget === 'ios',
-                    platformLabel: 'iOS',
-                    onActivate: () => {
-                      if (activePublishTarget !== 'ios') switchPublishTarget('ios', { quiet: true });
-                    },
-                    children: (
-                      <DeviceCanvas
-                        canvasId="env-ios"
-                        project={iosDisplayProject}
-                        captureRef={iosCaptureRef}
-                        mediaPlaying={animPlaying}
-                        liveStream={mirrorSource === 'ios' || (!mirrorSource && activePublishTarget === 'ios') ? mirrorStream : null}
-                        liveStreamDeviceId={liveStreamDeviceId}
-                        cameraPosition={animatedCamera}
-                        gizmoActive={activePublishTarget === 'ios'}
-                        sharedOrbit={sharedOrbit}
-                        onSharedOrbitChange={setSharedOrbit}
-                        recenterToken={cameraRecenterToken}
-                        lightGizmoActive={lightGizmoActive && activePublishTarget === 'ios'}
-                        onLightPositionChange={(position) => updateProject({ lightPosition: position })}
-                        onSelectDevice={onSelectDevice}
-                        onClearSelection={() => setDeviceMenu(null)}
-                        onRotateDevice={onRotateDevice}
-                        onMoveDevice={onMoveDevice}
-                        onGizmoDraggingChange={setGizmoDragging}
-                        screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
-                        onSpacePanDrag={dismissCanvasHint}
-                      />
-                    ),
-                  }}
-                  android={{
-                    active: activePublishTarget === 'android',
-                    editing: activePublishTarget === 'android',
-                    platformLabel: 'Android',
-                    onActivate: () => {
-                      if (activePublishTarget !== 'android') switchPublishTarget('android', { quiet: true });
-                    },
-                    children: (
-                      <DeviceCanvas
-                        canvasId="env-android"
-                        project={androidDisplayProject}
-                        captureRef={androidCaptureRef}
-                        mediaPlaying={animPlaying}
-                        liveStream={mirrorSource === 'android' || (!mirrorSource && activePublishTarget === 'android') ? mirrorStream : null}
-                        liveStreamDeviceId={liveStreamDeviceId}
-                        cameraPosition={animatedCamera}
-                        gizmoActive={activePublishTarget === 'android'}
-                        sharedOrbit={sharedOrbit}
-                        onSharedOrbitChange={setSharedOrbit}
-                        recenterToken={cameraRecenterToken}
-                        lightGizmoActive={lightGizmoActive && activePublishTarget === 'android'}
-                        onLightPositionChange={(position) => updateProject({ lightPosition: position })}
-                        onSelectDevice={onSelectDevice}
-                        onClearSelection={() => setDeviceMenu(null)}
-                        onRotateDevice={onRotateDevice}
-                        onMoveDevice={onMoveDevice}
-                        onGizmoDraggingChange={setGizmoDragging}
-                        screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
-                        onSpacePanDrag={dismissCanvasHint}
-                      />
-                    ),
-                  }}
-                />
-              ) : (
-                <DeviceCanvas
-                  project={displayProject}
-                  captureRef={captureRef}
-                  mediaPlaying={animPlaying}
-                  liveStream={mirrorStream}
-                  liveStreamDeviceId={liveStreamDeviceId}
-                  cameraPosition={animatedCamera}
-                  recenterToken={cameraRecenterToken}
-                  lightGizmoActive={lightGizmoActive}
-                  onLightPositionChange={(position) => updateProject({ lightPosition: position })}
-                  onSelectDevice={onSelectDevice}
-                  onClearSelection={() => setDeviceMenu(null)}
-                  onRotateDevice={onRotateDevice}
-                  onMoveDevice={onMoveDevice}
-                  onGizmoDraggingChange={setGizmoDragging}
-                  screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
-                  onSpacePanDrag={dismissCanvasHint}
-                />
-              )}
-              <ProgressiveBlurOverlay
-                top={displayProject.edgeBlurTop ?? false}
-                bottom={displayProject.edgeBlurBottom ?? false}
-                amount={displayProject.edgeBlurAmount ?? DEFAULT_PROJECT.edgeBlurAmount}
-                bottomClearance={
-                  sidePanelsHidden
-                    ? 'none'
-                    : timelineOpen
-                      ? 'open'
-                      : 'collapsed'
-                }
-              />
-              {(project.overlays ?? []).map((overlay) => (
-                overlayVisibleAt(overlay, animTime) ? (
-                  <div
-                    key={overlay.id}
-                    className={`canvas-overlay-layer ${selectedOverlayId === overlay.id ? 'is-selected' : ''} ${overlay.kind === 'text' ? 'is-text' : ''}`}
-                    style={{
-                      left: `${overlay.x * 100}%`,
-                      top: `${overlay.y * 100}%`,
-                      opacity: overlay.opacity,
-                      transform: `translate(-50%, -50%) scale(${overlay.scale})`,
-                      color: overlay.color || '#fff',
-                      fontSize: `${Math.max(14, (overlay.fontSize ?? 0.055) * 420)}px`,
-                    }}
-                    onPointerDown={(e) => onOverlayPointerDown(e, overlay.id)}
-                    onPointerMove={onOverlayPointerMove}
-                    onPointerUp={onOverlayPointerUp}
-                    onPointerCancel={onOverlayPointerUp}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedOverlayId(overlay.id);
-                      setOpenSectionId('overlays');
-                    }}
-                  >
-                    {overlay.kind === 'text' ? overlay.text : null}
-                    {overlay.kind === 'image' && overlay.imageData ? (
-                      <img src={overlay.imageData} alt="" draggable={false} />
-                    ) : null}
-                  </div>
-                ) : null
-              ))}
-            </div>
-            {deviceMenu && (
-              <div className="device-action-menu" style={{ left: Math.min(deviceMenu.x, window.innerWidth - 240), top: Math.min(deviceMenu.y, window.innerHeight - 200) }}>
-                <div className="device-action-hint">
-                  Drag the device to move it · rings rotate · arrows slide on one axis
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDeviceMenu(null);
-                    setLeftWorkspaceTab('assets');
-                    imageInputRef.current?.click();
-                  }}
-                >
-                  <ImagePlus size={14} /> Replace screenshot
-                </button>
-                <button
-                  type="button"
-                  disabled={mirrorBusy}
-                  onClick={() => {
-                    setDeviceMenu(null);
-                    setLeftWorkspaceTab('assets');
-                    void startPhoneMirroring();
-                  }}
-                >
-                  <MonitorSmartphone size={14} /> {mirrorStream ? 'Stop Phone Mirror' : 'Phone Mirror'}
-                </button>
-                {mirrorStream && (
-                  <button
-                    type="button"
-                    disabled={mirrorBusy}
-                    onClick={() => {
-                      setDeviceMenu(null);
-                      void snapshotMirror();
-                    }}
-                  >
-                    <Camera size={14} /> Snapshot
-                  </button>
-                )}
-                <button type="button" title="Duplicate (⌘D)" onClick={duplicateSelectedDevice}><Copy size={14} /> Duplicate</button>
-                <button type="button" onClick={rotateSelectedDevice}><Rotate3D size={14} /> Snap +45°</button>
-                <button type="button" className="danger" onClick={deleteSelectedDevice} disabled={project.compositionMode === 'split' || project.devices.length <= 1}><Trash2 size={14} /> Remove</button>
-                <div className="device-action-meta">Ideal size {screenSizeLabel(getDevice(project.deviceId).screenSize)}</div>
-              </div>
-            )}
-            {dragOver && (
-              <div className="drag-overlay">
-                <Upload size={16} />
-                <b>Drop on the highlighted screen</b>
-                <span>Image or video · {screenSizeLabel(getDevice(getPublishEnvDevice(project).deviceId).screenSize)}</span>
-              </div>
-            )}
-            <div className="canvas-watermark"><Aperture size={16} /> Mockup Studio</div>
-          </div>
-          {!sidePanelsHidden && (
-            <div className={`workspace-bottom-chrome ${timelineOpen ? 'is-raised' : ''}`}>
-              <div
-                ref={studioAiShellRef}
-                className={`studio-ai ${studioAiOpen ? 'is-open' : 'is-compact'}`}
-              >
-                {!studioAiOpen ? (
-                  <button
-                    type="button"
-                    className="studio-ai-trigger"
-                    onClick={openStudioAi}
-                    aria-expanded={false}
-                    aria-controls="studio-ai-panel"
-                    title="AI assistant"
-                  >
-                    <span className="studio-ai-glow" aria-hidden />
-                    <Sparkles size={15} aria-hidden />
-                    <span>AI</span>
-                  </button>
-                ) : (
-                  <form
-                    id="studio-ai-panel"
-                    className="studio-ai-panel"
-                    onSubmit={(event: FormEvent) => {
-                      event.preventDefault();
-                      runStudioAiPrompt(studioAiPrompt);
-                    }}
-                  >
-                    <span className="studio-ai-glow studio-ai-glow-panel" aria-hidden />
-                    <div className="studio-ai-field">
-                      <Sparkles size={14} className="studio-ai-icon" aria-hidden />
-                      <input
-                        ref={studioAiInputRef}
-                        type="text"
-                        value={studioAiPrompt}
-                        onChange={(e) => {
-                          setStudioAiPrompt(e.target.value);
-                          if (studioAiStatus) setStudioAiStatus(null);
-                        }}
-                        placeholder={studioAiBusy ? 'Building motion…' : 'Ask AI to animate…'}
-                        aria-label="AI assistant prompt"
-                        disabled={studioAiBusy}
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                      <button
-                        type="submit"
-                        className="studio-ai-go"
-                        disabled={studioAiBusy || !studioAiPrompt.trim()}
-                        title="Generate"
-                      >
-                        Go
-                      </button>
-                    </div>
-                    <div className="studio-ai-meta">
-                      {studioAiStatus ? (
-                        <span className="studio-ai-status">{studioAiStatus}</span>
-                      ) : (
-                        <div className="studio-ai-chips" role="list">
-                          {PROMPT_SUGGESTIONS.slice(0, 6).map((chip) => (
-                            <button
-                              key={chip}
-                              type="button"
-                              role="listitem"
-                              className="studio-ai-chip"
-                              onClick={() => runStudioAiPrompt(chip)}
-                              title={`Animate: ${chip}`}
-                            >
-                              {chip}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </form>
-                )}
-              </div>
-              <nav className="workspace-mode-dock" aria-label="Workspace mode">
-                <div className="workspace-mode-dock-tabs" role="tablist">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={!timelineOpen}
-                    className={!timelineOpen ? 'is-active' : ''}
-                    onClick={() => { if (timelineOpen) toggleTimeline(); }}
-                  >
-                    Composition
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={timelineOpen}
-                    className={timelineOpen ? 'is-active' : ''}
-                    onClick={() => { if (!timelineOpen) toggleTimeline(); }}
-                  >
-                    Animate
-                  </button>
-                </div>
-              </nav>
-              <div className="view-buttons" role="group" aria-label="Viewer tools">
-                <button
-                  type="button"
-                  className={`view-mirror-btn ${mirrorStream ? 'active' : ''}`}
-                  title={mirrorStream ? 'Stop phone mirror' : 'Phone Mirror — auto-detect iPhone or Android'}
-                  aria-label={mirrorStream ? 'Stop phone mirror' : 'Phone Mirror'}
-                  disabled={mirrorBusy}
-                  onClick={() => void startPhoneMirroring()}
-                >
-                  <MonitorSmartphone size={14} />
-                </button>
-                {mirrorStream && (
-                  <button
-                    type="button"
-                    className="view-mirror-btn"
-                    title="Snapshot phone screen"
-                    aria-label="Snapshot phone screen"
-                    disabled={mirrorBusy}
-                    onClick={() => void snapshotMirror()}
-                  >
-                    <Camera size={14} />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="view-reset-btn"
-                  title="Reset camera and rotation"
-                  aria-label="Reset camera"
-                  onClick={resetDevice}
-                >
-                  <RotateCcw size={14} />
-                </button>
-              </div>
-            </div>
-          )}
-        </main>
-
-        <aside className="right-panel" aria-hidden={sidePanelsHidden} ref={rightPanelRef}>
-          <div className="inspector-scroll" ref={inspectorScrollRef}>
+            </SettingsSection>
             <SettingsSection id="device" title="Device" icon={Smartphone} open={openSectionId === 'device'} onToggle={toggleSection}>
               <div className="option-toggle-row">
                 <span>iOS + Android</span>
@@ -4369,6 +5190,30 @@ export default function App() {
                   {screenMediaKind(activeEnvScreenshot) === 'video' ? 'Replace screen video' : 'Replace screenshot'}
                 </button>
               )}
+              {project.compositionMode !== 'split' && (
+                <div className="device-multi-row">
+                  <button
+                    type="button"
+                    className="text-button"
+                    title="Add another device to this composition (⌘D)"
+                    disabled={project.devices.length >= entitlementsMaxDevices}
+                    onClick={() => addDeviceToScene()}
+                  >
+                    <Plus size={14} />
+                    Add device
+                    <span className="device-multi-count">{project.devices.length}/{entitlementsMaxDevices}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    title="Save devices, angles, lighting and motion as a reusable composition"
+                    onClick={() => onSaveComposition({ openLibrary: true })}
+                  >
+                    <Save size={14} />
+                    Save composition
+                  </button>
+                </div>
+              )}
             </SettingsSection>
 
             <SettingsSection id="transform" title="Transform" hint="Studio angle, rotation and materials" icon={Rotate3D} open={openSectionId === 'transform'} onToggle={toggleSection}>
@@ -4432,7 +5277,7 @@ export default function App() {
                 className="preset-save-row"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  onSaveComposition();
+                  onSaveComposition({ openLibrary: true });
                 }}
               >
                 <input
@@ -4445,6 +5290,9 @@ export default function App() {
                 />
                 <button type="submit" className="button">Save</button>
               </form>
+              <p className="field-caption" style={{ marginTop: 6 }}>
+                Keeps all {project.devices.length} device{project.devices.length === 1 ? '' : 's'}, angles, lighting, and motion.
+              </p>
               <button
                 type="button"
                 className="text-button"
@@ -4486,7 +5334,67 @@ export default function App() {
               <button className="text-button" onClick={resetDevice}><RotateCcw size={13} /> Reset transform</button>
             </SettingsSection>
 
-            <SettingsSection id="overlays" title="Overlays" hint="Add titles on top of the shot" icon={Layers3} open={openSectionId === 'overlays'} onToggle={toggleSection}>
+            <SettingsSection
+              id="overlays"
+              title={canvasTool === 'comments' ? 'Comments' : 'Overlays'}
+              hint={canvasTool === 'comments' ? 'Notes pinned on the shot' : 'Add titles on top of the shot'}
+              icon={canvasTool === 'comments' ? MessageSquare : Layers3}
+              trailing={canvasTool === 'comments' ? String((project.overlays ?? []).filter((item) => item.kind === 'comment').length) : undefined}
+              open={openSectionId === 'overlays'}
+              onToggle={toggleSection}
+            >
+              {canvasTool === 'comments' ? (
+                <div className="comment-panel">
+                  <button type="button" className="button full-outline compact" onClick={addInsertComment}>
+                    <Plus size={14} /> New comment
+                  </button>
+                  {(project.overlays ?? []).filter((item) => item.kind === 'comment').length === 0 ? (
+                    <div className="comment-empty">
+                      <MessageSquare size={16} />
+                      <p>Pin a note on the shot, then drag it on the canvas to place it.</p>
+                    </div>
+                  ) : (
+                    <ol className="comment-list">
+                      {(project.overlays ?? []).filter((item) => item.kind === 'comment').map((overlay, index) => (
+                        <li key={overlay.id}>
+                          <article
+                            className={`comment-card ${selectedOverlayId === overlay.id ? 'is-selected' : ''}`}
+                            onClick={() => pinLayer('overlay', overlay.id)}
+                          >
+                            <div className="comment-card-row">
+                              <span className="comment-pin">{index + 1}</span>
+                              <textarea
+                                value={overlay.text ?? ''}
+                                placeholder="Write a comment…"
+                                rows={2}
+                                aria-label={`Comment ${index + 1}`}
+                                onChange={(event) => patchOverlay(overlay.id, { text: event.target.value })}
+                                onFocus={() => pinLayer('overlay', overlay.id)}
+                              />
+                              <button
+                                type="button"
+                                className="comment-delete"
+                                title="Remove comment"
+                                aria-label={`Remove comment ${index + 1}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  updateProject({
+                                    overlays: (project.overlays ?? []).filter((item) => item.id !== overlay.id),
+                                  });
+                                  if (selectedOverlayId === overlay.id) setSelectedOverlayId(null);
+                                }}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </article>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              ) : (
+              <>
               <div className="overlay-actions">
                 <button
                   type="button"
@@ -4499,22 +5407,22 @@ export default function App() {
                     updateProject({
                       overlays: [...(project.overlays ?? []), next],
                     });
-                    setSelectedOverlayId(next.id);
+                    pinLayer('overlay', next.id);
                   }}
                 >
                   <Plus size={14} /> Add text
                 </button>
               </div>
-              {(project.overlays ?? []).length === 0 && (
+              {(project.overlays ?? []).filter((item) => item.kind !== 'comment').length === 0 && (
                 <p className="field-caption">Add titles, then drag them on the canvas. Colour, size, and timing edit below.</p>
               )}
-              {(project.overlays ?? []).map((overlay) => (
+              {(project.overlays ?? []).filter((item) => item.kind !== 'comment').map((overlay) => (
                 <div key={overlay.id} className="overlay-editor-slot">
                 <div
                   className={`overlay-editor ${selectedOverlayId === overlay.id ? 'is-selected' : ''}`}
-                  onClick={() => setSelectedOverlayId(overlay.id)}
+                  onClick={() => pinLayer('overlay', overlay.id)}
                 >
-                  {overlay.kind === 'text' && (
+                  {(overlay.kind === 'text' || overlay.kind === 'comment') && (
                     <textarea
                       className="text-input overlay-text-area"
                       value={overlay.text ?? ''}
@@ -4523,7 +5431,7 @@ export default function App() {
                       onChange={(e) => patchOverlay(overlay.id, { text: e.target.value })}
                     />
                   )}
-                  {overlay.kind === 'text' && (
+                  {(overlay.kind === 'text' || overlay.kind === 'comment') && (
                     <div className="overlay-row overlay-row-color">
                       <label className="overlay-color-field">
                         Colour
@@ -4562,6 +5470,22 @@ export default function App() {
                           step={0.005}
                           value={overlay.fontSize ?? 0.055}
                           onChange={(e) => patchOverlay(overlay.id, { fontSize: Number(e.target.value) })}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  {overlay.kind === 'text' && (
+                    <div className="overlay-row">
+                      <label>
+                        Extrusion
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={overlay.extrusion ?? 0}
+                          aria-label="Text extrusion"
+                          onChange={(e) => patchOverlay(overlay.id, { extrusion: Number(e.target.value) })}
                         />
                       </label>
                     </div>
@@ -4659,6 +5583,8 @@ export default function App() {
                 </div>
                 </div>
               ))}
+              </>
+              )}
             </SettingsSection>
 
             <SettingsSection id="environment" title="Environment" hint="Reflection, light and shadow" icon={Aperture} open={openSectionId === 'environment'} onToggle={toggleSection}>
@@ -4692,6 +5618,7 @@ export default function App() {
                         fillIntensity: DEFAULT_PROJECT.fillIntensity,
                         shadowSoftness: DEFAULT_PROJECT.shadowSoftness,
                         shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
+                        showGroundBase: DEFAULT_PROJECT.showGroundBase,
                       })}
                     >
                       <RotateCcw size={12} />
@@ -4765,6 +5692,15 @@ export default function App() {
                       value={project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity}
                       onChange={(v) => updateProject({ shadowOpacity: v })}
                     />
+                    <div className="option-toggle-row">
+                      <span>Floor plate</span>
+                      <SwitchControl
+                        checked={project.showGroundBase !== false}
+                        label="Show floor plate"
+                        title="Soft disc under the device. Turn off for a floating product shot."
+                        onChange={(on) => updateProject({ showGroundBase: on })}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -4892,38 +5828,6 @@ export default function App() {
               </div>
             </SettingsSection>
 
-            <SettingsSection id="camera" title="Camera" hint="Control the camera view and lens" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection}>
-              <div className="field-caption">Angle</div>
-              <div className="camera-preset-grid">
-                {(['front', 'left', 'right', 'top'] as CameraView[]).map((view) => (
-                  <button key={view} onClick={() => updateProject({ cameraView: view })}
-                    className={project.cameraView === view ? 'selected' : ''}>{view[0].toUpperCase() + view.slice(1)}</button>
-                ))}
-              </div>
-              <div className="field-caption" style={{ marginTop: 12 }}>Lens</div>
-              <div className="camera-preset-grid">
-                {CAMERA_LENSES.map((lens) => (
-                  <button
-                    key={lens.id}
-                    type="button"
-                    title={`${lens.label} ${lens.hint}`}
-                    onClick={() => updateProject({ cameraLens: lens.id })}
-                    className={(project.cameraLens ?? 'standard') === lens.id ? 'selected' : ''}
-                  >
-                    {lens.label}
-                  </button>
-                ))}
-              </div>
-              <p className="field-caption" style={{ marginTop: 8 }}>
-                {CAMERA_LENSES.find((l) => l.id === (project.cameraLens ?? 'standard'))?.hint ?? '~35 mm'} · changes perspective FOV
-              </p>
-              <button type="button" className="button full-outline compact" style={{ marginTop: 10 }} onClick={keyCameraAtPlayhead}>
-                <Aperture size={14} /> Key camera at playhead
-              </button>
-              <p className="field-caption" style={{ marginTop: 8 }}>
-                Opens the timeline and stores the current camera position as keyframes.
-              </p>
-            </SettingsSection>
           </div>
           <div className="inspector-footer inspector-export-panel">
             <div className="figma-export-head">
@@ -5037,14 +5941,6 @@ export default function App() {
           </div>
         </aside>
 
-        {/* Dual mode frames each pane itself — one workspace overlay would span both. */}
-        {previewAspect && !isDualCanvas && (
-          <CropFocusOverlay
-            ratio={previewAspect.ratio}
-            label={previewAspect.label}
-            hint={previewAspect.hint}
-          />
-        )}
         <AnimationTimeline
           open={timelineOpen}
           chromeHidden={sidePanelsHidden}
@@ -5057,6 +5953,7 @@ export default function App() {
           onPlayingChange={setAnimPlaying}
           selectedDevice={displaySelected}
           devices={project.devices}
+          cameraPose={liveCameraPose}
           soundtrackName={project.soundtrackName ?? null}
           soundtrackData={project.soundtrackData ?? null}
           soundtrackStart={project.soundtrackStart ?? DEFAULT_PROJECT.soundtrackStart}
@@ -5390,9 +6287,9 @@ export default function App() {
               <div><MousePointer2 size={17} /><span>Drag on the preview to orbit the 3D phone. Scroll to zoom. Hold Space + drag to pan.</span></div>
               <div><ImagePlus size={17} /><span>Drop a screenshot onto the preview or select Assets → Import.</span></div>
               <div><MonitorSmartphone size={17} /><span>Plug in an iPhone or Android over USB and use Phone Mirror — it auto-detects the device. Snapshot freezes the live screen onto the mockup.</span></div>
-              <div><SlidersHorizontal size={17} /><span>Drag a device to move it. Gimbal rings rotate it; arrows move it on one axis. Tune colour, lighting and backgrounds in Properties.</span></div>
+              <div><SlidersHorizontal size={17} /><span>Drag a device to move it. Rings rotate; coloured arrows slide on one world axis (X / Y / Z). Add more devices from Device → Add device, then save the shot as a composition under Templates → Yours.</span></div>
               <div><Gauge size={17} /><span>Space play/pause · long-press & drag to multi-select keys · set Ease on selection · Delete removes selected.</span></div>
-              <div><Command size={17} /><span>⌘S Save · ⌘Z Undo last edit · ⌘D Duplicate device · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab (last tab → recent projects) · . hide panels.</span></div>
+              <div><Command size={17} /><span>⌘S Save · ⌘Z Undo last edit · ⌘D Add device · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab (last tab → recent projects) · . hide panels.</span></div>
             </div>
             <div className="help-modal-actions">
               <button
@@ -5466,8 +6363,31 @@ export default function App() {
                   : 'SAVED COMPOSITIONS'}
               <span>{templateCategory === 'saved' ? savedCompositions.length : `${workspace.tabs.length}/${MAX_PROJECT_TABS} tabs`}</span>
             </div>
+            {templateCategory === 'saved' && (
+              <form
+                className="preset-save-row template-save-row"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onSaveComposition();
+                }}
+              >
+                <input
+                  className="preset-name-input"
+                  value={compositionName}
+                  maxLength={40}
+                  placeholder={project.name || 'Name this composition'}
+                  aria-label="Composition name"
+                  onChange={(event) => setCompositionName(event.target.value)}
+                />
+                <button type="submit" className="button primary-button">
+                  <Save size={13} /> Save current
+                </button>
+              </form>
+            )}
             {templateCategory === 'saved' && savedCompositions.length === 0 && (
-              <p className="field-caption">Save the current shot from Transform → Composition. Devices, angles, lighting, and motion come back with it.</p>
+              <p className="field-caption">
+                Add devices with Device → Add device, arrange the shot, then save it here. Devices, angles, lighting, and motion come back with it.
+              </p>
             )}
             <div className="template-grid">
               {(templateCategory === 'saved' ? savedCompositions : templatesByCategory(templateCategory)).map((template) => (

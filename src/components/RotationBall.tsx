@@ -145,15 +145,16 @@ function prepareGizmos(rotate: ControlsHandle | null, translate: ControlsHandle 
     for (const child of rotatePicker.children) {
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh) continue;
-      const major = child.name === 'E' ? 1.25 : 1;
-      const tube = child.name === 'E' ? 0.16 : 0.22;
+      // Keep ring hit targets slim so axis arrows remain easy to grab.
+      const major = child.name === 'E' ? 1.2 : 1;
+      const tube = child.name === 'E' ? 0.08 : 0.1;
       thickenTorus(mesh.geometry, major, tube);
       mesh.userData.isGizmoHandle = true;
     }
-    addVisibleRing(rotateRoot, 'X', 1, 0.045, 0xff3355, null);
-    addVisibleRing(rotateRoot, 'Y', 1, 0.045, 0x35d36a, [0, 0, -Math.PI / 2]);
-    addVisibleRing(rotateRoot, 'Z', 1, 0.045, 0x3c7dff, [0, Math.PI / 2, 0]);
-    addVisibleRing(rotateRoot, 'E', 1.25, 0.03, 0xf0c84b, [0, Math.PI / 2, 0]);
+    addVisibleRing(rotateRoot, 'X', 1, 0.028, 0xff3355, null);
+    addVisibleRing(rotateRoot, 'Y', 1, 0.028, 0x35d36a, [0, 0, -Math.PI / 2]);
+    addVisibleRing(rotateRoot, 'Z', 1, 0.028, 0x3c7dff, [0, Math.PI / 2, 0]);
+    addVisibleRing(rotateRoot, 'E', 1.2, 0.02, 0xf0c84b, [0, Math.PI / 2, 0]);
     markGizmoHandles(rotateRoot);
     rotate.userData.gizmoPrepared = true;
   }
@@ -173,13 +174,13 @@ function prepareGizmos(rotate: ControlsHandle | null, translate: ControlsHandle 
 }
 
 /**
- * Clean up picker planes; fatten translate arrows only.
- * Do NOT non-uniform-scale rotate rings — that warps hit targets.
+ * Clean up picker planes and keep axis handles readable.
+ * Avoid non-uniform scale boosts — fat overlapping pickers make
+ * one-axis moves feel like free multi-angle dragging.
  */
 function styleGizmo(controls: ControlsHandle | null | undefined, kind: Tool) {
   if (!controls) return;
   const root = controls.getHelper?.() ?? controls._root ?? controls;
-  const axisBoost = 2.55;
 
   root.traverse((child) => {
     const name = child.name || '';
@@ -210,18 +211,6 @@ function styleGizmo(controls: ControlsHandle | null | undefined, kind: Tool) {
         m.toneMapped = false;
         m.needsUpdate = true;
       }
-
-      if (kind === 'translate') {
-        const isAxis = name === 'X' || name === 'Y' || name === 'Z'
-          || name.endsWith('X') || name.endsWith('Y') || name.endsWith('Z');
-        if (isAxis) {
-          mesh.scale.set(
-            Math.max(mesh.scale.x, axisBoost),
-            Math.max(mesh.scale.y, axisBoost),
-            Math.max(mesh.scale.z, axisBoost * 1.1),
-          );
-        }
-      }
     }
 
     const line = child as THREE.LineSegments;
@@ -231,7 +220,7 @@ function styleGizmo(controls: ControlsHandle | null | undefined, kind: Tool) {
         mat.depthTest = false;
         mat.transparent = true;
         mat.opacity = 1;
-        mat.linewidth = 4;
+        mat.linewidth = 2;
         mat.needsUpdate = true;
       }
     }
@@ -369,8 +358,9 @@ export default function RotationBall({
   const translateEnabled = listening && (dragTool === null || dragTool === 'translate');
   const rotateEnabled = listening && (dragTool === null || dragTool === 'rotate');
 
-  const translateSize = mode === 'translate' || dragTool === 'translate' ? 2.55 : 2.35;
-  const rotateSize = mode === 'rotate' || dragTool === 'rotate' ? 1.9 : 1.7;
+  // Keep arrows a touch larger than rings so tip grabs stay one-axis.
+  const translateSize = mode === 'translate' || dragTool === 'translate' ? 1.2 : 1.1;
+  const rotateSize = mode === 'rotate' || dragTool === 'rotate' ? 0.95 : 0.88;
 
   return (
     <>
