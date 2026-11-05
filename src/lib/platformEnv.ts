@@ -81,6 +81,33 @@ export function setPublishTarget(project: MockupProject, target: PublishTarget):
   return syncProjectFromSelected(withTarget, selected);
 }
 
+/** Write screen media onto one device and select it so the canvas shows that shot. */
+export function applyScreenToDevice(
+  project: MockupProject,
+  deviceId: string,
+  dataUrl: string | null,
+): MockupProject {
+  const exists = project.devices.some((device) => device.id === deviceId);
+  if (!exists) return applyScreenToPublishEnv(project, dataUrl);
+  const devices = project.devices.map((device) => {
+    if (device.id === deviceId) return { ...device, screenshot: dataUrl };
+    if (device.screenshot === undefined) {
+      return {
+        ...device,
+        screenshot: envPlaceholder(device.deviceId, project.compositionMode),
+      };
+    }
+    return device;
+  });
+  const selected = devices.find((device) => device.id === deviceId) ?? devices[0];
+  return syncProjectFromSelected({
+    ...project,
+    devices,
+    publishTarget: platformOfDevice(selected),
+    screenshot: dataUrl,
+  }, selected);
+}
+
 /** Write screen media into the active publish-target env only. */
 export function applyScreenToPublishEnv(
   project: MockupProject,

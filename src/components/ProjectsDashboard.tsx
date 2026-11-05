@@ -1,12 +1,30 @@
 import { useEffect, useMemo, useState } from 'react';
+import {
+  Glasses, Headphones, Laptop, LayoutGrid, Smartphone, Tablet, Trash2, Watch,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { hasAnimation } from '../lib/animation';
 import {
+  DEVICE_CATEGORY_ICON,
   DEVICE_CATEGORY_TABS,
   categoryOfDevice,
   filterDevicesByCategory,
   type DeviceCategoryFilter,
+  type DeviceCategoryIconKey,
   type DeviceModel,
 } from '../lib/devices';
+
+const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
+  'layout-grid': LayoutGrid,
+  smartphone: Smartphone,
+  tablet: Tablet,
+  laptop: Laptop,
+  watch: Watch,
+  headphones: Headphones,
+  glasses: Glasses,
+};
+import CloudSyncPanel, { type CloudTarget } from './CloudSyncPanel';
+import type { CloudLibraryStatus, CloudProjectEntry } from '../lib/cloudLibrary';
 import { isDesktopApp } from '../lib/phoneMirror';
 import type { RecentProjectEntry } from '../lib/recentProjects';
 import type { RecentScreenshot } from '../lib/recentScreenshots';
@@ -15,9 +33,12 @@ import {
   type CompositionTemplate,
   type TemplateCategory,
 } from '../lib/templates';
+import { deleteSavedComposition, loadSavedCompositions } from '../lib/userLibrary';
+import type { MockupProject } from '../types';
 import type { LicenseState } from '../lib/license';
 import { planLabel } from '../lib/license';
-import TemplatePreview from './TemplatePreview';
+import DeviceModelThumb from './DeviceModelThumb';
+import TemplateThumb, { ProjectThumb } from './TemplateThumb';
 import newProjectArt from '../assets/dashboard/new-project.svg';
 import iconGrid from '../assets/dashboard/icon-grid.svg';
 import iconCube from '../assets/dashboard/icon-cube.svg';
@@ -67,9 +88,20 @@ function editedPhrase(timestamp: number) {
   return `Edited ${new Date(timestamp).toLocaleDateString()}`;
 }
 
-function projectMeta(entry: RecentProjectEntry) {
+type ListedProject = {
+  key: string;
+  name: string;
+  updatedAt: number;
+  deviceId: string;
+  project: MockupProject | null;
+  preview: string | null;
+  filePath?: string;
+  recent?: RecentProjectEntry;
+};
+
+function projectMeta(entry: { updatedAt: number; project: MockupProject | null }) {
   const edited = editedPhrase(entry.updatedAt);
-  const clip = entry.project.animation;
+  const clip = entry.project?.animation;
   if (clip && hasAnimation(clip)) {
     const seconds = Math.max(1, Math.round(clip.duration));
     return `${edited} · ${seconds}s animation`;
@@ -83,6 +115,13 @@ export default function ProjectsDashboard({
   devices,
   license,
   licensingDisabled,
+  cloud,
+  cloudBusy,
+  cloudProjects,
+  onCloudUse,
+  onCloudStop,
+  onOpenCloudProject,
+  onRemoveCloudProject,
   onOpenProject,
   onRemoveProject,
   onNewProject,
@@ -98,6 +137,13 @@ export default function ProjectsDashboard({
   devices: DeviceModel[];
   license: LicenseState;
   licensingDisabled: boolean;
+  cloud: CloudLibraryStatus | null;
+  cloudBusy: boolean;
+  cloudProjects: CloudProjectEntry[];
+  onCloudUse: (target: CloudTarget) => void;
+  onCloudStop: () => void;
+  onOpenCloudProject: (filePath: string) => void;
+  onRemoveCloudProject: (filePath: string) => void;
   onOpenProject: (entry: RecentProjectEntry) => void;
   onRemoveProject: (id: string) => void;
   onNewProject: () => void;
@@ -115,6 +161,7 @@ export default function ProjectsDashboard({
   const [menuId, setMenuId] = useState<string | null>(null);
   const [deviceFilter, setDeviceFilter] = useState<DeviceCategoryFilter>('all');
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>('devices');
+  const [savedCompositions, setSavedCompositions] = useState<CompositionTemplate[]>(() => loadSavedCompositions());
   const desktop = isDesktopApp();
 
   useEffect(() => {
@@ -129,28 +176,52 @@ export default function ProjectsDashboard({
 
   const projects = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const filtered = recentProjects.filter((entry) => (
-      !needle || entry.name.toLowerCase().includes(needle)
-    ));
-    return [...filtered].sort((a, b) => (
-      sort === 'name'
-        ? a.name.localeCompare(b.name)
-        : b.updatedAt - a.updatedAt
-    ));
-  }, [recentProjects, query, sort]);
+    const cloudNames = new Set(cloudProjects.map((entry) => entry.name.trim().toLowerCase()));
+    const synced: ListedProject[] = cloud?.configured
+      ? cloudProjects.map((entry) => ({
+        key: entry.path,
+        name: entry.name,
+        updatedAt: entry.updatedAt,
+        deviceId: entry.deviceId,
+        project: entry.project,
+        preview: entry.preview,
+        filePath: entry.path,
+      }))
+      : [];
+    const local: ListedProject[] = recentProjects
+      .filter((entry) => !cloud?.configured || !cloudNames.has(entry.name.trim().toLowerCase()))
+      .map((entry) => ({
+        key: entry.id,
+        name: entry.name,
+        updatedAt: entry.updatedAt,
+        deviceId: entry.deviceId,
+        project: entry.project,
+        preview: entry.preview,
+        recent: entry,
+      }));
+    return [...synced, ...local]
+      .filter((entry) => !needle || entry.name.toLowerCase().includes(needle))
+      .sort((a, b) => (
+        sort === 'name'
+          ? a.name.localeCompare(b.name)
+          : b.updatedAt - a.updatedAt
+      ));
+  }, [recentProjects, cloudProjects, cloud?.configured, query, sort]);
 
   const visibleDevices = useMemo(
     () => filterDevicesByCategory(devices, deviceFilter),
     [devices, deviceFilter],
   );
-  const visibleTemplates = templatesByCategory(templateCategory);
+  const visibleTemplates = templateCategory === 'saved'
+    ? savedCompositions
+    : templatesByCategory(templateCategory);
 
   const heading = section === 'projects'
     ? { kicker: 'Workspace', title: 'Your projects', sub: 'Open a project or create something new.' }
     : section === 'models'
       ? { kicker: 'Library', title: '3D models', sub: 'Pick a device and start a scene with it.' }
       : section === 'templates'
-        ? { kicker: 'Library', title: 'Templates', sub: 'Start from a device layout or a pre-built scene.' }
+        ? { kicker: 'Library', title: 'Templates', sub: 'Start from a device layout, a pre-built scene, or a composition you saved.' }
         : section === 'assets'
           ? { kicker: 'Library', title: 'My assets', sub: 'Screenshots saved from recent scenes.' }
           : { kicker: 'Workspace', title: 'Settings', sub: 'License, project files, and feedback.' };
@@ -252,8 +323,15 @@ export default function ProjectsDashboard({
 
           {section === 'projects' && (
             <>
+              <CloudSyncPanel
+                cloud={cloud}
+                busy={cloudBusy}
+                variant="banner"
+                onUse={onCloudUse}
+                onStop={onCloudStop}
+              />
               <div className="dash-section-row">
-                <h2>Recent projects</h2>
+                <h2>{cloud?.configured ? 'Synced projects' : 'Recent projects'}</h2>
                 <span>{projects.length === 1 ? '1 project' : `${projects.length} projects`}</span>
               </div>
               <div className="dash-grid">
@@ -270,19 +348,30 @@ export default function ProjectsDashboard({
 
                 {projects.map((entry) => {
                   const category = categoryOfDevice({ id: entry.deviceId });
+                  const openEntry = () => {
+                    if (entry.filePath) onOpenCloudProject(entry.filePath);
+                    else if (entry.recent) onOpenProject(entry.recent);
+                  };
                   return (
-                    <article key={entry.id} className="dash-card">
+                    <article key={entry.key} className="dash-card">
                       <button
                         type="button"
                         className="dash-card-open"
-                        onClick={() => onOpenProject(entry)}
+                        onClick={openEntry}
                         title={`Open ${entry.name}`}
                       >
                         <span
                           className="dash-card-thumb"
                           style={{ background: THUMB_GRADIENT[category] ?? THUMB_GRADIENT.phones }}
                         >
-                          {entry.preview ? <img src={entry.preview} alt="" /> : <span className="dash-device-glyph" />}
+                          {entry.project ? (
+                            <ProjectThumb
+                              project={entry.project}
+                              cacheKey={`${entry.key}:${entry.updatedAt}`}
+                            />
+                          ) : entry.preview ? (
+                            <img className="dash-cloud-preview" src={entry.preview} alt="" />
+                          ) : null}
                         </span>
                         <span className="dash-card-copy">
                           <strong>{entry.name}</strong>
@@ -297,15 +386,24 @@ export default function ProjectsDashboard({
                           type="button"
                           className="dash-card-more"
                           aria-label={`Actions for ${entry.name}`}
-                          aria-expanded={menuId === entry.id}
-                          onClick={() => setMenuId((current) => (current === entry.id ? null : entry.id))}
+                          aria-expanded={menuId === entry.key}
+                          onClick={() => setMenuId((current) => (current === entry.key ? null : entry.key))}
                         >
                           <img src={iconDots} alt="" width={19} height={19} />
                         </button>
-                        {menuId === entry.id && (
+                        {menuId === entry.key && (
                           <div className="dash-pop dash-pop-card">
-                            <button type="button" onClick={() => { setMenuId(null); onOpenProject(entry); }}>Open</button>
-                            <button type="button" onClick={() => { setMenuId(null); onRemoveProject(entry.id); }}>Remove from recent</button>
+                            <button type="button" onClick={() => { setMenuId(null); openEntry(); }}>Open</button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMenuId(null);
+                                if (entry.filePath) onRemoveCloudProject(entry.filePath);
+                                else if (entry.recent) onRemoveProject(entry.recent.id);
+                              }}
+                            >
+                              {entry.filePath ? `Remove from ${cloud?.label || 'sync'}` : 'Remove from recent'}
+                            </button>
                           </div>
                         )}
                       </div>
@@ -322,18 +420,22 @@ export default function ProjectsDashboard({
           {section === 'models' && (
             <>
               <div className="dash-chips" role="tablist" aria-label="Device category">
-                {DEVICE_CATEGORY_TABS.map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={deviceFilter === tab.id}
-                    className={deviceFilter === tab.id ? 'is-active' : ''}
-                    onClick={() => setDeviceFilter(tab.id)}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+                {DEVICE_CATEGORY_TABS.map((tab) => {
+                  const Icon = DEVICE_CATEGORY_LUCIDE[DEVICE_CATEGORY_ICON[tab.id]];
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={deviceFilter === tab.id}
+                      className={deviceFilter === tab.id ? 'is-active' : ''}
+                      onClick={() => setDeviceFilter(tab.id)}
+                    >
+                      <Icon size={15} strokeWidth={1.8} aria-hidden />
+                      {tab.label}
+                    </button>
+                  );
+                })}
               </div>
               <div className="dash-grid dash-grid-models">
                 {visibleDevices.map((device) => {
@@ -348,10 +450,10 @@ export default function ProjectsDashboard({
                       title={unlocked ? `Start with ${device.label}` : `${device.label} is a Pro model`}
                     >
                       <span
-                        className="dash-card-thumb"
+                        className="dash-card-thumb dash-model-thumb"
                         style={{ background: THUMB_GRADIENT[category] ?? THUMB_GRADIENT.phones }}
                       >
-                        <span className={`dash-device-glyph kind-${category}`} />
+                        <DeviceModelThumb deviceId={device.id} />
                       </span>
                       <span className="dash-card-copy">
                         <strong>{device.label}</strong>
@@ -373,9 +475,37 @@ export default function ProjectsDashboard({
                 <button type="button" role="tab" aria-selected={templateCategory === 'scenes'} className={templateCategory === 'scenes' ? 'is-active' : ''} onClick={() => setTemplateCategory('scenes')}>
                   Pre-compositions
                 </button>
+                <button type="button" role="tab" aria-selected={templateCategory === 'saved'} className={templateCategory === 'saved' ? 'is-active' : ''} onClick={() => setTemplateCategory('saved')}>
+                  Your compositions
+                </button>
               </div>
+              {templateCategory === 'saved' && visibleTemplates.length === 0 ? (
+                <p className="dash-empty">Save a composition from Transform while a project is open. It will show up here.</p>
+              ) : (
               <div className="dash-grid">
                 {visibleTemplates.map((template) => (
+                  templateCategory === 'saved' ? (
+                    <article key={template.id} className="dash-card dash-template-card">
+                      <button type="button" className="dash-card-open" onClick={() => onStartTemplate(template)}>
+                        <span className="dash-card-thumb dash-template-thumb">
+                          <TemplateThumb template={template} />
+                        </span>
+                        <span className="dash-card-copy">
+                          <strong>{template.label}</strong>
+                          <span>{template.description}</span>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="dash-card-more dash-saved-remove"
+                        title={`Remove ${template.label}`}
+                        aria-label={`Remove ${template.label}`}
+                        onClick={() => setSavedCompositions(deleteSavedComposition(template.id))}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </article>
+                  ) : (
                   <button
                     key={template.id}
                     type="button"
@@ -383,15 +513,17 @@ export default function ProjectsDashboard({
                     onClick={() => onStartTemplate(template)}
                   >
                     <span className="dash-card-thumb dash-template-thumb">
-                      <TemplatePreview layout={template.preview} />
+                      <TemplateThumb template={template} />
                     </span>
                     <span className="dash-card-copy">
                       <strong>{template.label}</strong>
                       <span>{template.description}</span>
                     </span>
                   </button>
+                  )
                 ))}
               </div>
+              )}
             </>
           )}
 
@@ -417,6 +549,13 @@ export default function ProjectsDashboard({
 
           {section === 'settings' && (
             <div className="dash-settings">
+              <CloudSyncPanel
+                cloud={cloud}
+                busy={cloudBusy}
+                variant="settings"
+                onUse={onCloudUse}
+                onStop={onCloudStop}
+              />
               <div className="dash-setting">
                 <strong>Plan</strong>
                 <span>{licensingDisabled ? 'Pro Max (this build)' : planLabel(license.tier)}</span>
@@ -436,7 +575,11 @@ export default function ProjectsDashboard({
             </div>
           )}
 
-          <p className="dash-footer">All changes saved automatically</p>
+          <p className="dash-footer">
+            {cloud?.configured && !cloud.missing
+              ? `Saving to ${cloud.folderLabel} automatically`
+              : 'All changes saved automatically'}
+          </p>
         </main>
       </div>
     </div>

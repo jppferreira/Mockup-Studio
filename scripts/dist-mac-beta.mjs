@@ -96,7 +96,10 @@ Or use an App Store Connect API key:
   process.exit(1);
 }
 
-process.env.CSC_NAME = IDENTITY;
+// electron-builder selects the Developer ID cert itself and rejects the
+// "Developer ID Application:" prefix on -c.mac.identity / CSC_NAME.
+const SIGN_NAME = IDENTITY.replace(/^Developer ID Application:\s*/, '');
+process.env.CSC_NAME = SIGN_NAME;
 process.env.APPLE_TEAM_ID = process.env.APPLE_TEAM_ID || 'HG7F63WLGK';
 process.env.REQUIRE_NOTARIZE = '1';
 delete process.env.SKIP_NOTARIZE;
@@ -104,7 +107,7 @@ delete process.env.SKIP_NOTARIZE;
 console.log(`[dist:mac:beta] Signing as: ${IDENTITY}`);
 execSync('npm run build', { stdio: 'inherit' });
 execSync(
-  `npx electron-builder --mac dmg zip --arm64 -c.mac.identity="${IDENTITY}"`,
+  `npx electron-builder --mac dmg zip --arm64 -c.mac.identity="${SIGN_NAME}"`,
   { stdio: 'inherit', env: process.env },
 );
 console.log('[dist:mac:beta] Done — upload release/*.dmg as a GitHub pre-release.');

@@ -122,6 +122,8 @@ export interface DeviceModel {
   tweaks?: Record<string, Record<string, number | boolean | string>>;
   /** Extra material names treated as glass for reflection control */
   glassMats?: string[];
+  /** Node names to hide — stray plates that aren't part of the device */
+  hideNodes?: string[];
   /** Optional laptop lid open/close rig */
   lid?: DeviceLidConfig;
 }
@@ -177,8 +179,10 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'screen.001',
     screenSize: { width: 1320, height: 2868 },
     rot: [0, Math.PI / 2, Math.PI],
-    uv: { mirrorX: true },
+    uv: {},
     glassMats: ['glass.002', 'lensinglass'],
+    // Metal squares glued to the bottom edge of the Sketchfab mesh.
+    hideNodes: ['Plane.013_metaL.001_0', 'Plane.014_metaL.001_0'],
   },
   {
     id: 'iphone_17_pro',
@@ -218,6 +222,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
       repeat: [-1.028278, -1],
       offset: [0.020257, 1.0019],
       clamp: true,
+      flipY: true,
     },
     screenInset: { border: 26, radius: 162 },
     glassMats: ['glass.002', 'lensinglass'],
@@ -268,7 +273,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'Screen',
     screenSize: { width: 1280, height: 2856 },
     rot: [0, Math.PI, 0],
-    uv: { mirrorX: true },
+    uv: { flipY: true },
     glassMats: ['CamGlass', 'Lens'],
     tweaks: {
       CamGlass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.05, transparent: true },
@@ -291,7 +296,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'Material.002',
     screenSize: { width: 1344, height: 2992 },
     rot: [0, 0, 0],
-    uv: { },
+    uv: { flipY: true },
     glassMats: ['Material.011', 'Material.021', 'Material.018', 'Lens'],
     tweaks: {
       'Material.011': { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.04, transparent: true },
@@ -311,7 +316,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'Screen',
     screenSize: { width: 1280, height: 2856 },
     rot: [0, Math.PI, 0],
-    uv: { mirrorX: true },
+    uv: { flipY: true },
     glassMats: ['CamGlass', 'Lens'],
     tweaks: {
       CamGlass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.05, transparent: true },
@@ -334,7 +339,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'Wallpaper',
     screenSize: { width: 1284, height: 2778 },
     rot: [0, 0, 0],
-    uv: { },
+    uv: { flipY: true, mirrorX: true },
     glassMats: ['Glass', 'Screen_Glass', 'Camera_Glass', 'Gray_Glass', 'Black_Glass', 'Lens'],
   },
   {
@@ -346,8 +351,9 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/galaxy_s21_ultra.glb',
     screenMat: 'Screen',
     screenSize: { width: 1440, height: 3200 },
-    rot: [0, 0, 0],
-    uv: {},
+    // Screen was authored on −Z; turn it toward the camera.
+    rot: [0, Math.PI, 0],
+    uv: { flipY: true },
     glassMats: ['Glass', 'Lens', 'Lens.001'],
   },
   {
@@ -360,7 +366,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'Screen',
     screenSize: { width: 1488, height: 2266 },
     rot: [0, Math.PI, 0],
-    uv: { mirrorX: true },
+    uv: { mirrorX: true, flipY: true },
     glassMats: ['CamGlass', 'Lens'],
   },
   {
@@ -373,7 +379,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'Material.002',
     screenSize: { width: 2560, height: 1600 },
     rot: [Math.PI / 2, 0, Math.PI],
-    uv: {},
+    uv: { mirrorX: true },
     glassMats: ['Glass', 'Black_Glass'],
     // Timblewee Bevels_2 lid — authored closed; ~110° open (matches embedded Animation mid-pose)
     lid: { mode: 'node', nodes: ['Bevels_2'], openAngle: -Math.PI * (110 / 180) },
@@ -388,7 +394,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'Material.001',
     screenSize: { width: 396, height: 484 },
     rot: [0, 0, 0],
-    uv: {},
+    uv: { flipY: true },
     glassMats: ['Glass_Clear2', 'Black_Glossy', 'Black_Glossy2', 'Black_Glossy_TEXT'],
   },
   {
@@ -551,7 +557,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'Display',
     screenSize: { width: 1320, height: 2868 },
     rot: [Math.PI / 2, 0, 0],
-    uv: { mirrorX: true },
+    uv: {},
     glassMats: [
       'Black_Glass', 'Back_Glass_Burgundy', 'LiDAR_Glass', 'Sapphire',
       'Front_Element', 'Antenna_Window', 'Front_Camera_photo', 'Rear_Element_photo',
@@ -568,7 +574,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'Material.020',
     screenSize: { width: 1206, height: 2622 },
     rot: [Math.PI / 2, Math.PI, Math.PI / 2],
-    uv: { mirrorX: true },
+    uv: { flipY: true },
     // No dedicated glass sheets — lens / flash discs get glossy treatment
     glassMats: ['Material.021', 'Material.012', 'Material.014', 'Material.022'],
   },
@@ -612,7 +618,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenMat: 'edYkGGAdRWeopLP',
     screenSize: { width: 410, height: 502 },
     rot: [Math.PI, Math.PI, 0],
-    uv: {},
+    uv: { mirrorX: true },
     glassMats: ['VJcIxaYCeMHzzAJ', 'EbFYvXZFEOELnji', 'IsuszdatyklnjoT', 'JlRKetQcktLwJwa'],
   },
 ];

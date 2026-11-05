@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import {
-  Aperture, ArrowDownToLine, ArrowLeftRight, Box, Camera, Check, ChevronDown, CircleHelp,
-  Columns2, Command, Copy, Download, FileImage, Film, Gauge, Glasses, Headphones,
-  ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, Lock, MessageSquarePlus, Minus,
-  MonitorSmartphone, MoreHorizontal, MousePointer2, PanelLeftClose, PanelLeftOpen,
-  Plus, RotateCcw, Rotate3D, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, Upload, Watch, X,
+  Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Box, Camera, Check, ChevronDown, CircleHelp,
+  ClipboardPaste, Columns2, Command, Copy, Download, FileImage, Film, FlipHorizontal2, Gauge, Glasses, Headphones,
+  ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, MessageSquarePlus, Minus,
+  MonitorSmartphone, MoreHorizontal, MousePointer2, Orbit, PanelLeftClose, PanelLeftOpen,
+  Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, Upload, Watch, Waves, X, ZoomIn,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import AnimationTimeline from './components/AnimationTimeline';
+import CloudSyncPanel, { type CloudTarget } from './components/CloudSyncPanel';
 import ProjectsDashboard from './components/ProjectsDashboard';
-import TemplatePreview from './components/TemplatePreview';
+import ChangeLogPanel from './components/ChangeLogPanel';
+import SceneHierarchy from './components/SceneHierarchy';
+import iconPlus from './assets/scene-hierarchy/icon-plus.svg';
+import { DeviceModelThumbHost } from './components/DeviceModelThumb';
+import TemplateThumb, { TemplateThumbHost } from './components/TemplateThumb';
 import CropFocusOverlay from './components/CropFocusOverlay';
-import CustomDevicePanel from './components/CustomDevicePanel';
+import CustomDevicePanel, { type CustomDevicePanelHandle } from './components/CustomDevicePanel';
 import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload } from './components/DeviceCanvas';
 import DualCanvasLayout from './components/DualCanvasLayout';
 import FeedbackModal from './components/FeedbackModal';
@@ -29,15 +34,19 @@ import {
   type CustomDeviceMeta,
 } from './lib/customDevices';
 import { isPlaceholderScreenshot, placeholderForDevice } from './lib/demo';
+import { recordProjectChange, type ChangeLogEntry } from './lib/changeLog';
+import { bindScrollMore, pinToContainerTop, releasePinPadding } from './lib/scrollMore';
 import {
   defaultCameraPosition, evaluateAnimation, evaluateCamera, hasAnimation, hasCameraAnimation,
   upsertKeyframe,
 } from './lib/animation';
-import { applyAnimationPreset, getAnimationPreset } from './lib/animationPresets';
+import { applyAnimationPreset, getAnimationPreset, shiftDeviceRotation } from './lib/animationPresets';
+import { STUDIO_POSES, getStudioPose, studioPoseIdFor } from './lib/studioPoses';
 import {
   DEVICE_CATEGORY_ICON,
   DEVICE_CATEGORY_TABS,
   DEVICE_MODELS,
+  categoryOfDevice,
   filterDevicesByCategory,
   getDevice,
   isCustomDeviceId,
@@ -45,6 +54,7 @@ import {
   screenSizeLabel,
   type DeviceCategoryFilter,
   type DeviceCategoryIconKey,
+  type DeviceModel,
 } from './lib/devices';
 
 const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
@@ -93,6 +103,10 @@ import {
   upgradeCopy,
   type LicenseState,
 } from './lib/license';
+import {
+  canonicalProjectJson, isPathInsideLibrary, projectFromCloudRow, syncButtonLabel,
+  type CloudLibraryStatus, type CloudProjectEntry,
+} from './lib/cloudLibrary';
 import { downloadBlob, safeFilename, validateProject } from './lib/project';
 import {
   loadRecentScreenshots, recentForPlatform, rememberRecentScreenshot,
@@ -100,7 +114,7 @@ import {
 } from './lib/recentScreenshots';
 import {
   applyDeviceToPlatform, applyFinishToPlatform, applyFinishToPublishEnv,
-  applyLinkedTransformsAfterAnim, applyScreenToPublishEnv,
+  applyLinkedTransformsAfterAnim, applyScreenToDevice, applyScreenToPublishEnv,
   buildPlatformSplitDevices, copyScreenToOtherPlatform, deviceFinish, deviceScreenMedia,
   getPlatformDevice, getPublishEnvDevice, mirrorLinkedTransforms, platformOfDevice,
   projectForEnvCanvas, refreshSplitPlaceholders, resolvePublishTarget, setPublishTarget,
@@ -118,8 +132,14 @@ import {
   loadRecentProjects, rememberRecentProject, removeRecentProject,
   type RecentProjectEntry,
 } from './lib/recentProjects';
-import { PROMPT_SUGGESTIONS, promptToAnimation } from './lib/promptAnimate';
+import { PROMPT_SUGGESTIONS } from './lib/promptAnimate';
+import { promptToAnimationSmart } from './lib/promptAnimateLocal';
 import { deleteCustomScenePreset, loadCustomScenePresets, saveCustomScenePreset } from './lib/scenePresets';
+import {
+  deleteSavedAngle, deleteSavedComposition, deleteSavedSize, loadSavedAngles, loadSavedCompositions,
+  loadSavedSizes, saveAngle, saveAssetSize, saveComposition,
+  type SavedAngle, type SavedAssetSize,
+} from './lib/userLibrary';
 import {
   projectFromTemplate, templatesByCategory,
   type CompositionTemplate, type TemplateCategory,
@@ -129,22 +149,31 @@ import {
   EXPORT_ASPECTS, EXPORT_ASPECT_GROUPS, EXPORT_FPS_OPTIONS, EXPORT_RESOLUTIONS,
   EXPORT_SIZE_LIMITS, MAX_COMPOSITION_SCENES, MAX_DEVICES, exportAspectFixedSize, exportAspectHasFixed,
   resolveExportDimensions, addCompositionScene, createDefaultAnimation,
-  createDeviceInstance, duplicateCompositionScene, ensureCompositionScenes, getSelectedDevice,
-  gradientCss, patchActiveCompositionScene, removeCompositionScene, renameCompositionScene,
+  createDeviceInstance, ensureCompositionScenes, getSelectedDevice,
+  patchActiveCompositionScene, removeCompositionScene, renameCompositionScene,
   switchCompositionScene, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimProperty, type BackgroundPreset, type CameraView, type DeviceColor, type ExportAspectId,
   type ExportResolutionId, type GradientColors, type MockupProject, type PublishTarget,
   type ReflectionMapSetting, type ScenePreset, type Vec3,
 } from './types';
 
-/** Top-left pinned tabs: Scenes (chips + aspect) vs Assets library. */
-type LeftWorkspaceTab = 'scenes' | 'assets';
+/** Top-left pinned tabs: scene objects vs Assets library. */
+type LeftWorkspaceTab = 'scenes' | 'assets' | 'log';
 type Workspace = { tabs: ProjectTab[]; activeId: string | null };
 type ExportScale = 0.5 | 1 | 2 | 3 | 4;
 type ExportMediaMode = 'static' | 'animated';
 type ExportEntry = { id: string; kind: ExportKind; scale: ExportScale };
 
 const EXPORT_SCALES: ExportScale[] = [0.5, 1, 2, 3, 4];
+const CANVAS_HINT_KEY = 'mockup-studio.canvas-usage-hint-seen';
+
+function canvasHintAlreadySeen() {
+  try {
+    return localStorage.getItem(CANVAS_HINT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function createExportEntry(kind: ExportKind = 'png', scale: ExportScale = 1): ExportEntry {
   return { id: `export-${Math.random().toString(36).slice(2, 10)}`, kind, scale };
@@ -192,12 +221,23 @@ function SliderField({ label, value, min, max, step = 1, unit = '°', onChange }
   label: string; value: number; min: number; max: number; step?: number;
   unit?: string; onChange: (v: number) => void;
 }) {
+  const span = max - min || 1;
+  const fill = Math.min(100, Math.max(0, ((value - min) / span) * 100));
+  const digits = step < 0.1 ? 2 : step < 1 ? 1 : 0;
   return (
-    <div className="slider-field">
-      <div className="slider-heading"><span>{label}</span><span className="slider-number">{value.toFixed(step < 1 ? 1 : 0)}{unit}</span></div>
-      <input type="range" min={min} max={max} step={step} value={value}
-        onChange={(e) => onChange(Number(e.target.value))} aria-label={label} />
-    </div>
+    <label className="slider-field">
+      <span className="slider-label">{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        style={{ ['--slider-fill' as string]: `${fill}%` }}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+      <span className="slider-number">{value.toFixed(digits)}{unit}</span>
+    </label>
   );
 }
 
@@ -233,10 +273,11 @@ function SwitchControl({
 }
 
 function SettingsSection({
-  id, title, icon: Icon, trailing, open, onToggle, children, last = false,
+  id, title, hint, icon: Icon, trailing, open, onToggle, children, last = false,
 }: {
   id: string;
   title: string;
+  hint?: string;
   icon: typeof Box;
   trailing?: string;
   open: boolean;
@@ -244,18 +285,41 @@ function SettingsSection({
   children: ReactNode;
   last?: boolean;
 }) {
+  const sectionRef = useRef<HTMLElement>(null);
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    const el = sectionRef.current;
+    const becameOpen = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!el) return undefined;
+    if (!open) {
+      releasePinPadding(el);
+      return undefined;
+    }
+    if (!becameOpen) return undefined;
+    return pinToContainerTop(el);
+  }, [open]);
   return (
-    <section className={`settings-section ${last ? 'last-section' : ''} ${open ? 'is-open' : 'is-collapsed'}`}>
+    <section ref={sectionRef} className={`settings-section ${last ? 'last-section' : ''} ${open ? 'is-open' : 'is-collapsed'}`}>
       <button
         type="button"
         className="section-heading section-toggle"
         aria-expanded={open}
         aria-controls={`settings-${id}`}
-        onClick={() => onToggle(id)}
+        onClick={(event) => {
+          if (!open) {
+            const section = event.currentTarget.closest('section');
+            if (section instanceof HTMLElement) pinToContainerTop(section);
+          }
+          onToggle(id);
+        }}
       >
         <div className="section-heading-left">
-          <Icon size={15} strokeWidth={1.9} aria-hidden />
-          <span>{title}</span>
+          <Icon size={16} strokeWidth={1.8} aria-hidden />
+          <span className="section-heading-copy">
+            <span className="section-heading-title">{title}</span>
+            {hint ? <span className="section-heading-hint">{hint}</span> : null}
+          </span>
         </div>
         <span className="section-heading-right">
           {trailing && <span className="section-meta">{trailing}</span>}
@@ -275,13 +339,147 @@ function SettingsSection({
   );
 }
 
-const BUILTIN_SCENE_HINTS: Record<string, string> = {
-  midnight: 'Dark, moody elegance',
-  studio: 'Warm editorial tones',
-  mint: 'Bold emerald atmosphere',
-  sunset: 'A splash of colour',
-  transparent: 'Ready for compositing',
-};
+function DeviceCategoryBar({
+  value,
+  onChange,
+}: {
+  value: DeviceCategoryFilter;
+  onChange: (id: DeviceCategoryFilter) => void;
+}) {
+  return (
+    <div className="device-category-bar" role="tablist" aria-label="Device categories">
+      {DEVICE_CATEGORY_TABS.map((tab) => {
+        const active = value === tab.id;
+        const Icon = DEVICE_CATEGORY_LUCIDE[DEVICE_CATEGORY_ICON[tab.id]];
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            className={`device-category-tab ${active ? 'is-active' : ''}`}
+            title={tab.label}
+            onClick={() => onChange(tab.id)}
+          >
+            <Icon size={14} strokeWidth={1.8} aria-hidden />
+            <span>{tab.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FinishDots({
+  ariaLabel,
+  color,
+  clayMode,
+  onPick,
+}: {
+  ariaLabel: string;
+  color: DeviceColor;
+  clayMode: boolean;
+  onPick: (color: DeviceColor) => void;
+}) {
+  return (
+    <div className="device-finish-grid" role="group" aria-label={ariaLabel}>
+      {DEVICE_COLORS.map((swatch) => {
+        const selected = color === swatch.id || (swatch.id === 'clay' && clayMode);
+        return (
+          <button
+            key={swatch.id}
+            type="button"
+            className={`device-finish-swatch ${selected ? 'selected' : ''}`}
+            title={swatch.label}
+            aria-label={swatch.label}
+            aria-pressed={selected}
+            onClick={() => onPick(swatch.id)}
+          >
+            <span style={{ background: swatch.hex }} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DeviceMenuOptions({
+  devices,
+  grouped,
+  isSelected,
+  isUnlocked,
+  onPick,
+}: {
+  devices: DeviceModel[];
+  grouped: boolean;
+  isSelected: (id: string) => boolean;
+  isUnlocked: (id: string) => boolean;
+  onPick: (device: DeviceModel, unlocked: boolean) => void;
+}) {
+  const renderOption = (device: DeviceModel) => {
+    const unlocked = isUnlocked(device.id);
+    const selected = isSelected(device.id);
+    return (
+      <button
+        key={device.id}
+        type="button"
+        role="option"
+        aria-selected={selected}
+        className={`device-dropdown-option ${selected ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
+        title={unlocked
+          ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)}`
+          : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
+        onClick={() => onPick(device, unlocked)}
+      >
+        <span className="device-dropdown-name">{device.label}</span>
+        {selected ? <Check size={13} /> : !unlocked ? <span className="device-dropdown-pro">Pro</span> : null}
+      </button>
+    );
+  };
+
+  if (!grouped) return <>{devices.map(renderOption)}</>;
+
+  const buckets = new Map<string, DeviceModel[]>();
+  for (const device of devices) {
+    const id = categoryOfDevice(device);
+    const list = buckets.get(id);
+    if (list) list.push(device);
+    else buckets.set(id, [device]);
+  }
+  const groups = DEVICE_CATEGORY_TABS.filter((tab) => tab.id !== 'all' && buckets.has(tab.id));
+  if (groups.length <= 1) return <>{devices.map(renderOption)}</>;
+
+  return (
+    <>
+      {groups.map((tab) => (
+        <div key={tab.id} className="device-dropdown-group" role="group" aria-label={tab.label}>
+          <div className="device-dropdown-group-label">{tab.label}</div>
+          {buckets.get(tab.id)!.map(renderOption)}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function frameMeta(id: string, sizes: SavedAssetSize[]) {
+  const builtin = EXPORT_ASPECTS.find((item) => item.id === id);
+  if (builtin) {
+    return {
+      label: builtin.label,
+      shortLabel: builtin.shortLabel,
+      hint: builtin.hint,
+      ratio: builtin.ratio,
+    };
+  }
+  const saved = sizes.find((item) => item.id === id);
+  if (!saved) return null;
+  return {
+    label: saved.label,
+    shortLabel: saved.label,
+    hint: `${saved.width}×${saved.height}`,
+    ratio: saved.width / Math.max(1, saved.height),
+  };
+}
 
 function exportRatioThumbStyle(ratio: number, max = 34): CSSProperties {
   if (ratio >= 1) {
@@ -290,20 +488,24 @@ function exportRatioThumbStyle(ratio: number, max = 34): CSSProperties {
   return { width: Math.max(10, Math.round(max * ratio)), height: max };
 }
 
-function sceneThumbStyle(scene: ScenePreset): CSSProperties | undefined {
-  if (!scene.gradient) return undefined;
-  if (BACKGROUNDS.some((item) => item.id === scene.id)) return undefined;
-  return { background: gradientCss(scene.gradient) };
-}
-
 export default function App() {
   const [workspace, setWorkspace] = useState<Workspace>(createInitialWorkspace);
   const [customPresets, setCustomPresets] = useState<ScenePreset[]>(() => loadCustomScenePresets());
+  const [savedSizes, setSavedSizes] = useState<SavedAssetSize[]>(() => loadSavedSizes());
+  const [savedAngles, setSavedAngles] = useState<SavedAngle[]>(() => loadSavedAngles());
+  const [savedCompositions, setSavedCompositions] = useState<CompositionTemplate[]>(() => loadSavedCompositions());
+  const [sizeName, setSizeName] = useState('');
+  const [sizeDraft, setSizeDraft] = useState({ width: 1080, height: 1920 });
+  const [angleName, setAngleName] = useState('');
+  const [compositionName, setCompositionName] = useState('');
   const [customDevices, setCustomDevices] = useState<CustomDeviceMeta[]>(() => loadCustomDeviceMeta());
   const [devicesTick, setDevicesTick] = useState(0);
   const [presetName, setPresetName] = useState('');
   const [savingPreset, setSavingPreset] = useState(false);
   const [leftWorkspaceTab, setLeftWorkspaceTab] = useState<LeftWorkspaceTab>('scenes');
+  const [changeLogVersion, setChangeLogVersion] = useState(0);
+  const changeLogsRef = useRef(new Map<string, ChangeLogEntry[]>());
+  const liveProjectRef = useRef<MockupProject>(DEFAULT_PROJECT);
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -325,9 +527,9 @@ export default function App() {
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>('devices');
   /** Platforms queued for export — select multiple to render several sizes at once. */
-  const [exportAspectIds, setExportAspectIds] = useState<ExportAspectId[]>(['tiktok']);
+  const [exportAspectIds, setExportAspectIds] = useState<string[]>(['tiktok']);
   /** Live canvas crop frame — defaults to TikTok 9:16; `free` hides the overlay. */
-  const [previewFrame, setPreviewFrame] = useState<ExportAspectId | 'free'>('tiktok');
+  const [previewFrame, setPreviewFrame] = useState<string>('tiktok');
   const [exportResolution, setExportResolution] = useState<ExportResolutionId>('fhd');
   const [customExportSize, setCustomExportSize] = useState({ width: 1080, height: 1920 });
   const [exportMode, setExportMode] = useState<'combined' | 'separate'>('combined');
@@ -337,6 +539,16 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const hoveredDeviceIdRef = useRef<string | null>(null);
+  const [canvasHintVisible, setCanvasHintVisible] = useState(() => !canvasHintAlreadySeen());
+  const dismissCanvasHint = useCallback(() => {
+    setCanvasHintVisible(false);
+    try {
+      localStorage.setItem(CANVAS_HINT_KEY, '1');
+    } catch {
+      /* private mode */
+    }
+  }, []);
   const [toast, setToast] = useState<string | null>(null);
   const [deviceMenu, setDeviceMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [gizmoDragging, setGizmoDragging] = useState(false);
@@ -348,6 +560,8 @@ export default function App() {
   const [cameraRecenterToken, setCameraRecenterToken] = useState(0);
   const [openSectionId, setOpenSectionId] = useState<string | null>('device');
   const [deviceDropdownOpen, setDeviceDropdownOpen] = useState(false);
+  const deviceDropdownRef = useRef<HTMLDivElement>(null);
+  const customDevicePanelRef = useRef<CustomDevicePanelHandle>(null);
   const [deviceCategoryFilter, setDeviceCategoryFilter] = useState<DeviceCategoryFilter>('all');
   /** Which platform's device menu is open in split mode (`null` = closed). */
   const [splitDeviceMenu, setSplitDeviceMenu] = useState<PublishTarget | null>(null);
@@ -359,6 +573,10 @@ export default function App() {
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>(() => loadRecentProjects());
+  const [cloud, setCloud] = useState<CloudLibraryStatus | null>(null);
+  const [cloudProjects, setCloudProjects] = useState<CloudProjectEntry[]>([]);
+  const [cloudBusy, setCloudBusy] = useState(false);
+  const [syncMenuOpen, setSyncMenuOpen] = useState(false);
   const [recentScreenshots, setRecentScreenshots] = useState<RecentScreenshot[]>(() => loadRecentScreenshots());
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
   const [mirrorStream, setMirrorStream] = useState<MediaStream | null>(null);
@@ -383,9 +601,29 @@ export default function App() {
   const iosCaptureRef = useRef<CaptureApi | null>(null);
   const androidCaptureRef = useRef<CaptureApi | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const leftScrollRef = useRef<HTMLDivElement>(null);
+  const inspectorScrollRef = useRef<HTMLDivElement>(null);
+  const rightPanelRef = useRef<HTMLElement>(null);
   const svgInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
   const toastTimer = useRef<number | null>(null);
+  const syncMenuRef = useRef<HTMLDivElement>(null);
+  const cloudRef = useRef(cloud);
+  const workspaceRef = useRef(workspace);
+  const activeIdRef = useRef(workspace.activeId);
+  const baselineRef = useRef(new Map<string, string>());
+  const savedJsonRef = useRef(new Map<string, string>());
+  const syncPathByTabRef = useRef(new Map<string, string>());
+  const notifyRef = useRef<(message: string) => void>(() => {});
+  const persistCloudRef = useRef<
+    (
+      tabId: string,
+      snapshot: MockupProject,
+      knownPath: string | null,
+      options?: { quiet?: boolean; force?: boolean },
+    ) => Promise<string | null>
+  >(async () => null);
+  const pullRemoteRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     void hydrateCustomDeviceUrls().then(() => {
@@ -456,23 +694,126 @@ export default function App() {
   const activeTab = workspace.tabs.find((tab) => tab.id === workspace.activeId) ?? workspace.tabs[0] ?? null;
   const hasOpenProject = activeTab != null;
   const project = activeTab?.project ?? DEFAULT_PROJECT;
+  liveProjectRef.current = project;
+  const activeChangeLog = useMemo(() => {
+    if (!activeTab) return [];
+    return changeLogsRef.current.get(activeTab.id) ?? [];
+  }, [activeTab, changeLogVersion]);
   const animTime = activeTab?.animTime ?? 0;
   const animPlaying = activeTab?.animPlaying ?? false;
   const timelineOpen = activeTab?.timelineOpen ?? false;
+
+  useEffect(() => {
+    const el = leftScrollRef.current;
+    if (!el) return;
+    return bindScrollMore(el);
+  }, [leftWorkspaceTab]);
+
+  useEffect(() => {
+    const panel = rightPanelRef.current;
+    const scroll = inspectorScrollRef.current;
+    const el = timelineOpen ? panel : scroll;
+    const other = timelineOpen ? scroll : panel;
+    other?.classList.remove('can-scroll-more');
+    if (!el) return;
+    return bindScrollMore(el);
+  }, [timelineOpen, openSectionId]);
+
+  const deviceMenuWasOpen = useRef(false);
+  useEffect(() => {
+    const wasOpen = deviceMenuWasOpen.current;
+    deviceMenuWasOpen.current = deviceDropdownOpen;
+    if (deviceDropdownOpen) {
+      const root = deviceDropdownRef.current;
+      if (!root) return undefined;
+      const menu = root.querySelector('.device-dropdown-menu');
+      if (menu instanceof HTMLElement) menu.scrollTop = 0;
+      return pinToContainerTop(root);
+    }
+    if (!wasOpen) return undefined;
+    const section = document.querySelector('.inspector-scroll .settings-section.is-open');
+    if (section instanceof HTMLElement) return pinToContainerTop(section);
+    return undefined;
+  }, [deviceDropdownOpen]);
+
+  const splitMenuWasOpen = useRef(false);
+  useEffect(() => {
+    const wasOpen = splitMenuWasOpen.current;
+    splitMenuWasOpen.current = splitDeviceMenu != null;
+    if (splitDeviceMenu) {
+      const root = document.querySelector('.split-env-device-block .device-dropdown.is-open');
+      if (!(root instanceof HTMLElement)) return undefined;
+      const menu = root.querySelector('.device-dropdown-menu');
+      if (menu instanceof HTMLElement) menu.scrollTop = 0;
+      return pinToContainerTop(root);
+    }
+    if (!wasOpen) return undefined;
+    const section = document.querySelector('.inspector-scroll .settings-section.is-open');
+    if (section instanceof HTMLElement) return pinToContainerTop(section);
+    return undefined;
+  }, [splitDeviceMenu]);
+
+  useEffect(() => {
+    if (!aspectDropdownOpen) return undefined;
+    const root = aspectDropdownRef.current;
+    if (!root) return undefined;
+    const menu = root.querySelector('.aspect-ratio-menu');
+    if (menu instanceof HTMLElement) menu.scrollTop = 0;
+    return pinToContainerTop(root);
+  }, [aspectDropdownOpen]);
 
   const trackRecent = useCallback((nextProject: MockupProject) => {
     setRecentProjects(rememberRecentProject(nextProject));
   }, []);
 
+  cloudRef.current = cloud;
+  workspaceRef.current = workspace;
+  activeIdRef.current = workspace.activeId;
+  {
+    const liveTabIds = new Set(workspace.tabs.map((tab) => tab.id));
+    for (const id of [...syncPathByTabRef.current.keys()]) {
+      if (!liveTabIds.has(id)) syncPathByTabRef.current.delete(id);
+    }
+    for (const tab of workspace.tabs) {
+      if (tab.syncPath) syncPathByTabRef.current.set(tab.id, tab.syncPath);
+    }
+  }
+
   const setProject = useCallback((updater: MockupProject | ((current: MockupProject) => MockupProject)) => {
+    const tabId = activeIdRef.current;
+    if (!tabId) return;
+    const current = liveProjectRef.current;
+    const next = typeof updater === 'function' ? updater(current) : updater;
+    if (next !== current) {
+      liveProjectRef.current = next;
+      const existing = changeLogsRef.current.get(tabId) ?? [];
+      const recorded = recordProjectChange(existing, current, next);
+      if (recorded !== existing) {
+        changeLogsRef.current.set(tabId, recorded);
+        setChangeLogVersion((version) => version + 1);
+      }
+    }
     setWorkspace((ws) => ({
       ...ws,
-      tabs: ws.tabs.map((tab) => {
-        if (tab.id !== ws.activeId) return tab;
-        const next = typeof updater === 'function' ? updater(tab.project) : updater;
-        return { ...tab, project: next };
-      }),
+      tabs: ws.tabs.map((tab) => (tab.id === tabId ? { ...tab, project: next } : tab)),
     }));
+  }, []);
+
+  const restoreChange = useCallback((entryId: string) => {
+    const tabId = activeIdRef.current;
+    if (!tabId) return;
+    const entries = changeLogsRef.current.get(tabId) ?? [];
+    const index = entries.findIndex((entry) => entry.id === entryId);
+    if (index < 0) return;
+    const entry = entries[index];
+    changeLogsRef.current.set(tabId, entries.slice(index + 1));
+    liveProjectRef.current = entry.before;
+    setWorkspace((ws) => ({
+      ...ws,
+      tabs: ws.tabs.map((tab) => (tab.id === tabId ? { ...tab, project: entry.before } : tab)),
+    }));
+    setChangeLogVersion((version) => version + 1);
+    notifyRef.current(`Restored to before “${entry.summary}”`);
   }, []);
 
   const setAnimTime = useCallback((value: number | ((time: number) => number)) => {
@@ -610,6 +951,8 @@ export default function App() {
       if (open) {
         setAnimPlaying(false);
         bakeAnimationPose();
+      } else {
+        setAspectDropdownOpen(false);
       }
       return !open;
     });
@@ -755,31 +1098,64 @@ export default function App() {
     setRenamingTabId(null);
     setExportOpen(false);
     setAnimPlaying(false);
+    changeLogsRef.current.delete(id);
+    setChangeLogVersion((version) => version + 1);
   };
 
-  const openProjectInTab = (nextProject: MockupProject, notice?: string) => {
+  const openProjectInTab = (nextProject: MockupProject, notice?: string, syncPath?: string | null) => {
     trackRecent(nextProject);
-    const tab = createProjectTab(nextProject);
-    setWorkspace((ws) => {
-      if (!ws.tabs.length) {
-        return { tabs: [tab], activeId: tab.id };
-      }
-      if (ws.tabs.length >= MAX_PROJECT_TABS) {
-        const activeId = ws.activeId ?? ws.tabs[0]?.id ?? tab.id;
-        const tabs = ws.tabs.map((item) => (
+    const canonical = canonicalProjectJson(nextProject);
+    const ws = workspaceRef.current;
+    let openedId = '';
+    let nextWs: Workspace;
+    if (!ws.tabs.length) {
+      const tab = createProjectTab(nextProject);
+      tab.syncPath = syncPath ?? null;
+      openedId = tab.id;
+      nextWs = { tabs: [tab], activeId: tab.id };
+    } else if (ws.tabs.length >= MAX_PROJECT_TABS) {
+      const activeId = ws.activeId ?? ws.tabs[0].id;
+      openedId = activeId;
+      changeLogsRef.current.delete(activeId);
+      nextWs = {
+        tabs: ws.tabs.map((item) => (
           item.id === activeId
-            ? { ...item, project: nextProject, animTime: 0, animPlaying: false }
+            ? { ...item, project: nextProject, animTime: 0, animPlaying: false, syncPath: syncPath ?? null }
             : item
-        ));
-        return { tabs, activeId };
-      }
-      return { tabs: [...ws.tabs, tab], activeId: tab.id };
-    });
+        )),
+        activeId,
+      };
+    } else {
+      const tab = createProjectTab(nextProject);
+      tab.syncPath = syncPath ?? null;
+      openedId = tab.id;
+      nextWs = { tabs: [...ws.tabs, tab], activeId: tab.id };
+    }
+    baselineRef.current.set(openedId, canonical);
+    if (syncPath) {
+      savedJsonRef.current.set(syncPath, canonical);
+      syncPathByTabRef.current.set(openedId, syncPath);
+    } else {
+      syncPathByTabRef.current.delete(openedId);
+    }
+    workspaceRef.current = nextWs;
+    setWorkspace(nextWs);
     setDeviceMenu(null);
     if (notice) notify(notice);
+    if (cloudRef.current?.configured && !syncPath) {
+      void persistCloudRef.current(openedId, nextProject, null, { quiet: true, force: true });
+    }
+    return openedId;
   };
 
   const openRecentProject = (entry: RecentProjectEntry) => {
+    const match = cloudRef.current?.configured
+      ? cloudProjects.find((item) => item.name.trim().toLowerCase() === entry.name.trim().toLowerCase())
+      : undefined;
+    if (match) {
+      void openCloudProject(match.path);
+      return;
+    }
     openProjectInTab(
       { ...entry.project, name: uniqueProjectName(entry.project.name || entry.name) },
       `Opened “${entry.name}”`,
@@ -824,26 +1200,49 @@ export default function App() {
     }
     const finalName = uniqueProjectName(template.label);
     const nextProject = projectFromTemplate(template, { name: finalName });
+    const motion = template.motion ? getAnimationPreset(template.motion) : undefined;
+    const playMotion = Boolean(motion && motion.loop && motion.id !== 'clear');
     const canAddTab = workspace.tabs.length < MAX_PROJECT_TABS;
     setDeviceMenu(null);
     setTemplatePickerOpen(false);
     trackRecent(nextProject);
 
+    const canonical = canonicalProjectJson(nextProject);
     if (canAddTab) {
       const tab = createProjectTab(nextProject);
-      setWorkspace((ws) => ({ tabs: [...ws.tabs, tab], activeId: tab.id }));
+      tab.syncPath = null;
+      baselineRef.current.set(tab.id, canonical);
+      syncPathByTabRef.current.delete(tab.id);
+      tab.animPlaying = playMotion;
+      const nextWs = { tabs: [...workspaceRef.current.tabs, tab], activeId: tab.id };
+      workspaceRef.current = nextWs;
+      setWorkspace(nextWs);
+      if (cloudRef.current?.configured) {
+        void persistCloudRef.current(tab.id, nextProject, null, { quiet: true, force: true });
+      }
       notify(`Opened “${finalName}” in a new tab`);
       return;
     }
 
-    setWorkspace((ws) => ({
-      ...ws,
-      tabs: ws.tabs.map((tab) => (
-        tab.id === ws.activeId
-          ? { ...tab, project: nextProject, animTime: 0, animPlaying: false, timelineOpen: false }
-          : tab
-      )),
-    }));
+    const activeId = workspaceRef.current.activeId;
+    if (activeId) {
+      changeLogsRef.current.delete(activeId);
+      baselineRef.current.set(activeId, canonical);
+      syncPathByTabRef.current.delete(activeId);
+      const nextWs = {
+        ...workspaceRef.current,
+        tabs: workspaceRef.current.tabs.map((tab) => (
+          tab.id === activeId
+            ? { ...tab, project: nextProject, animTime: 0, animPlaying: playMotion, timelineOpen: false, syncPath: null }
+            : tab
+        )),
+      };
+      workspaceRef.current = nextWs;
+      setWorkspace(nextWs);
+      if (cloudRef.current?.configured) {
+        void persistCloudRef.current(activeId, nextProject, null, { quiet: true, force: true });
+      }
+    }
     notify(`Started “${finalName}”`);
   };
 
@@ -926,14 +1325,276 @@ export default function App() {
     setToast(message);
     toastTimer.current = window.setTimeout(() => setToast(null), 4300);
   };
+  notifyRef.current = notify;
+
+  persistCloudRef.current = async (tabId, snapshot, knownPath, options) => {
+    const api = window.mockupDesktop;
+    if (!api?.cloudWrite || !cloudRef.current?.configured) return null;
+    const canonical = canonicalProjectJson(snapshot);
+    const path = knownPath || syncPathByTabRef.current.get(tabId) || null;
+    if (!options?.force && path && savedJsonRef.current.get(path) === canonical) return path;
+    if (!options?.force && !path && baselineRef.current.get(tabId) === canonical) return null;
+    try {
+      const result = await api.cloudWrite({
+        filePath: path,
+        contents: JSON.stringify(snapshot, null, 2),
+        name: snapshot.name,
+      });
+      if (path && path !== result.path) savedJsonRef.current.delete(path);
+      savedJsonRef.current.set(result.path, canonical);
+      syncPathByTabRef.current.set(tabId, result.path);
+      setWorkspace((ws) => ({
+        ...ws,
+        tabs: ws.tabs.map((tab) => (
+          tab.id === tabId && tab.syncPath !== result.path ? { ...tab, syncPath: result.path } : tab
+        )),
+      }));
+      if (!options?.quiet) {
+        const where = cloudRef.current?.label || 'your drive';
+        notifyRef.current(result.unchanged ? `Already saved to ${where}` : `Saved to ${where}`);
+      }
+      return result.path;
+    } catch (error) {
+      notifyRef.current(error instanceof Error ? error.message : 'Could not sync this project');
+      return null;
+    }
+  };
+
+  const refreshCloudProjects = useCallback(async () => {
+    const api = window.mockupDesktop;
+    if (!api?.cloudList) return;
+    try {
+      const rows = await api.cloudList();
+      setCloudProjects(rows.map(projectFromCloudRow));
+    } catch (error) {
+      notifyRef.current(error instanceof Error ? error.message : 'Could not read the sync folder');
+    }
+  }, []);
+
+  pullRemoteRef.current = async () => {
+    const api = window.mockupDesktop;
+    if (!api?.cloudRead || !cloudRef.current?.configured) return;
+    for (const tab of workspaceRef.current.tabs) {
+      const filePath = tab.syncPath || syncPathByTabRef.current.get(tab.id);
+      if (!filePath) continue;
+      try {
+        const file = await api.cloudRead(filePath);
+        const parsed = validateProject(JSON.parse(file.contents) as unknown);
+        const diskJson = canonicalProjectJson(parsed);
+        const localJson = canonicalProjectJson(tab.project);
+        if (diskJson === localJson) {
+          savedJsonRef.current.set(file.path, diskJson);
+          continue;
+        }
+        const saved = savedJsonRef.current.get(file.path) || savedJsonRef.current.get(filePath);
+        if (saved && localJson !== saved) continue;
+        savedJsonRef.current.set(file.path, diskJson);
+        baselineRef.current.set(tab.id, diskJson);
+        syncPathByTabRef.current.set(tab.id, file.path);
+        setWorkspace((ws) => ({
+          ...ws,
+          tabs: ws.tabs.map((item) => (
+            item.id === tab.id ? { ...item, project: parsed, syncPath: file.path } : item
+          )),
+        }));
+        notifyRef.current(`Updated “${parsed.name}” from ${cloudRef.current?.label || 'sync'}`);
+      } catch {
+        /* The file may be mid-save or still downloading. */
+      }
+    }
+    if (!workspaceRef.current.activeId) await refreshCloudProjects();
+  };
+
+  const openCloudProject = async (filePath: string) => {
+    const existing = workspaceRef.current.tabs.find((tab) => tab.syncPath === filePath);
+    if (existing) {
+      switchTab(existing.id);
+      return;
+    }
+    try {
+      const file = await window.mockupDesktop?.cloudRead?.(filePath);
+      if (!file) return;
+      const parsed = validateProject(JSON.parse(file.contents) as unknown);
+      openProjectInTab(parsed, `Opened “${parsed.name}”`, file.path);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not open that project');
+    }
+  };
+
+  const publishExistingWork = async () => {
+    const api = window.mockupDesktop;
+    if (!api?.cloudList || !api.cloudWrite) return;
+    const rows = await api.cloudList();
+    const names = new Set(rows.map((row) => row.name.trim().toLowerCase()));
+    for (const entry of loadRecentProjects()) {
+      const key = (entry.name || entry.project.name || '').trim().toLowerCase();
+      if (!key || names.has(key)) continue;
+      try {
+        await api.cloudWrite({
+          contents: JSON.stringify(entry.project, null, 2),
+          name: entry.project.name || entry.name,
+        });
+        names.add(key);
+      } catch {
+        /* Keep going so one large project does not block the rest. */
+      }
+    }
+    const listed = await api.cloudList();
+    for (const tab of workspaceRef.current.tabs) {
+      const key = tab.project.name.trim().toLowerCase();
+      const match = listed.find((row) => row.name.trim().toLowerCase() === key);
+      await persistCloudRef.current(
+        tab.id,
+        tab.project,
+        tab.syncPath ?? match?.path ?? null,
+        { quiet: true, force: true },
+      );
+    }
+  };
+
+  const enableCloud = async (target: CloudTarget) => {
+    const api = window.mockupDesktop;
+    if (!api?.cloudUse || !api.cloudPick) {
+      notify('Sync to iCloud or Google Drive is available in the Mac app.');
+      return;
+    }
+    setCloudBusy(true);
+    try {
+      const result = target === 'pick' ? await api.cloudPick() : await api.cloudUse(target);
+      setCloud(result.status);
+      if (!result.canceled && result.status.configured) {
+        await publishExistingWork();
+        await refreshCloudProjects();
+        const where = result.status.label || 'your drive';
+        notify(`Projects now save to ${where} and sync from there.`);
+        setSyncMenuOpen(false);
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not set up sync');
+    } finally {
+      setCloudBusy(false);
+    }
+  };
+
+  const stopCloud = async () => {
+    try {
+      const status = await window.mockupDesktop?.cloudClear?.();
+      if (status) setCloud(status);
+      setCloudProjects([]);
+      setSyncMenuOpen(false);
+      notify('Stopped syncing. Your files stay in the folder you chose.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not stop syncing');
+    }
+  };
+
+  const removeCloudProject = async (filePath: string) => {
+    const entry = cloudProjects.find((item) => item.path === filePath);
+    const name = entry?.name || 'this project';
+    const where = cloud?.label || 'the sync folder';
+    if (!window.confirm(`Remove “${name}” from ${where}? This deletes the file from the sync folder.`)) return;
+    try {
+      await window.mockupDesktop?.cloudRemove?.(filePath);
+      setCloudProjects((current) => current.filter((item) => item.path !== filePath));
+      const recent = recentProjects.find((item) => item.name.trim().toLowerCase() === name.trim().toLowerCase());
+      if (recent) setRecentProjects(removeRecentProject(recent.id));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not remove that project');
+    }
+  };
+
+  const refreshCloudStatus = useCallback(() => {
+    const api = window.mockupDesktop;
+    if (!api?.cloudStatus) return;
+    void api.cloudStatus().then((status) => {
+      setCloud(status);
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Could not check iCloud or Google Drive';
+      notifyRef.current(
+        message.includes('No handler')
+          ? 'Restart Mockup Studio, then tap Sync again.'
+          : message,
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    const api = window.mockupDesktop;
+    if (!api?.cloudStatus) return undefined;
+    refreshCloudStatus();
+    const stop = api.onCloudChanged?.(() => {
+      void pullRemoteRef.current();
+    });
+    return () => {
+      stop?.();
+    };
+  }, [refreshCloudStatus]);
+
+  useEffect(() => {
+    if (!syncMenuOpen) return;
+    refreshCloudStatus();
+  }, [syncMenuOpen, refreshCloudStatus]);
+
+  useEffect(() => {
+    if (!activeTab) return;
+    if (baselineRef.current.has(activeTab.id)) return;
+    baselineRef.current.set(activeTab.id, canonicalProjectJson(activeTab.project));
+  }, [activeTab?.id]);
+
+  useEffect(() => {
+    if (!activeTab || !cloud?.configured) return undefined;
+    const tabId = activeTab.id;
+    const snapshot = project;
+    const knownPath = activeTab.syncPath ?? syncPathByTabRef.current.get(tabId) ?? null;
+    const timer = window.setTimeout(() => {
+      void persistCloudRef.current(tabId, snapshot, knownPath, { quiet: true });
+    }, 1400);
+    return () => {
+      window.clearTimeout(timer);
+      if (activeIdRef.current !== tabId) {
+        void persistCloudRef.current(tabId, snapshot, knownPath, { quiet: true });
+      }
+    };
+  }, [project, activeTab?.id, activeTab?.syncPath, cloud?.configured, cloud?.path]);
+
+  useEffect(() => {
+    if (hasOpenProject || !cloud?.configured || cloud.missing) return;
+    void refreshCloudProjects();
+  }, [hasOpenProject, cloud?.configured, cloud?.missing, cloud?.path, refreshCloudProjects]);
+
+  useEffect(() => {
+    if (!syncMenuOpen) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!syncMenuRef.current?.contains(event.target as Node)) setSyncMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSyncMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [syncMenuOpen]);
 
   useEffect(() => () => {
     if (toastTimer.current != null) window.clearTimeout(toastTimer.current);
   }, []);
 
-  const applyScreenImage = (dataUrl: string, name: string, message = 'Screenshot added to your device') => {
+  const applyScreenImage = (
+    dataUrl: string,
+    name: string,
+    message = 'Screenshot added to your device',
+    deviceId?: string | null,
+  ) => {
     setProject((current) => {
-      const next = applyScreenToPublishEnv(current, dataUrl);
+      const targetId = deviceId && current.devices.some((device) => device.id === deviceId)
+        ? deviceId
+        : (hoveredDeviceIdRef.current && current.devices.some((device) => device.id === hoveredDeviceIdRef.current)
+          ? hoveredDeviceIdRef.current
+          : getSelectedDevice(current).id);
+      const next = applyScreenToDevice(current, targetId, dataUrl);
       if (!isPlaceholderScreenshot(dataUrl)) {
         const platform = resolvePublishTarget(next);
         setRecentScreenshots((recent) => rememberRecentScreenshot(recent, dataUrl, name, platform));
@@ -987,7 +1648,7 @@ export default function App() {
     applyScreenImage(url, file.name);
   };
 
-  const pasteScreenFromClipboard = async (event?: ClipboardEvent) => {
+  const pasteScreenFromClipboard = async (event?: ClipboardEvent, deviceId?: string | null) => {
     try {
       const svgText = event ? readSvgTextFromPasteEvent(event) : null;
       if (svgText) {
@@ -996,9 +1657,10 @@ export default function App() {
       }
       const fromEvent = event ? await readImageFromPasteEvent(event) : null;
       const image = fromEvent ?? await readImageFromClipboard();
-      applyScreenImage(image.dataUrl, image.name, 'Pasted from clipboard onto the device');
+      const targetId = deviceId ?? hoveredDeviceIdRef.current;
+      applyScreenImage(image.dataUrl, image.name, 'Pasted onto the device screen', targetId);
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Nothing to paste — copy a frame from Figma first');
+      notify(error instanceof Error ? error.message : 'Nothing to paste — copy an image first');
     }
   };
 
@@ -1212,6 +1874,37 @@ export default function App() {
     notify('Camera keyframed');
   };
 
+  const applyStudioPose = (poseId: string) => {
+    const pose = getStudioPose(poseId, savedAngles);
+    if (!pose) return;
+    setProject((current) => {
+      const selected = getSelectedDevice(current);
+      const delta = {
+        x: pose.rotation.x - selected.rotation.x,
+        y: pose.rotation.y - selected.rotation.y,
+        z: pose.rotation.z - selected.rotation.z,
+      };
+      const link = current.compositionMode === 'split' && current.linkSplitTransform !== false;
+      const devices = current.devices.map((device) => (
+        device.id === selected.id || link
+          ? { ...device, rotation: { ...pose.rotation } }
+          : device
+      ));
+      let animation = current.animation;
+      for (const device of current.devices) {
+        if (device.id === selected.id || link) {
+          animation = shiftDeviceRotation(animation, device.id, delta);
+        }
+      }
+      return syncProjectFromSelected(
+        { ...current, devices, animation },
+        { ...selected, rotation: { ...pose.rotation } },
+      );
+    });
+    setAnimPlaying(false);
+    notify(`${pose.label} angle`);
+  };
+
   const applyMotionPreset = (presetId: string) => {
     const preset = getAnimationPreset(presetId);
     if (!preset) return;
@@ -1239,9 +1932,10 @@ export default function App() {
     const text = raw.trim();
     if (!text || studioAiBusy) return;
     setStudioAiBusy(true);
-    try {
-      const selected = getSelectedDevice(project);
-      const result = promptToAnimation(text, animation, selected);
+    const selected = getSelectedDevice(project);
+    void promptToAnimationSmart(text, animation, selected, project.devices, (status) => {
+      setStudioAiStatus(status);
+    }).then((result) => {
       updateProject({ animation: result.clip });
       setAnimTime(0);
       setAnimPlaying(result.label !== 'Clear');
@@ -1249,9 +1943,11 @@ export default function App() {
       setStudioAiStatus(result.summary);
       setStudioAiPrompt('');
       notify(result.summary);
-    } finally {
+    }).catch(() => {
+      setStudioAiStatus('Could not build that motion');
+    }).finally(() => {
       window.setTimeout(() => setStudioAiBusy(false), 140);
-    }
+    });
   }, [animation, project, studioAiBusy, updateProject, setAnimTime, setAnimPlaying, setTimelineOpen]);
 
   useEffect(() => {
@@ -1278,6 +1974,31 @@ export default function App() {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [studioAiOpen, closeStudioAi]);
+
+  useEffect(() => {
+    if (!deviceDropdownOpen && !splitDeviceMenu) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (deviceDropdownRef.current && !deviceDropdownRef.current.contains(target)) {
+        setDeviceDropdownOpen(false);
+      }
+      if (splitDeviceMenu && !(target instanceof Element && target.closest('.device-dropdown'))) {
+        setSplitDeviceMenu(null);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setDeviceDropdownOpen(false);
+      setSplitDeviceMenu(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [deviceDropdownOpen, splitDeviceMenu]);
 
   useEffect(() => {
     if (!aspectDropdownOpen) return;
@@ -1312,14 +2033,34 @@ export default function App() {
   };
 
   const onSave = async () => {
-    if (!hasOpenProject) return;
+    if (!hasOpenProject || !activeTab) return;
     try {
+      if (window.mockupDesktop?.cloudWrite && cloudRef.current?.configured) {
+        const savedPath = await persistCloudRef.current(
+          activeTab.id,
+          project,
+          activeTab.syncPath ?? null,
+          { quiet: false, force: true },
+        );
+        if (savedPath) trackRecent(project);
+        return;
+      }
       const contents = JSON.stringify(project, null, 2);
       const fileName = safeFilename(project.name);
       if (window.mockupDesktop) {
         const result = await window.mockupDesktop.saveProject(contents, fileName);
         if (!result.canceled) {
           trackRecent(project);
+          if (result.path && cloudRef.current?.path && isPathInsideLibrary(result.path, cloudRef.current.path)) {
+            savedJsonRef.current.set(result.path, canonicalProjectJson(project));
+            syncPathByTabRef.current.set(activeTab.id, result.path);
+            setWorkspace((ws) => ({
+              ...ws,
+              tabs: ws.tabs.map((tab) => (
+                tab.id === activeTab.id ? { ...tab, syncPath: result.path } : tab
+              )),
+            }));
+          }
           notify('Project saved successfully');
         }
       } else {
@@ -1332,17 +2073,27 @@ export default function App() {
     }
   };
 
-  const applyProject = (data: string) => {
+  const applyProject = (data: string, filePath?: string) => {
     const parsed = validateProject(JSON.parse(data) as unknown);
     const named = { ...parsed, name: uniqueProjectName(parsed.name || 'Opened project') };
-    openProjectInTab(named, `Opened “${named.name}”`);
+    const libraryPath = cloudRef.current?.path;
+    const inside = Boolean(filePath && libraryPath && isPathInsideLibrary(filePath, libraryPath));
+    if (inside && filePath) {
+      const existing = workspaceRef.current.tabs.find((tab) => tab.syncPath === filePath);
+      if (existing) {
+        switchTab(existing.id);
+        notify(`Opened “${existing.project.name}”`);
+        return;
+      }
+    }
+    openProjectInTab(named, `Opened “${named.name}”`, inside ? filePath : null);
   };
 
   const onOpen = async () => {
     try {
       if (window.mockupDesktop) {
         const result = await window.mockupDesktop.openProject();
-        if (!result.canceled && result.contents) applyProject(result.contents);
+        if (!result.canceled && result.contents) applyProject(result.contents, result.path);
       } else projectInputRef.current?.click();
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Unable to open project');
@@ -1367,21 +2118,27 @@ export default function App() {
       : exportAspectIds[0]
   ) ?? 'tiktok';
 
-  const resolveExportSize = (aspectId: ExportAspectId = primaryExportAspect) => {
-    const resolutionId = exportAspectHasFixed(aspectId)
+  const aspectHasLockedPixels = useCallback((id: string) => (
+    savedSizes.some((item) => item.id === id) || exportAspectHasFixed(id as ExportAspectId)
+  ), [savedSizes]);
+
+  const resolveExportSize = (aspectId: string = primaryExportAspect) => {
+    const saved = savedSizes.find((item) => item.id === aspectId);
+    if (saved) return { width: saved.width, height: saved.height, label: `${saved.width} × ${saved.height}` };
+    const resolutionId = exportAspectHasFixed(aspectId as ExportAspectId)
       ? 'native'
       : aspectId === 'custom'
         ? 'custom'
         : exportResolution === 'native'
           ? 'fhd'
           : exportResolution;
-    return resolveExportDimensions(aspectId, resolutionId, customExportSize);
+    return resolveExportDimensions(aspectId as ExportAspectId, resolutionId, customExportSize);
   };
 
   const availableResolutions = useMemo(() => {
-    const flexible = exportAspectIds.some((id) => !exportAspectHasFixed(id) && id !== 'custom');
+    const flexible = exportAspectIds.some((id) => !aspectHasLockedPixels(id) && id !== 'custom');
     const onlyCustom = exportAspectIds.length > 0 && exportAspectIds.every((id) => id === 'custom');
-    const onlyFixed = exportAspectIds.length > 0 && exportAspectIds.every((id) => exportAspectHasFixed(id));
+    const onlyFixed = exportAspectIds.length > 0 && exportAspectIds.every((id) => aspectHasLockedPixels(id));
     if (onlyCustom) {
       return EXPORT_RESOLUTIONS.filter((item) => item.id === 'custom');
     }
@@ -1392,19 +2149,24 @@ export default function App() {
       return EXPORT_RESOLUTIONS.filter((item) => item.id !== 'native');
     }
     return EXPORT_RESOLUTIONS.filter((item) => item.id !== 'native');
-  }, [exportAspectIds]);
+  }, [aspectHasLockedPixels, exportAspectIds]);
 
-  const previewAspect = previewFrame === 'free'
-    ? null
-    : EXPORT_ASPECTS.find((item) => item.id === previewFrame) ?? null;
+  const previewAspect = previewFrame === 'free' ? null : frameMeta(previewFrame, savedSizes);
 
-  const aspectSlug = (aspectId: ExportAspectId) => {
-    const aspect = EXPORT_ASPECTS.find((item) => item.id === aspectId);
-    return (aspect?.shortLabel ?? aspectId).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const aspectSlug = (aspectId: string) => {
+    const meta = frameMeta(aspectId, savedSizes);
+    return (meta?.shortLabel ?? aspectId).toLowerCase().replace(/[^a-z0-9]+/g, '-');
   };
 
-  const focusPlatformAspect = useCallback((id: ExportAspectId) => {
-    const fixed = exportAspectFixedSize(id);
+  const focusPlatformAspect = useCallback((id: string) => {
+    const saved = savedSizes.find((item) => item.id === id);
+    if (saved) {
+      setPreviewFrame(saved.id);
+      setExportResolution('native');
+      setCustomExportSize({ width: saved.width, height: saved.height });
+      return;
+    }
+    const fixed = exportAspectFixedSize(id as ExportAspectId);
     if (fixed) {
       setPreviewFrame(id);
       setExportResolution('native');
@@ -1418,9 +2180,9 @@ export default function App() {
     }
     setPreviewFrame(id);
     setExportResolution((current) => (current === 'native' || current === 'custom' ? 'fhd' : current));
-  }, []);
+  }, [savedSizes]);
 
-  const applyPlatformFrame = useCallback((id: ExportAspectId | 'free') => {
+  const applyPlatformFrame = useCallback((id: string) => {
     if (id === 'free') {
       setPreviewFrame('free');
       return;
@@ -1433,7 +2195,7 @@ export default function App() {
     focusPlatformAspect(id);
   }, [focusPlatformAspect]);
 
-  const toggleExportAspect = useCallback((id: ExportAspectId) => {
+  const toggleExportAspect = useCallback((id: string) => {
     if (id === 'custom') {
       setExportAspectIds(['custom']);
       focusPlatformAspect(id);
@@ -1901,6 +2663,10 @@ export default function App() {
       const selected = current.devices.find((d) => d.id === payload.id) ?? getSelectedDevice(current);
       return setPublishTarget(current, platformOfDevice(selected));
     });
+    if (payload.openMenu === false) {
+      setDeviceMenu(null);
+      return;
+    }
     setDeviceMenu({ id: payload.id, x: payload.clientX, y: payload.clientY });
   };
 
@@ -2077,6 +2843,21 @@ export default function App() {
 
       if (!(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
+      if (key === 'z' && !event.shiftKey) {
+        if (typing) return;
+        const tabId = activeIdRef.current;
+        const latest = tabId ? changeLogsRef.current.get(tabId)?.[0] : undefined;
+        if (!latest) return;
+        event.preventDefault();
+        restoreChange(latest.id);
+        return;
+      }
+      if (key === 'd' && !event.shiftKey && !event.altKey) {
+        if (typing || !hasOpenProject) return;
+        event.preventDefault();
+        duplicateSelectedDevice();
+        return;
+      }
       if (key === 's') { event.preventDefault(); void onSave(); }
       if (key === 'o') { event.preventDefault(); void onOpen(); }
       if (key === 'e') { event.preventDefault(); setExportOpen(true); }
@@ -2106,12 +2887,15 @@ export default function App() {
         ? Array.from(items).some((item) => (
           item.type.startsWith('image/')
           || item.type === 'image/svg+xml'
-          || (item.kind === 'file' && (item.type.startsWith('image/') || item.type === 'image/svg+xml'))
+          || item.kind === 'file'
         ))
         : Boolean(event.clipboardData?.files?.length);
-      if (!svgText && !hasImage) return;
+      // Mac screenshots often never show up on the paste event. Still try the
+      // system pasteboard, and only take over the shortcut when an image is there
+      // or the pointer is on a device.
+      if (!svgText && !hasImage && !hoveredDeviceIdRef.current && !window.mockupDesktop?.readClipboardImage) return;
       event.preventDefault();
-      void pasteScreenFromClipboard(event);
+      void pasteScreenFromClipboard(event, hoveredDeviceIdRef.current);
     };
     window.addEventListener('paste', onPaste);
     return () => window.removeEventListener('paste', onPaste);
@@ -2144,15 +2928,6 @@ export default function App() {
     }
     setProject((current) => addCompositionScene(current, true));
     notify('Scene added');
-  };
-
-  const onDuplicateCompositionScene = () => {
-    if (compositionScenes.length >= MAX_COMPOSITION_SCENES) {
-      notify(`Up to ${MAX_COMPOSITION_SCENES} scenes per composition`);
-      return;
-    }
-    setProject((current) => duplicateCompositionScene(current));
-    notify('Scene duplicated');
   };
 
   const onRemoveCompositionScene = (sceneId: string) => {
@@ -2208,6 +2983,56 @@ export default function App() {
       updateProject({ background: 'custom' });
     }
     notify('Custom preset removed');
+  };
+
+  const onSaveAssetSize = (width: number, height: number, name = sizeName) => {
+    const saved = saveAssetSize(name, width, height);
+    setSavedSizes(loadSavedSizes());
+    setSizeName('');
+    setSizeDraft({ width: saved.width, height: saved.height });
+    setExportAspectIds((current) => [...current.filter((item) => item !== 'custom' && item !== saved.id), saved.id]);
+    setPreviewFrame(saved.id);
+    setExportResolution('native');
+    setCustomExportSize({ width: saved.width, height: saved.height });
+    notify(`Saved “${saved.label}” · ${saved.width}×${saved.height}`);
+  };
+
+  const onDeleteSize = (id: string) => {
+    setSavedSizes(deleteSavedSize(id));
+    setExportAspectIds((current) => {
+      const next = current.filter((item) => item !== id);
+      return next.length ? next : ['tiktok'];
+    });
+    if (previewFrame === id) {
+      setPreviewFrame('tiktok');
+      setExportResolution('fhd');
+    }
+    notify('Custom size removed');
+  };
+
+  const onSaveAngle = () => {
+    const saved = saveAngle(angleName, getSelectedDevice(project).rotation);
+    setSavedAngles(loadSavedAngles());
+    setAngleName('');
+    notify(`Saved “${saved.label}” angle`);
+  };
+
+  const onDeleteAngle = (id: string) => {
+    setSavedAngles(deleteSavedAngle(id));
+    notify('Angle removed');
+  };
+
+  const onSaveComposition = () => {
+    const saved = saveComposition(compositionName, project);
+    setSavedCompositions(loadSavedCompositions());
+    setCompositionName('');
+    setTemplateCategory('saved');
+    notify(`Saved “${saved.label}” composition`);
+  };
+
+  const onDeleteComposition = (id: string) => {
+    setSavedCompositions(deleteSavedComposition(id));
+    notify('Composition removed');
   };
 
   const resetDevice = () => {
@@ -2313,6 +3138,29 @@ export default function App() {
             })}
           </div>
         </div>
+        <div className="sync-menu-wrap" ref={syncMenuRef}>
+          <button
+            type="button"
+            className={`sync-status ${cloud?.configured && !cloud.missing ? 'is-on' : ''}`}
+            aria-expanded={syncMenuOpen}
+            aria-haspopup="dialog"
+            title={cloud?.configured
+              ? `Saving to ${cloud.folderLabel || cloud.label}`
+              : 'Save to iCloud Drive or Google Drive'}
+            onClick={() => setSyncMenuOpen((open) => !open)}
+          >
+            {syncButtonLabel(cloud)}
+          </button>
+          {syncMenuOpen && (
+            <CloudSyncPanel
+              cloud={cloud}
+              busy={cloudBusy}
+              variant="menu"
+              onUse={(target) => { void enableCloud(target); }}
+              onStop={() => { void stopCloud(); }}
+            />
+          )}
+        </div>
       </header>
       )}
 
@@ -2323,6 +3171,13 @@ export default function App() {
           devices={allDevices}
           license={license}
           licensingDisabled={LICENSING_DISABLED}
+          cloud={cloud}
+          cloudBusy={cloudBusy}
+          cloudProjects={cloudProjects}
+          onCloudUse={(target) => { void enableCloud(target); }}
+          onCloudStop={() => { void stopCloud(); }}
+          onOpenCloudProject={(filePath) => { void openCloudProject(filePath); }}
+          onRemoveCloudProject={(filePath) => { void removeCloudProject(filePath); }}
           onOpenProject={openRecentProject}
           onRemoveProject={(id) => setRecentProjects(removeRecentProject(id))}
           onNewProject={() => setTemplatePickerOpen(true)}
@@ -2342,155 +3197,78 @@ export default function App() {
       ) : (
       <div className={`workspace ${sidePanelsHidden ? 'panels-hidden' : ''} ${leftPanelHidden && !sidePanelsHidden ? 'left-panel-hidden' : ''} ${timelineOpen && !sidePanelsHidden ? 'timeline-open' : ''}`}>
         <aside className="left-panel" aria-hidden={sidePanelsHidden || leftPanelHidden}>
-          <div className="panel-title-row">
-            <h2>Workspace</h2>
-          </div>
-
-          <div className="panel-tabs left-workspace-tabs" role="tablist" aria-label="Workspace tools">
+          <div className="left-workspace-head">
+            <div className="left-workspace-tabs" role="tablist" aria-label="Workspace tools">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={leftWorkspaceTab === 'scenes'}
+                className={leftWorkspaceTab === 'scenes' ? 'panel-tab selected' : 'panel-tab'}
+                onClick={() => setLeftWorkspaceTab('scenes')}
+              >
+                Objects
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={leftWorkspaceTab === 'assets'}
+                className={leftWorkspaceTab === 'assets' ? 'panel-tab selected' : 'panel-tab'}
+                onClick={() => setLeftWorkspaceTab('assets')}
+              >
+                Assets
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={leftWorkspaceTab === 'log'}
+                className={leftWorkspaceTab === 'log' ? 'panel-tab selected' : 'panel-tab'}
+                onClick={() => setLeftWorkspaceTab('log')}
+              >
+                Log
+              </button>
+            </div>
             <button
               type="button"
-              role="tab"
-              aria-selected={leftWorkspaceTab === 'scenes'}
-              className={leftWorkspaceTab === 'scenes' ? 'panel-tab selected' : 'panel-tab'}
-              onClick={() => setLeftWorkspaceTab('scenes')}
+              className="left-workspace-add"
+              title="Add scene"
+              aria-label="Add scene"
+              disabled={compositionScenes.length >= MAX_COMPOSITION_SCENES}
+              onClick={onAddCompositionScene}
             >
-              <LayoutTemplate size={14} />
-              Scenes
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={leftWorkspaceTab === 'assets'}
-              className={leftWorkspaceTab === 'assets' ? 'panel-tab selected' : 'panel-tab'}
-              onClick={() => setLeftWorkspaceTab('assets')}
-            >
-              <ImagePlus size={14} />
-              Assets
+              <img src={iconPlus} alt="" />
             </button>
           </div>
 
           <div className="left-panel-main">
             {leftWorkspaceTab === 'scenes' ? (
               <section className="left-scenes-content" aria-label="Scenes">
-                <div className="field-caption section-label">
-                  Scenes
-                  <span>{compositionScenes.length}/{MAX_COMPOSITION_SCENES}</span>
-                </div>
-                <div className="scene-flipper" role="tablist" aria-label="Composition scenes">
-                  <div className="scene-flipper-track">
-                    {compositionScenes.map((scene) => {
-                      const selected = scene.id === activeCompositionSceneId;
-                      return (
-                        <button
-                          key={scene.id}
-                          type="button"
-                          role="tab"
-                          aria-selected={selected}
-                          className={`scene-flip-chip ${selected ? 'is-active' : ''}`}
-                          title={`${scene.name} · double-click to rename`}
-                          onClick={() => onSwitchCompositionScene(scene.id)}
-                          onDoubleClick={() => {
-                            const next = window.prompt('Rename scene', scene.name);
-                            if (next == null) return;
-                            onRenameCompositionScene(scene.id, next);
-                          }}
-                        >
-                          <span
-                            className="scene-flip-swatch"
-                            style={{
-                              background: scene.background === 'transparent'
-                                ? undefined
-                                : gradientCss(scene.gradientColors),
-                            }}
-                            data-transparent={scene.background === 'transparent' ? 'true' : undefined}
-                          />
-                          <strong>{scene.name}</strong>
-                          {compositionScenes.length > 1 && (
-                            <span
-                              className="scene-flip-remove"
-                              title={`Remove ${scene.name}`}
-                              role="button"
-                              tabIndex={-1}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                onRemoveCompositionScene(scene.id);
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault();
-                                  event.stopPropagation();
-                                  onRemoveCompositionScene(scene.id);
-                                }
-                              }}
-                            >
-                              <X size={11} />
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="scene-flipper-actions" role="group" aria-label="Scene actions">
-                    <button
-                      type="button"
-                      className="scene-flip-action"
-                      title="Duplicate active scene"
-                      aria-label="Duplicate active scene"
-                      disabled={compositionScenes.length >= MAX_COMPOSITION_SCENES}
-                      onClick={onDuplicateCompositionScene}
-                    >
-                      <Copy size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      className="scene-flip-action"
-                      title="Add scene"
-                      aria-label="Add scene"
-                      disabled={compositionScenes.length >= MAX_COMPOSITION_SCENES}
-                      onClick={onAddCompositionScene}
-                    >
-                      <Plus size={14} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="field-caption section-label aspect-sidebar-label">
-                  Look
-                  <span>{allScenes.length}</span>
-                </div>
-                <p className="scene-look-hint">Applies to the active scene. Devices and screenshot stay the same.</p>
-                <div className="scene-grid scene-grid-compact">
-                  {allScenes.map((item) => (
-                    <div key={item.id} className={`scene-card-wrap ${project.background === item.id ? 'active' : ''}`}>
-                      <button type="button" className={`scene-card ${project.background === item.id ? 'active' : ''}`}
-                        onClick={() => chooseScene(item)} title={BUILTIN_SCENE_HINTS[item.id] ?? item.description}>
-                        <div className={`scene-thumb ${BACKGROUNDS.some((b) => b.id === item.id) ? `bg-${item.id}` : ''}`} style={sceneThumbStyle(item)}>
-                          <div className="scene-mini-device"><span /></div>
-                          {project.background === item.id && <span className="scene-check"><Check size={12} strokeWidth={3} /></span>}
-                        </div>
-                        <strong>{item.label}</strong>
-                      </button>
-                      {item.id.startsWith('custom-') && (
-                        <button type="button" className="scene-delete" title="Delete preset" aria-label={`Delete ${item.label}`}
-                          onClick={() => onDeletePreset(item.id)}>
-                          <Trash2 size={12} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                  {project.background === 'custom' && (
-                    <button type="button" className="scene-card active" onClick={() => undefined} title="Edited colours">
-                      <div className="scene-thumb" style={{ background: gradientCss(project.gradientColors) }}>
-                        <div className="scene-mini-device"><span /></div>
-                        <span className="scene-check"><Check size={12} strokeWidth={3} /></span>
-                      </div>
-                      <strong>Custom</strong>
-                    </button>
-                  )}
-                </div>
+                <SceneHierarchy
+                  project={project}
+                  scenes={compositionScenes}
+                  activeSceneId={activeCompositionSceneId ?? compositionScenes[0]?.id ?? 'scene-main'}
+                  looks={allScenes}
+                  onSwitchScene={onSwitchCompositionScene}
+                  onRenameScene={onRenameCompositionScene}
+                  onRemoveScene={onRemoveCompositionScene}
+                  onSelectDevice={(device) => {
+                    setDeviceChosen(true);
+                    setProject((current) => {
+                      const selected = current.devices.find((item) => item.id === device.id) ?? getSelectedDevice(current);
+                      return setPublishTarget(syncProjectFromSelected(current, selected), platformOfDevice(selected));
+                    });
+                  }}
+                  onChooseLook={chooseScene}
+                  onDeleteLook={onDeletePreset}
+                  onOpenSection={(sectionId) => setOpenSectionId(sectionId)}
+                  onOpenAssets={() => setLeftWorkspaceTab('assets')}
+                  onSelectOverlay={(overlayId) => setSelectedOverlayId(overlayId)}
+                  onFocusKeyLight={() => setLightGizmoActive(true)}
+                />
               </section>
+            ) : leftWorkspaceTab === 'log' ? (
+              <ChangeLogPanel entries={activeChangeLog} onRestore={restoreChange} />
             ) : (
-              <div className="left-scroll">
+              <div className="left-scroll" ref={leftScrollRef}>
                 <div className="assets-stack">
                   <section className="assets-block" aria-label="Import">
                     <div className="field-caption section-label assets-section-label">
@@ -2675,7 +3453,16 @@ export default function App() {
           </div>
 
           <div className="left-panel-bottom">
-            <section className="left-aspect-dock" aria-label="Aspect ratio">
+            <section
+              className="left-aspect-dock"
+              aria-label="Aspect ratio"
+              onPointerDown={(event) => {
+                const pill = (event.target as HTMLElement).closest('.aspect-format-pill, .aspect-ratio-trigger');
+                if (!(pill instanceof HTMLElement)) return;
+                pill.classList.add('is-tapped');
+                window.setTimeout(() => pill.classList.remove('is-tapped'), 420);
+              }}
+            >
               <div className="field-caption section-label aspect-sidebar-label">
                 Aspect ratio
                 <span>
@@ -2705,7 +3492,7 @@ export default function App() {
                   {exportAspectIds
                     .filter((id) => id !== 'custom')
                     .map((id) => {
-                      const item = EXPORT_ASPECTS.find((aspect) => aspect.id === id);
+                      const item = frameMeta(id, savedSizes);
                       if (!item) return null;
                       const active = previewFrame === id;
                       const canDismiss = exportAspectIds.filter((aspectId) => aspectId !== 'custom').length > 1;
@@ -2746,7 +3533,14 @@ export default function App() {
                   aria-expanded={aspectDropdownOpen}
                   aria-haspopup="listbox"
                   title="Add or remove formats"
-                  onClick={() => setAspectDropdownOpen((open) => !open)}
+                  onClick={(event) => {
+                    const root = event.currentTarget.closest('.aspect-ratio-picker');
+                    const willOpen = !aspectDropdownOpen;
+                    setAspectDropdownOpen(willOpen);
+                    if (willOpen && root instanceof HTMLElement) {
+                      pinToContainerTop(root);
+                    }
+                  }}
                 >
                   <Columns2 size={14} aria-hidden />
                   <span>Formats</span>
@@ -2767,6 +3561,84 @@ export default function App() {
                       </span>
                       {previewFrame === 'free' ? <Check size={13} /> : null}
                     </button>
+                    <form
+                      className="aspect-size-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        onSaveAssetSize(sizeDraft.width, sizeDraft.height);
+                      }}
+                    >
+                      <input
+                        className="preset-name-input"
+                        value={sizeName}
+                        maxLength={40}
+                        placeholder="Custom size name"
+                        aria-label="Custom size name"
+                        onChange={(event) => setSizeName(event.target.value)}
+                      />
+                      <div className="aspect-size-form-dims">
+                        <input
+                          type="number"
+                          min={EXPORT_SIZE_LIMITS.min}
+                          max={EXPORT_SIZE_LIMITS.max}
+                          step={2}
+                          value={sizeDraft.width}
+                          aria-label="Width"
+                          onChange={(event) => setSizeDraft((current) => ({
+                            ...current,
+                            width: Number(event.target.value) || current.width,
+                          }))}
+                        />
+                        <input
+                          type="number"
+                          min={EXPORT_SIZE_LIMITS.min}
+                          max={EXPORT_SIZE_LIMITS.max}
+                          step={2}
+                          value={sizeDraft.height}
+                          aria-label="Height"
+                          onChange={(event) => setSizeDraft((current) => ({
+                            ...current,
+                            height: Number(event.target.value) || current.height,
+                          }))}
+                        />
+                        <button type="submit">Add</button>
+                      </div>
+                    </form>
+                    {savedSizes.length > 0 && (
+                      <div className="aspect-ratio-menu-group" role="group" aria-label="Your sizes">
+                        <div className="aspect-ratio-menu-label">Your sizes</div>
+                        {savedSizes.map((item) => {
+                          const selected = exportAspectIds.includes(item.id);
+                          return (
+                            <div key={item.id} className="aspect-saved-row">
+                              <button
+                                type="button"
+                                role="option"
+                                aria-selected={selected}
+                                className={`aspect-ratio-option ${selected ? 'is-selected' : ''}`}
+                                title={`${item.label} · ${item.width}×${item.height}`}
+                                onClick={() => toggleExportAspect(item.id)}
+                              >
+                                <span className="aspect-ratio-option-copy">
+                                  <strong>{item.label}</strong>
+                                  <span>{item.width}×{item.height}</span>
+                                </span>
+                                {selected ? <Check size={13} /> : null}
+                              </button>
+                              <button
+                                type="button"
+                                className="aspect-saved-remove"
+                                title={`Remove ${item.label}`}
+                                aria-label={`Remove ${item.label}`}
+                                onClick={() => onDeleteSize(item.id)}
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                     {EXPORT_ASPECT_GROUPS.map((group) => {
                       const items = EXPORT_ASPECTS.filter((item) => item.group === group.id && item.id !== 'custom');
                       if (!items.length) return null;
@@ -2817,6 +3689,7 @@ export default function App() {
               <button
                 type="button"
                 className="left-panel-settings"
+                data-hide-with-timeline
                 title="Send feedback"
                 aria-label="Send feedback"
                 onClick={() => setFeedbackOpen(true)}
@@ -2827,6 +3700,7 @@ export default function App() {
               <button
                 type="button"
                 className="left-panel-settings"
+                data-hide-with-timeline
                 title="Settings & shortcuts"
                 aria-label="Settings & shortcuts"
                 onClick={() => setHelpOpen(true)}
@@ -2856,8 +3730,16 @@ export default function App() {
           </button>
         )}
 
-        <main className="canvas-panel" onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }} onDrop={onDrop}>
+        <main
+          className="canvas-panel"
+          onDragOver={(e) => {
+            if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }}
+          onDrop={onDrop}
+        >
           <div className={`canvas-stage ${sidePanelsHidden ? 'chrome-hidden' : timelineOpen ? 'with-timeline' : ''}`}>
             <div className="canvas-top-right">
               <div className="view-buttons canvas-view-buttons" role="group" aria-label="Camera views">
@@ -2898,11 +3780,19 @@ export default function App() {
                     Stop
                   </button>
                 </div>
-              ) : (
-                <p className="canvas-usage-hint">
-                  Hold <kbd>Space</kbd> + drag to pan · Drag the gimbal to rotate
+              ) : canvasHintVisible ? (
+                <p className="canvas-usage-hint" role="status">
+                  Hold <kbd>Space</kbd> + drag to pan · Drag a device to move it · Drag the rings to rotate
+                  <button
+                    type="button"
+                    className="canvas-usage-hint-close"
+                    aria-label="Close hint"
+                    onClick={dismissCanvasHint}
+                  >
+                    <X size={11} />
+                  </button>
                 </p>
-              )}
+              ) : null}
             </div>
             <div className={`canvas-render ${project.background === 'transparent' ? 'transparent-grid' : ''} ${isDualCanvas ? 'is-dual' : ''}`}>
               {isDualCanvas && iosDisplayProject && androidDisplayProject ? (
@@ -2937,6 +3827,8 @@ export default function App() {
                         onRotateDevice={onRotateDevice}
                         onMoveDevice={onMoveDevice}
                         onGizmoDraggingChange={setGizmoDragging}
+                        screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
+                        onSpacePanDrag={dismissCanvasHint}
                       />
                     ),
                   }}
@@ -2967,6 +3859,8 @@ export default function App() {
                         onRotateDevice={onRotateDevice}
                         onMoveDevice={onMoveDevice}
                         onGizmoDraggingChange={setGizmoDragging}
+                        screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
+                        onSpacePanDrag={dismissCanvasHint}
                       />
                     ),
                   }}
@@ -2987,6 +3881,8 @@ export default function App() {
                   onRotateDevice={onRotateDevice}
                   onMoveDevice={onMoveDevice}
                   onGizmoDraggingChange={setGizmoDragging}
+                  screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
+                  onSpacePanDrag={dismissCanvasHint}
                 />
               )}
               <ProgressiveBlurOverlay
@@ -3035,7 +3931,7 @@ export default function App() {
             {deviceMenu && (
               <div className="device-action-menu" style={{ left: Math.min(deviceMenu.x, window.innerWidth - 240), top: Math.min(deviceMenu.y, window.innerHeight - 200) }}>
                 <div className="device-action-hint">
-                  Drag rings to rotate · arrows move left / right / up / down
+                  Drag the device to move it · rings rotate · arrows slide on one axis
                 </div>
                 <button
                   type="button"
@@ -3070,7 +3966,7 @@ export default function App() {
                     <Camera size={14} /> Snapshot
                   </button>
                 )}
-                <button type="button" onClick={duplicateSelectedDevice}><Copy size={14} /> Duplicate</button>
+                <button type="button" title="Duplicate (⌘D)" onClick={duplicateSelectedDevice}><Copy size={14} /> Duplicate</button>
                 <button type="button" onClick={rotateSelectedDevice}><Rotate3D size={14} /> Snap +45°</button>
                 <button type="button" className="danger" onClick={deleteSelectedDevice} disabled={project.compositionMode === 'split' || project.devices.length <= 1}><Trash2 size={14} /> Remove</button>
                 <div className="device-action-meta">Ideal size {screenSizeLabel(getDevice(project.deviceId).screenSize)}</div>
@@ -3078,9 +3974,9 @@ export default function App() {
             )}
             {dragOver && (
               <div className="drag-overlay">
-                <Upload size={37} />
-                <b>Drop screenshot to replace</b>
-                <span>Image or video · {screenSizeLabel(getDevice(project.deviceId).screenSize)}</span>
+                <Upload size={16} />
+                <b>Drop on the highlighted screen</b>
+                <span>Image or video · {screenSizeLabel(getDevice(getPublishEnvDevice(project).deviceId).screenSize)}</span>
               </div>
             )}
             <div className="canvas-watermark"><Aperture size={16} /> Mockup Studio</div>
@@ -3124,7 +4020,7 @@ export default function App() {
                           setStudioAiPrompt(e.target.value);
                           if (studioAiStatus) setStudioAiStatus(null);
                         }}
-                        placeholder="Ask AI to animate…"
+                        placeholder={studioAiBusy ? 'Building motion…' : 'Ask AI to animate…'}
                         aria-label="AI assistant prompt"
                         disabled={studioAiBusy}
                         autoComplete="off"
@@ -3221,35 +4117,9 @@ export default function App() {
           )}
         </main>
 
-        <aside className="right-panel" aria-hidden={sidePanelsHidden}>
-          <div className="inspector-scroll">
+        <aside className="right-panel" aria-hidden={sidePanelsHidden} ref={rightPanelRef}>
+          <div className="inspector-scroll" ref={inspectorScrollRef}>
             <SettingsSection id="device" title="Device" icon={Smartphone} open={openSectionId === 'device'} onToggle={toggleSection}>
-              <div className="device-category-bar" role="tablist" aria-label="Device categories">
-                {DEVICE_CATEGORY_TABS.map((tab) => {
-                  const active = deviceCategoryFilter === tab.id;
-                  const Icon = DEVICE_CATEGORY_LUCIDE[DEVICE_CATEGORY_ICON[tab.id]];
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={active}
-                      className={`device-category-tab ${active ? 'is-active' : ''}`}
-                      onClick={() => {
-                        setDeviceCategoryFilter(tab.id);
-                        // Keep the picker open so the filtered list is visible immediately.
-                        setDeviceDropdownOpen(true);
-                        if (project.compositionMode === 'split') {
-                          setSplitDeviceMenu(activePublishTarget);
-                        }
-                      }}
-                    >
-                      <Icon size={12} strokeWidth={1.9} aria-hidden />
-                      <span>{tab.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
               <div className="option-toggle-row">
                 <span>iOS + Android</span>
                 <SwitchControl
@@ -3327,7 +4197,12 @@ export default function App() {
                             aria-expanded={menuOpen}
                             aria-haspopup="listbox"
                             title={`Choose ${platform === 'ios' ? 'iOS' : 'Android'} device`}
-                            onClick={() => setSplitDeviceMenu((open) => (open === platform ? null : platform))}
+                            onClick={(event) => {
+                              const root = event.currentTarget.closest('.device-dropdown');
+                              const willOpen = splitDeviceMenu !== platform;
+                              setSplitDeviceMenu(willOpen ? platform : null);
+                              if (willOpen && root instanceof HTMLElement) pinToContainerTop(root);
+                            }}
                           >
                             <span className="device-dropdown-copy">
                               <strong>{model.label}</strong>
@@ -3337,129 +4212,116 @@ export default function App() {
                           </button>
                           {menuOpen && (
                             <div className="device-dropdown-menu" role="listbox" aria-label={`${title} models`}>
+                              <DeviceCategoryBar value={deviceCategoryFilter} onChange={setDeviceCategoryFilter} />
+                              <div className="device-dropdown-options">
                               {platformDevices.length === 0 ? (
                                 <div className="device-dropdown-empty">No devices in this category</div>
-                              ) : platformDevices.map((option) => {
-                                const unlocked = isDeviceUnlocked(license.tier, option.id);
-                                const selected = device.deviceId === option.id;
-                                return (
-                                  <button
-                                    key={option.id}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={selected}
-                                    className={`device-dropdown-option ${selected ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
-                                    title={unlocked
-                                      ? `${option.subtitle} · ${screenSizeLabel(option.screenSize)}`
-                                      : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
-                                    onClick={() => {
-                                      if (!unlocked) {
-                                        notify(upgradeCopy('The full device library'));
-                                        setLicenseOpen(true);
-                                        setSplitDeviceMenu(null);
-                                        return;
-                                      }
-                                      setProject((current) => applyDeviceToPlatform(current, platform, option.id));
-                                      setDeviceChosen(true);
+                              ) : (
+                                <DeviceMenuOptions
+                                  devices={platformDevices}
+                                  grouped={deviceCategoryFilter === 'all'}
+                                  isSelected={(id) => device.deviceId === id}
+                                  isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
+                                  onPick={(option, unlocked) => {
+                                    if (!unlocked) {
+                                      notify(upgradeCopy('The full device library'));
+                                      setLicenseOpen(true);
                                       setSplitDeviceMenu(null);
-                                      // Size-guide placeholders update inside applyDeviceToPlatform.
-                                    }}
-                                  >
-                                    <span className="device-dropdown-copy">
-                                      <strong>{option.label}</strong>
-                                      <span>
-                                        {screenSizeLabel(option.screenSize)}
-                                        {!unlocked && ' · Pro'}
-                                      </span>
-                                    </span>
-                                    {selected ? <Check size={13} /> : !unlocked ? <Lock size={13} /> : null}
-                                  </button>
-                                );
-                              })}
+                                      return;
+                                    }
+                                    setProject((current) => applyDeviceToPlatform(current, platform, option.id));
+                                    setDeviceChosen(true);
+                                    setSplitDeviceMenu(null);
+                                  }}
+                                />
+                              )}
+                              </div>
                             </div>
                           )}
                         </div>
-                        <div className="device-finish-grid" role="group" aria-label={`${title} finish`}>
-                          {DEVICE_COLORS.map((swatch) => (
-                            <button
-                              key={`${platform}-${swatch.id}`}
-                              type="button"
-                              className={`device-finish-swatch ${(finish.deviceColor === swatch.id || (swatch.id === 'clay' && finish.clayMode)) ? 'selected' : ''}`}
-                              title={swatch.label}
-                              onClick={() => setProject((current) => applyFinishToPlatform(current, platform, {
-                                deviceColor: swatch.id as DeviceColor,
-                                clayMode: swatch.id === 'clay',
-                              }))}
-                            >
-                              <span style={{ background: swatch.hex }} />
-                              <em>{swatch.label}</em>
-                            </button>
-                          ))}
-                        </div>
+                        <FinishDots
+                          ariaLabel={`${title} finish`}
+                          color={finish.deviceColor}
+                          clayMode={finish.clayMode}
+                          onPick={(next) => setProject((current) => applyFinishToPlatform(current, platform, {
+                            deviceColor: next,
+                            clayMode: next === 'clay',
+                          }))}
+                        />
                       </div>
                     );
                   })}
                 </div>
               ) : (
                 <>
-                  <div className="device-dropdown is-open device-picker-inline">
-                    <div className="device-dropdown-trigger" aria-hidden>
+                  <div
+                    className={`device-dropdown ${deviceDropdownOpen ? 'is-open' : ''}`}
+                    ref={deviceDropdownRef}
+                  >
+                    <button
+                      type="button"
+                      className="device-dropdown-trigger"
+                      aria-expanded={deviceDropdownOpen}
+                      aria-haspopup="listbox"
+                      title="Choose device"
+                      onClick={(event) => {
+                        const root = event.currentTarget.closest('.device-dropdown');
+                        const willOpen = !deviceDropdownOpen;
+                        setDeviceDropdownOpen(willOpen);
+                        if (willOpen && root instanceof HTMLElement) pinToContainerTop(root);
+                      }}
+                    >
                       <span className="device-dropdown-copy">
                         <strong>{getDevice(project.deviceId).label}</strong>
-                        <span>
-                          {isCustomDeviceId(project.deviceId) ? 'Custom' : getDevice(project.deviceId).platform === 'ios' ? 'iOS' : 'Android'}
-                          {' · '}
-                          {screenSizeLabel(getDevice(project.deviceId).screenSize)}
-                          {deviceCategoryFilter !== 'all'
-                            ? ` · ${DEVICE_CATEGORY_TABS.find((t) => t.id === deviceCategoryFilter)?.label ?? ''}`
-                            : ''}
-                        </span>
+                        <span>{screenSizeLabel(getDevice(project.deviceId).screenSize)}</span>
                       </span>
-                    </div>
-                    <div className="device-dropdown-menu device-picker-list" role="listbox" aria-label="Devices">
-                      {filteredDevices.length === 0 ? (
-                        <div className="device-dropdown-empty">No devices in this category</div>
-                      ) : filteredDevices.map((device) => {
-                        const unlocked = isDeviceUnlocked(license.tier, device.id);
-                        return (
-                          <button
-                            key={device.id}
-                            type="button"
-                            role="option"
-                            aria-selected={project.deviceId === device.id}
-                            className={`device-dropdown-option ${project.deviceId === device.id ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
-                            title={unlocked
-                              ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)}`
-                              : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
-                            onClick={() => {
+                      <ChevronDown size={14} className="device-dropdown-chevron" />
+                    </button>
+                    {deviceDropdownOpen && (
+                      <div className="device-dropdown-menu" role="listbox" aria-label="Devices">
+                        <DeviceCategoryBar value={deviceCategoryFilter} onChange={setDeviceCategoryFilter} />
+                        <div className="device-dropdown-options">
+                        {filteredDevices.length === 0 ? (
+                          <div className="device-dropdown-empty">No devices in this category</div>
+                        ) : (
+                          <DeviceMenuOptions
+                            devices={filteredDevices}
+                            grouped={deviceCategoryFilter === 'all'}
+                            isSelected={(id) => project.deviceId === id}
+                            isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
+                            onPick={(device, unlocked) => {
                               if (!unlocked) {
                                 notify(upgradeCopy('The full device library'));
                                 setLicenseOpen(true);
+                                setDeviceDropdownOpen(false);
                                 return;
                               }
                               patchSelectedDevice({ deviceId: device.id });
                               setDeviceChosen(true);
+                              setDeviceDropdownOpen(false);
                               if (isPlaceholderScreenshot(activeEnvScreenshot)) {
                                 applyScreenImage(placeholderForDevice(device), device.label, 'Size guide updated');
                               }
                             }}
-                          >
-                            <span className="device-dropdown-copy">
-                              <strong>{device.label}</strong>
-                              <span>
-                                {isCustomDeviceId(device.id) ? 'Custom' : device.platform === 'ios' ? 'iOS' : 'Android'}
-                                {' · '}
-                                {screenSizeLabel(device.screenSize)}
-                                {!unlocked && ' · Pro'}
-                              </span>
-                            </span>
-                            {project.deviceId === device.id ? <Check size={13} /> : !unlocked ? <Lock size={13} /> : null}
-                          </button>
-                        );
-                      })}
-                    </div>
+                          />
+                        )}
+                        </div>
+                        <button
+                          type="button"
+                          className="device-dropdown-import"
+                          onClick={() => {
+                            customDevicePanelRef.current?.openImport();
+                            setDeviceDropdownOpen(false);
+                          }}
+                        >
+                          <Upload size={13} />
+                          Import model
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <CustomDevicePanel
+                    ref={customDevicePanelRef}
                     selectedDeviceId={project.deviceId}
                     customDevices={customDevices}
                     onNotify={notify}
@@ -3490,35 +4352,109 @@ export default function App() {
                       }
                     }}
                   />
-                  <div className="field-caption" style={{ marginTop: 10 }}>FINISH</div>
-                  <div className="device-finish-grid" role="group" aria-label="Device finish">
-                    {DEVICE_COLORS.map((finish) => (
-                      <button
-                        key={finish.id}
-                        type="button"
-                        className={`device-finish-swatch ${(project.deviceColor === finish.id || (finish.id === 'clay' && project.clayMode)) ? 'selected' : ''}`}
-                        title={finish.label}
-                        onClick={() => setProject((current) => applyFinishToPublishEnv(current, {
-                          deviceColor: finish.id as DeviceColor,
-                          clayMode: finish.id === 'clay',
-                        }))}
-                      >
-                        <span style={{ background: finish.hex }} />
-                        <em>{finish.label}</em>
-                      </button>
-                    ))}
-                  </div>
+                  <FinishDots
+                    ariaLabel="Device finish"
+                    color={project.deviceColor}
+                    clayMode={project.clayMode}
+                    onPick={(next) => setProject((current) => applyFinishToPublishEnv(current, {
+                      deviceColor: next,
+                      clayMode: next === 'clay',
+                    }))}
+                  />
                 </>
               )}
               {deviceChosen && (
-                <button className="button full-outline compact" onClick={() => { setLeftWorkspaceTab('assets'); imageInputRef.current?.click(); }}>
+                <button className="text-button" onClick={() => { setLeftWorkspaceTab('assets'); imageInputRef.current?.click(); }}>
                   <ImagePlus size={14} />
                   {screenMediaKind(activeEnvScreenshot) === 'video' ? 'Replace screen video' : 'Replace screenshot'}
                 </button>
               )}
             </SettingsSection>
 
-            <SettingsSection id="transform" title="Transform" icon={Rotate3D} open={openSectionId === 'transform'} onToggle={toggleSection}>
+            <SettingsSection id="transform" title="Transform" hint="Studio angle, rotation and materials" icon={Rotate3D} open={openSectionId === 'transform'} onToggle={toggleSection}>
+              <div className="field-caption">Studio angle</div>
+              <div className="camera-preset-grid studio-pose-grid" role="group" aria-label="Studio angles">
+                {STUDIO_POSES.map((pose) => (
+                  <button
+                    key={pose.id}
+                    type="button"
+                    title={pose.hint}
+                    className={studioPoseIdFor(getSelectedDevice(project).rotation, savedAngles) === pose.id ? 'selected' : ''}
+                    onClick={() => applyStudioPose(pose.id)}
+                  >
+                    {pose.label}
+                  </button>
+                ))}
+                {savedAngles.map((pose) => (
+                  <div key={pose.id} className="pose-save-slot">
+                    <button
+                      type="button"
+                      title={pose.hint}
+                      className={studioPoseIdFor(getSelectedDevice(project).rotation, savedAngles) === pose.id ? 'selected' : ''}
+                      onClick={() => applyStudioPose(pose.id)}
+                    >
+                      {pose.label}
+                    </button>
+                    <button
+                      type="button"
+                      className="pose-save-remove"
+                      title={`Remove ${pose.label}`}
+                      aria-label={`Remove ${pose.label}`}
+                      onClick={() => onDeleteAngle(pose.id)}
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <form
+                className="preset-save-row"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onSaveAngle();
+                }}
+              >
+                <input
+                  className="preset-name-input"
+                  value={angleName}
+                  maxLength={24}
+                  placeholder="Save this angle"
+                  aria-label="Angle name"
+                  onChange={(event) => setAngleName(event.target.value)}
+                />
+                <button type="submit" className="button">Save</button>
+              </form>
+              <p className="field-caption" style={{ marginTop: 8 }}>
+                Snaps the model to a product angle. Saved angles stay in this list.
+              </p>
+              <div className="field-caption">Composition</div>
+              <form
+                className="preset-save-row"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onSaveComposition();
+                }}
+              >
+                <input
+                  className="preset-name-input"
+                  value={compositionName}
+                  maxLength={40}
+                  placeholder={project.name || 'Save this composition'}
+                  aria-label="Composition name"
+                  onChange={(event) => setCompositionName(event.target.value)}
+                />
+                <button type="submit" className="button">Save</button>
+              </form>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  setTemplateCategory('saved');
+                  setTemplatePickerOpen(true);
+                }}
+              >
+                <LayoutTemplate size={13} /> Browse saved compositions
+              </button>
               <SliderField label="Rotate X" min={-90} max={90} value={displaySelected.rotation.x} onChange={(v) => updateRotation('x', v)} />
               <SliderField label="Rotate Y" min={-180} max={180} value={displaySelected.rotation.y} onChange={(v) => updateRotation('y', v)} />
               <SliderField label="Rotate Z" min={-90} max={90} value={displaySelected.rotation.z} onChange={(v) => updateRotation('z', v)} />
@@ -3537,7 +4473,7 @@ export default function App() {
                   onChange={(v) => patchSelectedDevice({ lidOpen: v })}
                 />
               ) : null}
-              <div className="field-caption" style={{ marginTop: 4 }}>MATERIALS</div>
+              <div className="field-caption">Materials</div>
               <SliderField
                 label="Glass reflection"
                 min={0}
@@ -3550,7 +4486,7 @@ export default function App() {
               <button className="text-button" onClick={resetDevice}><RotateCcw size={13} /> Reset transform</button>
             </SettingsSection>
 
-            <SettingsSection id="overlays" title="Overlays" icon={Layers3} open={openSectionId === 'overlays'} onToggle={toggleSection}>
+            <SettingsSection id="overlays" title="Overlays" hint="Add titles on top of the shot" icon={Layers3} open={openSectionId === 'overlays'} onToggle={toggleSection}>
               <div className="overlay-actions">
                 <button
                   type="button"
@@ -3573,8 +4509,8 @@ export default function App() {
                 <p className="field-caption">Add titles, then drag them on the canvas. Colour, size, and timing edit below.</p>
               )}
               {(project.overlays ?? []).map((overlay) => (
+                <div key={overlay.id} className="overlay-editor-slot">
                 <div
-                  key={overlay.id}
                   className={`overlay-editor ${selectedOverlayId === overlay.id ? 'is-selected' : ''}`}
                   onClick={() => setSelectedOverlayId(overlay.id)}
                 >
@@ -3721,10 +4657,11 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+                </div>
               ))}
             </SettingsSection>
 
-            <SettingsSection id="environment" title="Environment" icon={Aperture} open={openSectionId === 'environment'} onToggle={toggleSection}>
+            <SettingsSection id="environment" title="Environment" hint="Reflection, light and shadow" icon={Aperture} open={openSectionId === 'environment'} onToggle={toggleSection}>
               <div className="env-stack">
                 <div className="env-group">
                   <div className="field-caption">Reflection</div>
@@ -3742,10 +4679,28 @@ export default function App() {
                 </div>
 
                 <div className="env-group">
-                  <div className="field-caption">Light & shadow</div>
+                  <div className="env-group-head">
+                    <div className="field-caption">Light</div>
+                    <button
+                      type="button"
+                      className="env-reset"
+                      title="Reset lighting and shadows"
+                      onClick={() => updateProject({
+                        lightIntensity: DEFAULT_PROJECT.lightIntensity,
+                        lightPosition: { ...DEFAULT_PROJECT.lightPosition },
+                        lightColor: DEFAULT_PROJECT.lightColor,
+                        fillIntensity: DEFAULT_PROJECT.fillIntensity,
+                        shadowSoftness: DEFAULT_PROJECT.shadowSoftness,
+                        shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
+                      })}
+                    >
+                      <RotateCcw size={12} />
+                      Reset
+                    </button>
+                  </div>
                   <div className="env-sliders">
                     <SliderField
-                      label="Key light"
+                      label="Intensity"
                       min={0.5}
                       max={5}
                       step={0.1}
@@ -3753,8 +4708,8 @@ export default function App() {
                       value={project.lightIntensity}
                       onChange={(v) => updateProject({ lightIntensity: v })}
                     />
-                    <label className="gradient-color-field" style={{ marginTop: 4 }}>
-                      <span className="gradient-color-label">Key color</span>
+                    <label className="env-color-row">
+                      <span>Color</span>
                       <input
                         type="color"
                         value={project.lightColor ?? DEFAULT_PROJECT.lightColor}
@@ -3769,16 +4724,8 @@ export default function App() {
                       deviceYawDeg={displaySelected?.rotation.y ?? 0}
                       onChange={(lightPosition) => updateProject({ lightPosition })}
                     />
-                    <div className="option-toggle-row" style={{ marginTop: 6 }}>
-                      <span>Light handle</span>
-                      <SwitchControl
-                        checked={lightGizmoActive}
-                        label="Show light handle"
-                        onChange={setLightGizmoActive}
-                      />
-                    </div>
                     <SliderField
-                      label="Fill light"
+                      label="Fill"
                       min={0}
                       max={2.5}
                       step={0.05}
@@ -3786,8 +4733,22 @@ export default function App() {
                       value={project.fillIntensity ?? DEFAULT_PROJECT.fillIntensity}
                       onChange={(v) => updateProject({ fillIntensity: v })}
                     />
+                    <div className="option-toggle-row">
+                      <span>Handle</span>
+                      <SwitchControl
+                        checked={lightGizmoActive}
+                        label="Show light handle"
+                        onChange={setLightGizmoActive}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="env-group">
+                  <div className="field-caption">Shadow</div>
+                  <div className="env-sliders">
                     <SliderField
-                      label="Shadow softness"
+                      label="Softness"
                       min={0.2}
                       max={8}
                       step={0.1}
@@ -3796,7 +4757,7 @@ export default function App() {
                       onChange={(v) => updateProject({ shadowSoftness: v })}
                     />
                     <SliderField
-                      label="Shadow strength"
+                      label="Strength"
                       min={0}
                       max={0.85}
                       step={0.01}
@@ -3806,34 +4767,19 @@ export default function App() {
                     />
                   </div>
                 </div>
-
-                <button
-                  type="button"
-                  className="text-button env-quiet-action"
-                  onClick={() => updateProject({
-                    lightIntensity: DEFAULT_PROJECT.lightIntensity,
-                    lightPosition: { ...DEFAULT_PROJECT.lightPosition },
-                    lightColor: DEFAULT_PROJECT.lightColor,
-                    fillIntensity: DEFAULT_PROJECT.fillIntensity,
-                    shadowSoftness: DEFAULT_PROJECT.shadowSoftness,
-                    shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
-                  })}
-                >
-                  <Sun size={12} /> Reset lighting & shadows
-                </button>
               </div>
             </SettingsSection>
 
-            <SettingsSection id="look" title="Look & motion" icon={Sparkles} open={openSectionId === 'look'} onToggle={toggleSection}>
+            <SettingsSection id="look" title="Look & motion" hint="Style, effects and animation" icon={Sparkles} open={openSectionId === 'look'} onToggle={toggleSection}>
               <div className="scene-look-block is-inspector">
                 {!isTransparent && (
                   <div className="scene-look-group">
                     <div className="field-caption scene-look-sub">Colours</div>
                     <div className="gradient-color-grid">
                       {([
-                        ['center', 'Center'],
-                        ['mid', 'Mid'],
-                        ['edge', 'Edge'],
+                        ['center', 'Wall'],
+                        ['mid', 'Cove'],
+                        ['edge', 'Floor'],
                       ] as const).map(([key, label]) => (
                         <label key={key} className="gradient-color-field">
                           <span className="gradient-color-label">{label}</span>
@@ -3886,23 +4832,26 @@ export default function App() {
                   <div className="field-caption scene-look-sub">Motion</div>
                   <div className="motion-preset-row" role="group" aria-label="Motion presets">
                     {([
-                      ['turntable', 'Turntable'],
-                      ['spin', 'Spin 360'],
-                      ['float', 'Float'],
-                      ['tilt', 'Tilt'],
-                      ['orbit', 'Orbit'],
-                      ['zoom', 'Zoom In'],
-                      ['present', 'Present'],
-                      ['wobble', 'Wobble'],
-                    ] as const).map(([id, label]) => (
+                      ['turntable', 'Turntable', RotateCw],
+                      ['spin', 'Spin 360', RefreshCw],
+                      ['float', 'Float', ArrowUpDown],
+                      ['tilt', 'Tilt', FlipHorizontal2],
+                      ['orbit', 'Orbit', Orbit],
+                      ['zoom', 'Zoom in', ZoomIn],
+                      ['present', 'Present', Presentation],
+                      ['wobble', 'Wobble', Waves],
+                      ['fan', 'Fan', Layers3],
+                      ['swing', 'Swing', ArrowLeftRight],
+                    ] as const).map(([id, label, Icon]) => (
                       <button
                         key={id}
                         type="button"
                         className="motion-preset-chip"
-                        title={`Apply ${label} motion`}
+                        title={label}
+                        aria-label={`Apply ${label} motion`}
                         onClick={() => applyMotionPreset(id)}
                       >
-                        {label}
+                        <Icon size={16} strokeWidth={1.8} aria-hidden />
                       </button>
                     ))}
                   </div>
@@ -3943,7 +4892,7 @@ export default function App() {
               </div>
             </SettingsSection>
 
-            <SettingsSection id="camera" title="Camera" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection}>
+            <SettingsSection id="camera" title="Camera" hint="Control the camera view and lens" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection}>
               <div className="field-caption">Angle</div>
               <div className="camera-preset-grid">
                 {(['front', 'left', 'right', 'top'] as CameraView[]).map((view) => (
@@ -3978,7 +4927,7 @@ export default function App() {
           </div>
           <div className="inspector-footer inspector-export-panel">
             <div className="figma-export-head">
-              <span>Export</span>
+              <span className="figma-export-title"><Download size={15} strokeWidth={1.8} /> Export</span>
               <button
                 type="button"
                 className="figma-export-add"
@@ -4082,7 +5031,8 @@ export default function App() {
               disabled={exporting || exportNeedsAnimation || exportEntries.length === 0}
               onClick={() => setExportOpen(true)}
             >
-              {exportActionLabel}
+              <Download size={15} strokeWidth={2} />
+              {exporting ? exportActionLabel : 'Export composition'}
             </button>
           </div>
         </aside>
@@ -4211,7 +5161,8 @@ export default function App() {
             {EXPORT_ASPECT_GROUPS.map((group) => {
               const items = EXPORT_ASPECTS.filter((item) => item.group === group.id);
               if (items.length === 0) return null;
-              const groupSelected = items.filter((item) => exportAspectIds.includes(item.id)).length;
+              const groupSelected = items.filter((item) => exportAspectIds.includes(item.id)).length
+                + (group.id === 'other' ? savedSizes.filter((item) => exportAspectIds.includes(item.id)).length : 0);
               return (
                 <div key={group.id} className="export-aspect-group">
                   <div className="modal-field-label">
@@ -4241,6 +5192,35 @@ export default function App() {
                         </button>
                       );
                     })}
+                    {group.id === 'other' && savedSizes.map((item) => {
+                      const selected = exportAspectIds.includes(item.id);
+                      return (
+                        <div key={item.id} className="export-aspect-wrap">
+                          <button
+                            type="button"
+                            className={`export-aspect ${selected ? 'selected' : ''}`}
+                            disabled={exporting}
+                            title={`${item.width} × ${item.height}`}
+                            onClick={() => toggleExportAspect(item.id)}
+                          >
+                            <div className="export-ratio" style={exportRatioThumbStyle(item.width / Math.max(1, item.height))} />
+                            <strong>{item.label}</strong>
+                            <span>{item.width}×{item.height}</span>
+                            {selected && <span className="export-aspect-check" aria-hidden><Check size={11} strokeWidth={3} /></span>}
+                          </button>
+                          <button
+                            type="button"
+                            className="export-aspect-remove"
+                            title={`Remove ${item.label}`}
+                            aria-label={`Remove ${item.label}`}
+                            disabled={exporting}
+                            onClick={() => onDeleteSize(item.id)}
+                          >
+                            <X size={11} />
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -4249,11 +5229,13 @@ export default function App() {
             <div className="modal-field-label">RESOLUTION <span>{resolveExportSize().label} px</span></div>
             <div className="export-resolution-row" role="group" aria-label="Output resolution">
               {availableResolutions.map((item) => {
-                const preview = resolveExportDimensions(
-                  primaryExportAspect,
-                  item.id,
-                  item.id === 'custom' ? customExportSize : undefined,
-                );
+                const preview = savedSizes.some((size) => size.id === primaryExportAspect) && item.id !== 'custom'
+                  ? resolveExportSize(primaryExportAspect)
+                  : resolveExportDimensions(
+                    (EXPORT_ASPECTS.some((aspect) => aspect.id === primaryExportAspect) ? primaryExportAspect : 'tiktok') as ExportAspectId,
+                    item.id,
+                    item.id === 'custom' ? customExportSize : undefined,
+                  );
                 const longEdge = Math.max(preview.width, preview.height);
                 const allowed = isResolutionAllowed(license.tier, longEdge);
                 return (
@@ -4325,6 +5307,26 @@ export default function App() {
                 <span className="export-custom-hint">{EXPORT_SIZE_LIMITS.min}–{EXPORT_SIZE_LIMITS.max} px</span>
               </div>
             )}
+            {(exportAspectIds.includes('custom') || exportResolution === 'custom' || savedSizes.some((item) => exportAspectIds.includes(item.id))) && (
+              <form
+                className="preset-save-row export-size-save"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  onSaveAssetSize(customExportSize.width, customExportSize.height);
+                }}
+              >
+                <input
+                  className="preset-name-input"
+                  value={sizeName}
+                  maxLength={40}
+                  placeholder="Name this size"
+                  aria-label="Name this size"
+                  disabled={exporting}
+                  onChange={(event) => setSizeName(event.target.value)}
+                />
+                <button type="submit" className="button" disabled={exporting}>Save size</button>
+              </form>
+            )}
 
             <div className="modal-field-label">
               CANVAS CROP
@@ -4388,9 +5390,9 @@ export default function App() {
               <div><MousePointer2 size={17} /><span>Drag on the preview to orbit the 3D phone. Scroll to zoom. Hold Space + drag to pan.</span></div>
               <div><ImagePlus size={17} /><span>Drop a screenshot onto the preview or select Assets → Import.</span></div>
               <div><MonitorSmartphone size={17} /><span>Plug in an iPhone or Android over USB and use Phone Mirror — it auto-detects the device. Snapshot freezes the live screen onto the mockup.</span></div>
-              <div><SlidersHorizontal size={17} /><span>Drag gizmo arrows to move the device, rings to rotate. Tune colour, lighting and backgrounds in Properties.</span></div>
+              <div><SlidersHorizontal size={17} /><span>Drag a device to move it. Gimbal rings rotate it; arrows move it on one axis. Tune colour, lighting and backgrounds in Properties.</span></div>
               <div><Gauge size={17} /><span>Space play/pause · long-press & drag to multi-select keys · set Ease on selection · Delete removes selected.</span></div>
-              <div><Command size={17} /><span>⌘S Save · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab (last tab → recent projects) · . hide panels.</span></div>
+              <div><Command size={17} /><span>⌘S Save · ⌘Z Undo last edit · ⌘D Duplicate device · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab (last tab → recent projects) · . hide panels.</span></div>
             </div>
             <div className="help-modal-actions">
               <button
@@ -4416,6 +5418,8 @@ export default function App() {
         onNotify={notify}
         appVersion="0.1.0"
       />
+      <TemplateThumbHost />
+      <DeviceModelThumbHost />
       {templatePickerOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setTemplatePickerOpen(false); }}>
           <div className="export-modal template-modal" role="dialog" aria-modal="true" aria-labelledby="template-title">
@@ -4424,7 +5428,7 @@ export default function App() {
               <button className="modal-close" aria-label="Close templates" onClick={() => setTemplatePickerOpen(false)}><X size={19} /></button>
             </div>
             <h2 id="template-title">Start a new project</h2>
-            <p>Choose a device layout or a pre-built scene with props like clay shapes and concrete walls. Opens in a new tab.</p>
+            <p>Each template is a studio angle with its motion already on the timeline. Looping shots start playing. Opens in a new tab.</p>
             <div className="template-category-tabs" role="tablist" aria-label="Template type">
               <button
                 type="button"
@@ -4444,26 +5448,54 @@ export default function App() {
               >
                 <Sparkles size={14} /> Pre-compositions
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={templateCategory === 'saved'}
+                className={templateCategory === 'saved' ? 'active' : ''}
+                onClick={() => setTemplateCategory('saved')}
+              >
+                <Save size={14} /> Yours
+              </button>
             </div>
             <div className="modal-field-label">
-              {templateCategory === 'devices' ? 'DEVICE LAYOUTS' : 'SCENE COMPOSITIONS'}
-              <span>{workspace.tabs.length}/{MAX_PROJECT_TABS} tabs</span>
+              {templateCategory === 'devices'
+                ? 'DEVICE LAYOUTS'
+                : templateCategory === 'scenes'
+                  ? 'SCENE COMPOSITIONS'
+                  : 'SAVED COMPOSITIONS'}
+              <span>{templateCategory === 'saved' ? savedCompositions.length : `${workspace.tabs.length}/${MAX_PROJECT_TABS} tabs`}</span>
             </div>
+            {templateCategory === 'saved' && savedCompositions.length === 0 && (
+              <p className="field-caption">Save the current shot from Transform → Composition. Devices, angles, lighting, and motion come back with it.</p>
+            )}
             <div className="template-grid">
-              {templatesByCategory(templateCategory).map((template) => (
-                <button
-                  key={template.id}
-                  type="button"
-                  className="template-card"
-                  onClick={() => startFromTemplate(template)}
-                >
-                  <TemplatePreview layout={template.preview} />
-                  <div className="template-card-body">
-                    <strong>{template.label}</strong>
-                    <span>{template.description}</span>
-                    <em>{template.badge}</em>
-                  </div>
-                </button>
+              {(templateCategory === 'saved' ? savedCompositions : templatesByCategory(templateCategory)).map((template) => (
+                <div key={template.id} className="template-card-wrap">
+                  <button
+                    type="button"
+                    className="template-card"
+                    onClick={() => startFromTemplate(template)}
+                  >
+                    <TemplateThumb template={template} />
+                    <div className="template-card-body">
+                      <strong>{template.label}</strong>
+                      <span>{template.description}</span>
+                      <em>{template.badge}</em>
+                    </div>
+                  </button>
+                  {templateCategory === 'saved' && (
+                    <button
+                      type="button"
+                      className="template-card-remove"
+                      title={`Remove ${template.label}`}
+                      aria-label={`Remove ${template.label}`}
+                      onClick={() => onDeleteComposition(template.id)}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
             <div className="export-modal-actions">

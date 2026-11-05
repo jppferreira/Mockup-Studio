@@ -108,10 +108,17 @@ export async function readImageFromPasteEvent(event: ClipboardEvent): Promise<{ 
   return null;
 }
 
-/** Async clipboard read (button / when paste event has no image payload). */
+/** Async clipboard read. The Mac app reads the system pasteboard directly. */
 export async function readImageFromClipboard(): Promise<{ dataUrl: string; name: string }> {
+  const desktop = window.mockupDesktop?.readClipboardImage;
+  if (desktop) {
+    const result = await desktop();
+    if (result.ok && result.dataUrl) {
+      return { dataUrl: result.dataUrl, name: result.name || 'pasted.png' };
+    }
+  }
   if (!navigator.clipboard?.read) {
-    throw new Error('Paste with ⌘V — copy a frame in Figma first (Copy as PNG).');
+    throw new Error('Copy an image first, then paste it onto the device.');
   }
   const items = await navigator.clipboard.read();
   for (const item of items) {
@@ -125,9 +132,9 @@ export async function readImageFromClipboard(): Promise<{ dataUrl: string; name:
         : type.includes('svg')
           ? 'svg'
           : 'png';
-    return fileOrBlobToScreenDataUrl(blob, `figma-paste.${ext}`);
+    return fileOrBlobToScreenDataUrl(blob, `pasted.${ext}`);
   }
-  throw new Error('No image on the clipboard. In Figma: select a frame → Copy as PNG, then paste here.');
+  throw new Error('No image on the clipboard. Copy an image, then paste it onto the device.');
 }
 
 export function coverDraw(

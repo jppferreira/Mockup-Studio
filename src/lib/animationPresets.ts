@@ -19,18 +19,19 @@ function track(device: DeviceInstance, property: AnimProperty, values: Array<[nu
   );
 }
 
-/** Classic product turntable — gentle Y swing with a little X lift (Rotato-style). */
+/** Classic product turntable. Frame 0 is the composed angle, then it swings and returns. */
 const turntable: AnimationPreset = {
   id: 'turntable',
   label: 'Turntable',
   description: 'Soft left–right product spin',
-  duration: 4,
+  duration: 5,
   loop: true,
   build: (device) => {
-    const { x, y } = device.rotation;
+    const { x, y, z } = device.rotation;
     return [
-      track(device, 'rotation.y', [[0, y - 28], [2, y + 28], [4, y - 28]]),
-      track(device, 'rotation.x', [[0, x], [2, x - 4], [4, x]]),
+      track(device, 'rotation.y', [[0, y], [1.7, y + 26], [3.4, y - 22], [5, y]]),
+      track(device, 'rotation.x', [[0, x], [2.5, x - 6], [5, x]]),
+      track(device, 'rotation.z', [[0, z], [2.5, z + 1.5], [5, z]]),
     ];
   },
 };
@@ -63,9 +64,9 @@ const floatPreset: AnimationPreset = {
     const { x, y, z } = device.rotation;
     const { x: px, y: py } = device.position;
     return [
-      track(device, 'position.y', [[0, py], [1.75, py + 0.18], [3.5, py]]),
-      track(device, 'rotation.x', [[0, x - 2], [1.75, x + 5], [3.5, x - 2]]),
-      track(device, 'rotation.y', [[0, y - 6], [1.75, y + 6], [3.5, y - 6]]),
+      track(device, 'position.y', [[0, py], [1.75, py + 0.16], [3.5, py]]),
+      track(device, 'rotation.x', [[0, x], [1.75, x + 5], [3.5, x]]),
+      track(device, 'rotation.y', [[0, y], [1.75, y + 8], [3.5, y]]),
       track(device, 'rotation.z', [[0, z], [1.75, z + 2], [3.5, z]]),
       track(device, 'position.x', [[0, px], [3.5, px]]),
     ];
@@ -82,8 +83,8 @@ const tilt: AnimationPreset = {
   build: (device) => {
     const { x, y, z } = device.rotation;
     return [
-      track(device, 'rotation.x', [[0, x - 22], [1.5, x + 10], [3, x - 22]]),
-      track(device, 'rotation.y', [[0, y - 8], [1.5, y + 8], [3, y - 8]]),
+      track(device, 'rotation.x', [[0, x], [1.5, x - 16], [3, x]]),
+      track(device, 'rotation.y', [[0, y], [1.5, y + 10], [3, y]]),
       track(device, 'rotation.z', [[0, z], [3, z]]),
     ];
   },
@@ -99,8 +100,8 @@ const swing: AnimationPreset = {
   build: (device) => {
     const { x, y, z } = device.rotation;
     return [
-      track(device, 'rotation.z', [[0, z - 14], [1.5, z + 14], [3, z - 14]]),
-      track(device, 'rotation.y', [[0, y - 10], [1.5, y + 10], [3, y - 10]]),
+      track(device, 'rotation.z', [[0, z], [1.5, z + 14], [3, z]]),
+      track(device, 'rotation.y', [[0, y], [1.5, y + 10], [3, y]]),
       track(device, 'rotation.x', [[0, x], [3, x]]),
     ];
   },
@@ -116,9 +117,9 @@ const orbit: AnimationPreset = {
   build: (device) => {
     const { x, y, z } = device.rotation;
     return [
-      track(device, 'rotation.y', [[0, y - 36], [2.25, y + 36], [4.5, y - 36]]),
-      track(device, 'rotation.x', [[0, x - 14], [1.2, x + 2], [2.25, x + 10], [3.4, x - 4], [4.5, x - 14]]),
-      track(device, 'rotation.z', [[0, z + 6], [2.25, z - 6], [4.5, z + 6]]),
+      track(device, 'rotation.y', [[0, y], [2.25, y + 34], [4.5, y]]),
+      track(device, 'rotation.x', [[0, x], [1.2, x - 10], [2.25, x + 6], [3.4, x - 4], [4.5, x]]),
+      track(device, 'rotation.z', [[0, z], [2.25, z - 6], [4.5, z]]),
     ];
   },
 };
@@ -190,10 +191,10 @@ const fan: AnimationPreset = {
     const { x, y, z } = device.rotation;
     const { x: px, y: py } = device.position;
     return [
-      track(device, 'rotation.z', [[0, z - 22], [1.6, z + 22], [3.2, z - 22]]),
-      track(device, 'rotation.y', [[0, y - 28], [1.6, y + 28], [3.2, y - 28]]),
-      track(device, 'rotation.x', [[0, x - 6], [1.6, x + 4], [3.2, x - 6]]),
-      track(device, 'position.x', [[0, px - 0.22], [1.6, px + 0.22], [3.2, px - 0.22]]),
+      track(device, 'rotation.z', [[0, z], [1.6, z + 18], [3.2, z]]),
+      track(device, 'rotation.y', [[0, y], [1.6, y + 24], [3.2, y]]),
+      track(device, 'rotation.x', [[0, x], [1.6, x + 4], [3.2, x]]),
+      track(device, 'position.x', [[0, px], [1.6, px + 0.18], [3.2, px]]),
       track(device, 'position.y', [[0, py], [1.6, py + 0.06], [3.2, py]]),
     ];
   },
@@ -224,9 +225,9 @@ const closePan: AnimationPreset = {
         createKeyframe(0, cam.y + 0.18),
         createKeyframe(2.8, cam.y),
       ]),
-      track(device, 'rotation.y', [[0, y - 16], [1.8, y + 4], [2.8, y]]),
-      track(device, 'rotation.x', [[0, x - 8], [2.8, x]]),
-      track(device, 'rotation.z', [[0, z + 4], [2.8, z]]),
+      track(device, 'rotation.y', [[0, y], [1.8, y + 8], [2.8, y]]),
+      track(device, 'rotation.x', [[0, x], [1.4, x - 6], [2.8, x]]),
+      track(device, 'rotation.z', [[0, z], [2.8, z]]),
     ];
   },
 };
@@ -289,5 +290,29 @@ export function applyAnimationPreset(
     duration: preset.id === 'clear' ? clip.duration : preset.duration,
     loop: preset.id === 'clear' ? clip.loop : preset.loop,
     tracks: [...kept, ...built],
+  };
+}
+
+/** Keep an existing spin when the rest angle changes, so motion stays glued to the pose. */
+export function shiftDeviceRotation(
+  clip: AnimationClip,
+  deviceId: string,
+  delta: { x: number; y: number; z: number },
+): AnimationClip {
+  const byProperty: Partial<Record<AnimProperty, number>> = {
+    'rotation.x': delta.x,
+    'rotation.y': delta.y,
+    'rotation.z': delta.z,
+  };
+  return {
+    ...clip,
+    tracks: clip.tracks.map((item) => {
+      const amount = byProperty[item.property];
+      if (item.targetId !== deviceId || !amount) return item;
+      return {
+        ...item,
+        keyframes: item.keyframes.map((key) => ({ ...key, value: key.value + amount })),
+      };
+    }),
   };
 }

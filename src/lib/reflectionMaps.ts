@@ -1,4 +1,4 @@
-import type { BackgroundPreset, GradientColors, ReflectionMapId } from '../types';
+import { BUILTIN_GRADIENTS, type BackgroundPreset, type GradientColors, type ReflectionMapId } from '../types';
 
 export type { ReflectionMapId };
 
@@ -42,16 +42,100 @@ function paintLobes(ctx: CanvasRenderingContext2D, w: number, h: number, lobes: 
   }
 }
 
-function bgStops(
-  preset: Exclude<BackgroundPreset, 'transparent'> | string,
-  colors?: GradientColors | null,
-): string[] {
-  if (colors) return [colors.center, colors.mid, colors.edge];
-  if (preset === 'midnight') return ['#4a5564', '#1d232b', '#0d1016'];
-  if (preset === 'studio') return ['#ffffff', '#f2f2f0', '#d8d8d4'];
-  if (preset === 'mint') return ['#5a9a84', '#18463c', '#071916'];
-  if (preset === 'sunset') return ['#d18caa', '#5c456e', '#191428'];
-  return ['#ffffff', '#f2f2f0', '#d8d8d4'];
+type RGB = [number, number, number];
+
+/** Default camera looks down −Z, which samples equirectangular u = 0.25. */
+const STUDIO_FRONT_U = 0.25;
+
+function hexToRgb(hex: string): RGB {
+  const raw = hex.replace('#', '');
+  const n = raw.length === 3 ? raw.split('').map((c) => c + c).join('') : raw;
+  return [
+    Number.parseInt(n.slice(0, 2), 16) || 0,
+    Number.parseInt(n.slice(2, 4), 16) || 0,
+    Number.parseInt(n.slice(4, 6), 16) || 0,
+  ];
+}
+
+function mixRgb(a: RGB, b: RGB, t: number): RGB {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
+}
+
+function rgbCss(c: RGB, alpha = 1): string {
+  const r = Math.round(c[0]);
+  const g = Math.round(c[1]);
+  const b = Math.round(c[2]);
+  if (alpha >= 1) return `rgb(${r},${g},${b})`;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/**
+ * Soft equirectangular studio for reflections.
+ * Broad falloff and large diffused lights, so glass reads as silk rather than a hard box.
+ */
+export function createStudioEquirect(
+  colors: GradientColors,
+  options?: { width?: number; lights?: boolean },
+): HTMLCanvasElement {
+  const w = options?.width ?? 2048;
+  const h = Math.max(64, Math.round(w / 2));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not render studio environment');
+
+  const wall = hexToRgb(colors.center);
+  const cove = hexToRgb(colors.mid);
+  const floor = hexToRgb(colors.edge);
+  const ceiling = mixRgb(cove, floor, 0.22);
+  const zenith = mixRgb(ceiling, [0, 0, 0], 0.28);
+  const nadir = mixRgb(floor, [0, 0, 0], 0.4);
+  const lit = mixRgb(wall, [255, 255, 255], 0.28);
+
+  const sky = ctx.createLinearGradient(0, 0, 0, h);
+  sky.addColorStop(0, rgbCss(zenith));
+  sky.addColorStop(0.28, rgbCss(ceiling));
+  sky.addColorStop(0.42, rgbCss(mixRgb(cove, wall, 0.55)));
+  sky.addColorStop(0.5, rgbCss(wall));
+  sky.addColorStop(0.62, rgbCss(mixRgb(wall, floor, 0.4)));
+  sky.addColorStop(0.78, rgbCss(floor));
+  sky.addColorStop(1, rgbCss(nadir));
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, w, h);
+
+  const keyX = STUDIO_FRONT_U * w;
+  const key = ctx.createRadialGradient(keyX, h * 0.46, 0, keyX, h * 0.46, w * 0.28);
+  key.addColorStop(0, rgbCss(lit, 0.45));
+  key.addColorStop(0.55, rgbCss(wall, 0.12));
+  key.addColorStop(1, rgbCss(wall, 0));
+  ctx.fillStyle = key;
+  ctx.fillRect(0, 0, w, h);
+
+  if (options?.lights !== false) {
+    const boxes: Array<[number, number, number, RGB, number]> = [
+      [STUDIO_FRONT_U - 0.1, 0.22, 0.16, mixRgb(wall, [255, 252, 248], 0.72), 0.55],
+      [STUDIO_FRONT_U + 0.12, 0.2, 0.15, mixRgb(wall, [232, 240, 255], 0.65), 0.42],
+      [STUDIO_FRONT_U, 0.12, 0.1, [255, 255, 255], 0.28],
+    ];
+    for (const [u, yNorm, radius, color, alpha] of boxes) {
+      const x = u * w;
+      const y = yNorm * h;
+      const r = radius * w;
+      const glow = ctx.createRadialGradient(x, y, r * 0.2, x, y, r);
+      glow.addColorStop(0, rgbCss(color, alpha));
+      glow.addColorStop(0.5, rgbCss(color, alpha * 0.28));
+      glow.addColorStop(1, rgbCss(color, 0));
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, w, h);
+    }
+  }
+
+  return canvas;
 }
 
 /** Procedural equirectangular reflection map (canvas). */
@@ -89,28 +173,15 @@ export function createReflectionEquirect(
   const id = mapId === 'custom' ? 'studio' : mapId;
 
   if (id === 'match_background') {
-    const preset = options?.background && options.background !== 'transparent'
-      ? options.background
-      : 'studio';
-    fillSky(ctx, w, h, bgStops(preset, options?.colors));
-    paintLobes(ctx, w, h, [
-      [0.22, 0.18, 180, 'rgba(255,255,255,0.95)'],
-      [0.72, 0.22, 140, 'rgba(255,255,255,0.7)'],
-      [0.48, 0.55, 220, 'rgba(255,255,255,0.35)'],
-      [0.12, 0.62, 100, 'rgba(200,220,255,0.4)'],
-      [0.88, 0.48, 120, 'rgba(255,240,220,0.45)'],
-    ]);
-    return canvas;
+    const presetKey = options?.background && options.background in BUILTIN_GRADIENTS
+      ? options.background as keyof typeof BUILTIN_GRADIENTS
+      : 'midnight';
+    const colors = options?.colors ?? BUILTIN_GRADIENTS[presetKey];
+    return createStudioEquirect(colors, { width: w, lights: true });
   }
 
   if (id === 'studio') {
-    fillSky(ctx, w, h, ['#fafafa', '#e8e8e6', '#c8c8c4']);
-    paintLobes(ctx, w, h, [
-      [0.5, 0.12, 260, 'rgba(255,255,255,1)'],
-      [0.18, 0.4, 120, 'rgba(255,255,255,0.55)'],
-      [0.82, 0.4, 120, 'rgba(255,255,255,0.55)'],
-    ]);
-    return canvas;
+    return createStudioEquirect(BUILTIN_GRADIENTS.studio, { width: w, lights: true });
   }
 
   if (id === 'softbox') {

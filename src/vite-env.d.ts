@@ -1,5 +1,8 @@
 /// <reference types="vite/client" />
 
+import type { CloudLibraryStatus, CloudListRow } from './lib/cloudLibrary';
+
+declare global {
 declare const __APP_VERSION__: string;
 
 interface ImportMetaEnv {
@@ -20,7 +23,20 @@ interface ImportMeta {
 interface Window {
   mockupDesktop?: {
     saveProject: (contents: string, proposedName: string) => Promise<{ canceled: boolean; path?: string }>;
-    openProject: () => Promise<{ canceled: boolean; contents?: string }>;
+    openProject: () => Promise<{ canceled: boolean; contents?: string; path?: string }>;
+    cloudStatus: () => Promise<CloudLibraryStatus>;
+    cloudUse: (provider: 'icloud' | 'google-drive') => Promise<{ canceled: boolean; status: CloudLibraryStatus }>;
+    cloudPick: () => Promise<{ canceled: boolean; status: CloudLibraryStatus }>;
+    cloudClear: () => Promise<CloudLibraryStatus>;
+    cloudList: () => Promise<CloudListRow[]>;
+    cloudRead: (filePath: string) => Promise<{ path: string; contents: string; updatedAt: number }>;
+    cloudWrite: (payload: { filePath?: string | null; contents: string; name: string }) => Promise<{
+      path: string;
+      updatedAt: number;
+      unchanged: boolean;
+    }>;
+    cloudRemove: (filePath: string) => Promise<{ ok: boolean }>;
+    onCloudChanged: (handler: () => void) => () => void;
     saveImage: (dataUrl: string, proposedName: string) => Promise<{ canceled: boolean; path?: string }>;
     saveMedia: (
       dataBase64: string,
@@ -29,6 +45,7 @@ interface Window {
       mimeType: string,
     ) => Promise<{ canceled: boolean; path?: string }>;
     openExternal: (url: string) => Promise<{ ok: boolean }>;
+    readClipboardImage?: () => Promise<{ ok: boolean; dataUrl?: string; name?: string }>;
     ensureCameraAccess?: () => Promise<{ granted: boolean; status?: string; reason?: string }>;
     figmaRequest?: (apiPath: string, token: string) => Promise<{ status: number; body: string }>;
     figmaFetchImage?: (
@@ -80,3 +97,6 @@ interface Window {
     onAndroidMirrorError?: (handler: (payload: { serial: string; message: string }) => void) => () => void;
   };
 }
+}
+
+export {};
