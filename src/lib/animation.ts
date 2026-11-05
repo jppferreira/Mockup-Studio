@@ -16,12 +16,12 @@ export function isCameraProperty(property: AnimProperty) {
 }
 
 export function defaultCameraPosition(view: CameraView, split: boolean): Vec3 {
-  const z = split ? 7.4 : 5.7;
+  const dist = split ? 7.4 : 5.7;
   const positions: Record<CameraView, Vec3> = {
-    front: { x: 0, y: 0, z },
-    left: { x: split ? -3.4 : -2.7, y: 0.1, z: split ? 6.6 : 5.1 },
-    right: { x: split ? 3.4 : 2.7, y: 0.1, z: split ? 6.6 : 5.1 },
-    top: { x: 0, y: split ? 2.6 : 2.2, z: split ? 6.8 : 5.4 },
+    front: { x: 0, y: 0, z: dist },
+    left: { x: -dist, y: 0, z: 0 },
+    right: { x: dist, y: 0, z: 0 },
+    top: { x: 0, y: dist, z: 0.001 },
   };
   return { ...positions[view] };
 }

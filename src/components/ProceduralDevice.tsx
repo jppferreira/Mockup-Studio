@@ -98,11 +98,11 @@ function TitaniumMaterial({ color, clayMode }: { color: string; clayMode?: boole
   return (
     <meshPhysicalMaterial
       color={color}
-      metalness={0.92}
-      roughness={0.28}
+      metalness={0.72}
+      roughness={0.32}
       clearcoat={0.55}
       clearcoatRoughness={0.2}
-      envMapIntensity={1.1}
+      envMapIntensity={1.55}
       reflectivity={1}
     />
   );
@@ -116,7 +116,7 @@ function GlassBezel() {
       roughness={0.18}
       clearcoat={1}
       clearcoatRoughness={0.05}
-      envMapIntensity={0.35}
+      envMapIntensity={0.7}
     />
   );
 }

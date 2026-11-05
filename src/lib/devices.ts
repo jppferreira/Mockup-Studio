@@ -1,14 +1,38 @@
+import type { DeviceLidConfig } from './deviceLid';
+
+export type { DeviceLidConfig };
+
 export type BuiltinDeviceId =
   | 'iphone_15_pro_max'
   | 'iphone_16_pro_max'
   | 'iphone_17_pro'
   | 'iphone_17_pro_max'
   | 'iphone_duo'
+  | 'iphone_13_pro_max'
   | 'pixel_9'
   | 'pixel_9_pro'
   | 'pixel_9_pro_xl'
   | 'pixel_10_pro'
-  | 'galaxy_s25_ultra';
+  | 'galaxy_s21_ultra'
+  | 'ipad_mini_6'
+  | 'macbook_pro_13_2020'
+  | 'apple_watch_series_7'
+  | 'chronograph_watch'
+  | 'rolex_watch'
+  | 'airpods_pro'
+  | 'sony_mdr_7506'
+  | 'skullcandy_crusher'
+  | 'jbl_tour_one_m3'
+  | 'macbook_pro_m3_16'
+  | 'macbook_pro_m3_space_black'
+  | 'macbook_pro_16_2021'
+  | 'macbook_pro_touchbar'
+  | 'macbook_air_13_2023'
+  | 'iphone_18_pro_max'
+  | 'iphone_18_pro'
+  | 'galaxy_s26_ultra'
+  | 'apple_vision_pro'
+  | 'apple_watch_ultra_2';
 
 /** Built-in id, or a user-imported custom model id (`custom-…`). */
 export type DeviceId = BuiltinDeviceId | (string & {});
@@ -16,6 +40,47 @@ export type DeviceId = BuiltinDeviceId | (string & {});
 export type DevicePlatform = 'ios' | 'android';
 export type DeviceKind = 'gltf' | 'procedural';
 export type ProceduralStyle = 'duo';
+
+/** Picker filter groups for the Device inspector. */
+export type DeviceCategoryId =
+  | 'phones'
+  | 'tablets'
+  | 'laptops'
+  | 'watches'
+  | 'headphones'
+  | 'spatial';
+
+export type DeviceCategoryFilter = 'all' | DeviceCategoryId;
+
+export const DEVICE_CATEGORY_TABS: ReadonlyArray<{ id: DeviceCategoryFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'phones', label: 'Phones' },
+  { id: 'tablets', label: 'Tablets' },
+  { id: 'laptops', label: 'Laptops' },
+  { id: 'watches', label: 'Watches' },
+  { id: 'headphones', label: 'Headphones' },
+  { id: 'spatial', label: 'Spatial' },
+];
+
+/** Lucide icon name key used by the Device panel category tabs. */
+export type DeviceCategoryIconKey =
+  | 'layout-grid'
+  | 'smartphone'
+  | 'tablet'
+  | 'laptop'
+  | 'watch'
+  | 'headphones'
+  | 'glasses';
+
+export const DEVICE_CATEGORY_ICON: Record<DeviceCategoryFilter, DeviceCategoryIconKey> = {
+  all: 'layout-grid',
+  phones: 'smartphone',
+  tablets: 'tablet',
+  laptops: 'laptop',
+  watches: 'watch',
+  headphones: 'headphones',
+  spatial: 'glasses',
+};
 
 export interface DeviceUv {
   rot?: number;
@@ -39,6 +104,8 @@ export interface DeviceModel {
   subtitle: string;
   platform: DevicePlatform;
   kind: DeviceKind;
+  /** Picker category; inferred from id when omitted. */
+  category?: DeviceCategoryId;
   /** GLB path or blob URL for gltf devices */
   url?: string;
   /** Procedural body style */
@@ -55,6 +122,27 @@ export interface DeviceModel {
   tweaks?: Record<string, Record<string, number | boolean | string>>;
   /** Extra material names treated as glass for reflection control */
   glassMats?: string[];
+  /** Optional laptop lid open/close rig */
+  lid?: DeviceLidConfig;
+}
+
+export function categoryOfDevice(device: Pick<DeviceModel, 'id' | 'category'>): DeviceCategoryId {
+  if (device.category) return device.category;
+  const id = String(device.id);
+  if (/ipad|tablet|\btab_/.test(id)) return 'tablets';
+  if (/macbook|laptop/.test(id)) return 'laptops';
+  if (/watch|chronograph|rolex/.test(id)) return 'watches';
+  if (/airpods|mdr_|skullcandy|jbl_|headphone/.test(id)) return 'headphones';
+  if (/vision_pro|spatial/.test(id)) return 'spatial';
+  return 'phones';
+}
+
+export function filterDevicesByCategory(
+  devices: DeviceModel[],
+  filter: DeviceCategoryFilter,
+): DeviceModel[] {
+  if (filter === 'all') return devices;
+  return devices.filter((device) => categoryOfDevice(device) === filter);
 }
 
 export function screenSizeLabel(size: ScreenSize) {
@@ -86,9 +174,9 @@ export const DEVICE_MODELS: DeviceModel[] = [
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_16_pro_max.glb',
-    screenMat: 'Screen',
+    screenMat: 'screen.001',
     screenSize: { width: 1320, height: 2868 },
-    rot: [0, Math.PI, 0],
+    rot: [0, Math.PI / 2, Math.PI],
     uv: { mirrorX: true },
     glassMats: ['glass.002', 'lensinglass'],
   },
@@ -101,8 +189,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/iphone_17_pro.glb',
     screenMat: 'OLED',
     screenSize: { width: 1206, height: 2622 },
-    rot: [0, Math.PI, 0],
-    uv: { mirrorX: true },
+    rot: [0, 0, 0],
+    uv: { },
     glassMats: ['Glass', 'Glass_tint', 'Frosted_glass', 'Camera_sapphire_miror', 'Camera_Lens'],
     tweaks: {
       Glass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.03, transparent: true },
@@ -125,7 +213,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/iphone_17_pro_max.glb',
     screenMat: 'screen.001',
     screenSize: { width: 1320, height: 2868 },
-    rot: [0, Math.PI / 2, 0],
+    rot: [0, Math.PI / 2, Math.PI],
     uv: {
       repeat: [-1.028278, -1],
       offset: [0.020257, 1.0019],
@@ -143,30 +231,15 @@ export const DEVICE_MODELS: DeviceModel[] = [
   {
     id: 'iphone_duo',
     label: 'iPhone Duo',
-    subtitle: 'iOS · Star White foldable',
+    subtitle: 'iOS · Procedural foldable',
     platform: 'ios',
-    kind: 'gltf',
-    url: './models/iphone_duo.glb',
-    screenMat: 'C_StarWhite_Screen_Inner',
+    kind: 'procedural',
+    procedural: 'duo',
+    finish: '#c8ccd1',
+    screenMat: 'ProceduralScreen',
     screenSize: { width: 2064, height: 2752 },
     rot: [0, 0, 0],
     uv: {},
-    glassMats: [
-      'BASE_Glass', 'BASE_Glass_Black', 'BASE_Cam_Lens_Outer',
-      'C_SW_CamGloss', 'BASE_Cam_Lens01', 'BASE_Cam_Lens02', 'BASE_Cam_Lens_Front',
-    ],
-    tweaks: {
-      BASE_Glass: {
-        roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.03, transparent: true,
-      },
-      BASE_Glass_Black: {
-        roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.04, transparent: true,
-      },
-      C_SW_Screen_Outer: {
-        color: 0x000000, emissive: 0xffffff, emissiveIntensity: 1,
-        metalness: 0, roughness: 1, envMapIntensity: 0, toneMapped: false,
-      },
-    },
   },
   {
     id: 'pixel_9',
@@ -177,9 +250,9 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/pixel_9.glb',
     screenMat: 'Screen',
     screenSize: { width: 1080, height: 2424 },
-    rot: [0, Math.PI, 0],
+    rot: [Math.PI / 2, Math.PI / 2, Math.PI / 2],
     uv: { mirrorX: true },
-    glassMats: ['Glass', 'LEDGlass'],
+    glassMats: ['Glass', 'LEDGlass', 'Lens'],
     tweaks: {
       Glass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.04, transparent: true },
       BodyTexture: { metalness: 0.35, roughness: 0.42, envMapIntensity: 0.7 },
@@ -194,8 +267,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/pixel_9_pro.glb',
     screenMat: 'Screen',
     screenSize: { width: 1280, height: 2856 },
-    rot: [0, 0, 0],
-    uv: {},
+    rot: [0, Math.PI, 0],
+    uv: { mirrorX: true },
     glassMats: ['CamGlass', 'Lens'],
     tweaks: {
       CamGlass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.05, transparent: true },
@@ -217,9 +290,9 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/pixel_9_pro_xl.glb',
     screenMat: 'Material.002',
     screenSize: { width: 1344, height: 2992 },
-    rot: [0, Math.PI, 0],
-    uv: { mirrorX: true },
-    glassMats: ['Material.011', 'Material.021', 'Material.018'],
+    rot: [0, 0, 0],
+    uv: { },
+    glassMats: ['Material.011', 'Material.021', 'Material.018', 'Lens'],
     tweaks: {
       'Material.011': { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.04, transparent: true },
       'Material.021': { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.04, transparent: true },
@@ -237,8 +310,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/pixel_10_pro.glb',
     screenMat: 'Screen',
     screenSize: { width: 1280, height: 2856 },
-    rot: [0, 0, 0],
-    uv: {},
+    rot: [0, Math.PI, 0],
+    uv: { mirrorX: true },
     glassMats: ['CamGlass', 'Lens'],
     tweaks: {
       CamGlass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.05, transparent: true },
@@ -252,34 +325,295 @@ export const DEVICE_MODELS: DeviceModel[] = [
     },
   },
   {
-    id: 'galaxy_s25_ultra',
-    label: 'Galaxy S25 Ultra',
-    subtitle: 'Android · Titanium Black',
+    id: 'iphone_13_pro_max',
+    label: 'iPhone 13 Pro Max',
+    subtitle: 'iOS · SceneView / DatSketch',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/iphone_13_pro_max.glb',
+    screenMat: 'Wallpaper',
+    screenSize: { width: 1284, height: 2778 },
+    rot: [0, 0, 0],
+    uv: { },
+    glassMats: ['Glass', 'Screen_Glass', 'Camera_Glass', 'Gray_Glass', 'Black_Glass', 'Lens'],
+  },
+  {
+    id: 'galaxy_s21_ultra',
+    label: 'Galaxy S21 Ultra',
+    subtitle: 'Android · SceneView / DatSketch',
     platform: 'android',
     kind: 'gltf',
-    url: './models/galaxy_s25_ultra.glb',
+    url: './models/galaxy_s21_ultra.glb',
     screenMat: 'Screen',
-    screenSize: { width: 1440, height: 3120 },
+    screenSize: { width: 1440, height: 3200 },
     rot: [0, 0, 0],
     uv: {},
-    glassMats: ['Screen glass', 'Back glass', 'Back glass flash', 'Camera glass', 'Camera lens'],
+    glassMats: ['Glass', 'Lens', 'Lens.001'],
+  },
+  {
+    id: 'ipad_mini_6',
+    label: 'iPad mini 6',
+    subtitle: 'iPadOS · SceneView / DatSketch',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/ipad_mini_6.glb',
+    screenMat: 'Screen',
+    screenSize: { width: 1488, height: 2266 },
+    rot: [0, Math.PI, 0],
+    uv: { mirrorX: true },
+    glassMats: ['CamGlass', 'Lens'],
+  },
+  {
+    id: 'macbook_pro_13_2020',
+    label: 'MacBook Pro 13″ (2020)',
+    subtitle: 'macOS · Timblewee / SceneView',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/macbook_pro_13_2020.glb',
+    screenMat: 'Material.002',
+    screenSize: { width: 2560, height: 1600 },
+    rot: [Math.PI / 2, 0, Math.PI],
+    uv: {},
+    glassMats: ['Glass', 'Black_Glass'],
+    // Timblewee Bevels_2 lid — authored closed; ~110° open (matches embedded Animation mid-pose)
+    lid: { mode: 'node', nodes: ['Bevels_2'], openAngle: -Math.PI * (110 / 180) },
+  },
+  {
+    id: 'apple_watch_series_7',
+    label: 'Apple Watch Series 7',
+    subtitle: 'watchOS · SceneView',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/apple_watch_series_7.glb',
+    screenMat: 'Material.001',
+    screenSize: { width: 396, height: 484 },
+    rot: [0, 0, 0],
+    uv: {},
+    glassMats: ['Glass_Clear2', 'Black_Glossy', 'Black_Glossy2', 'Black_Glossy_TEXT'],
+  },
+  {
+    id: 'chronograph_watch',
+    label: 'Chronograph Watch',
+    subtitle: 'Accessory · Khronos sample',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/chronograph_watch.glb',
+    screenMat: 'Watch Face',
+    screenSize: { width: 512, height: 512 },
+    rot: [Math.PI / 2, 0, 0],
+    uv: {},
+    glassMats: ['Glass Face'],
+  },
+  {
+    id: 'rolex_watch',
+    label: 'Rolex Watch',
+    subtitle: 'Accessory · CC BY',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/rolex_watch.glb',
+    screenMat: 'Empty',
+    screenSize: { width: 512, height: 512 },
+    rot: [0, 0, -Math.PI / 2],
+    uv: {},
+  },
+  {
+    id: 'airpods_pro',
+    label: 'AirPods Pro',
+    subtitle: 'Audio · SceneView',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/airpods_pro.glb',
+    screenMat: 'cEVcwrpGKjNUrED',
+    screenSize: { width: 1024, height: 1024 },
+    rot: [0, Math.PI / 2, -Math.PI / 2],
+    uv: {},
+    glassMats: ['czaVLhHNccVShhr', 'OXPzgZBrHvcYhRk'],
+  },
+  {
+    id: 'sony_mdr_7506',
+    label: 'Sony MDR-7506',
+    subtitle: 'Audio · CC BY',
+    platform: 'android',
+    kind: 'gltf',
+    url: './models/sony_mdr_7506.glb',
+    screenMat: 'pasted__headphones1',
+    screenSize: { width: 1024, height: 1024 },
+    // Authored upright: tall Y, thin Z (front silhouette)
+    rot: [0, 0, 0],
+    uv: {},
+  },
+  {
+    id: 'skullcandy_crusher',
+    label: 'Skullcandy Crusher',
+    subtitle: 'Audio · CC BY',
+    platform: 'android',
+    kind: 'gltf',
+    url: './models/skullcandy_crusher.glb',
+    screenMat: 'M_Skullcandy_Crusher',
+    screenSize: { width: 1024, height: 1024 },
+    rot: [0, 0, 0],
+    uv: {},
+  },
+  {
+    id: 'jbl_tour_one_m3',
+    label: 'JBL Tour One M3',
+    subtitle: 'Audio · CC BY',
+    platform: 'android',
+    kind: 'gltf',
+    url: './models/jbl_tour_one_m3.glb',
+    screenMat: 'Black',
+    screenSize: { width: 1024, height: 1024 },
+    rot: [0, 0, 0],
+    uv: {},
+    glassMats: ['Button_Glossy', 'Ring', 'Icons', 'JBL_Logo_Outer'],
+  },
+  {
+    id: 'macbook_pro_m3_16',
+    label: 'MacBook Pro M3 16″',
+    subtitle: 'macOS · jackbaeten',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/macbook_pro_m3_16.glb',
+    screenMat: 'LtEafgAVRolQqRw',
+    screenSize: { width: 3456, height: 2234 },
+    // Base down, screen toward +Z
+    rot: [Math.PI / 2, 0, Math.PI],
+    uv: {},
+    glassMats: ['jwuTsnFxKtBUxpK', 'sIfSZcqgDlKMJPf'],
+    // Lid hinge disabled until explicit lid node names are known — autoAbove
+    // reparenting was creating a cyclic scene graph and blanking the UI.
+  },
+  {
+    id: 'macbook_pro_m3_space_black',
+    label: 'MacBook Pro M3 Space Black',
+    subtitle: 'macOS · EV_car2013',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/macbook_pro_m3_space_black.glb',
+    screenMat: 'RMKjvllDyhhTZCT',
+    screenSize: { width: 3456, height: 2234 },
+    rot: [Math.PI / 2, 0, 0],
+    uv: {},
+    glassMats: ['fkwfGoiyRwUtiJt', 'DTtyFpSjtoSKNpU'],
+    lid: { mode: 'hinge', nodes: ['ctmNimOYaZdxEUt'], closeAngle: 1.6, hingeZ: 'max' },
+  },
+  {
+    id: 'macbook_pro_16_2021',
+    label: 'MacBook Pro 16″ (2021)',
+    subtitle: 'macOS · jasperchui2007',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/macbook_pro_16_2021.glb',
+    screenMat: 'Material.002',
+    screenSize: { width: 3456, height: 2234 },
+    rot: [Math.PI / 2, 0, 0],
+    uv: {},
+    glassMats: ['Material.005', 'Material.007', 'Material.017'],
+    // Jasper — Cube016_2 stores ~-110° open angle in the GLB
+    lid: { mode: 'node', nodes: ['Cube016_2'] },
+  },
+  {
+    id: 'macbook_pro_touchbar',
+    label: 'MacBook Pro (Touch Bar)',
+    subtitle: 'macOS · jasperchui2007',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/macbook_pro_touchbar.glb',
+    screenMat: 'Material.004',
+    screenSize: { width: 2880, height: 1800 },
+    rot: [Math.PI / 2, 0, 0],
+    uv: {},
+    glassMats: ['Material.005', 'Material.002', 'Material.007', 'Material.009'],
+    lid: { mode: 'node', nodes: ['Cube012_1'] },
+  },
+  {
+    id: 'macbook_air_13_2023',
+    label: 'MacBook Air 13″ (2023)',
+    subtitle: 'macOS · akshatmittal',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/macbook_air_13_2023.glb',
+    screenMat: 'WgepFXghdzLuexM',
+    screenSize: { width: 2560, height: 1664 },
+    // Base down, screen toward +Z
+    rot: [0, Math.PI, Math.PI],
+    uv: { mirrorX: true },
+    glassMats: ['bcpnEXkmszsmZdS', 'lYneAwFQipafcnj', 'vuMpgMlHdXrAecr'],
+    lid: { mode: 'hinge', nodes: ['oFmtZsVimojULVl'], closeAngle: 1.55, hingeZ: 'max' },
+  },
+  {
+    id: 'iphone_18_pro_max',
+    label: 'iPhone 18 Pro Max',
+    subtitle: 'iOS · Adreamyouvehadbefore',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/iphone_18_pro_max.glb',
+    screenMat: 'Display',
+    screenSize: { width: 1320, height: 2868 },
+    rot: [Math.PI / 2, 0, 0],
+    uv: { mirrorX: true },
+    glassMats: [
+      'Black_Glass', 'Back_Glass_Burgundy', 'LiDAR_Glass', 'Sapphire',
+      'Front_Element', 'Antenna_Window', 'Front_Camera_photo', 'Rear_Element_photo',
+    ],
+  },
+  {
+    id: 'iphone_18_pro',
+    label: 'iPhone 18 Pro',
+    subtitle: 'iOS · DUOPlyer',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/iphone_18_pro.glb',
+    // Material.013 is camera housing — display panels use Material.020 (+ color variants)
+    screenMat: 'Material.020',
+    screenSize: { width: 1206, height: 2622 },
+    rot: [Math.PI / 2, Math.PI, Math.PI / 2],
+    uv: { mirrorX: true },
+    // No dedicated glass sheets — lens / flash discs get glossy treatment
+    glassMats: ['Material.021', 'Material.012', 'Material.014', 'Material.022'],
+  },
+  {
+    id: 'galaxy_s26_ultra',
+    label: 'Galaxy S26 Ultra',
+    subtitle: 'Android · AbrasiveFowl4870',
+    platform: 'android',
+    kind: 'gltf',
+    url: './models/galaxy_s26_ultra.glb',
+    screenMat: 'material',
+    screenSize: { width: 1440, height: 3120 },
+    rot: [0, Math.PI, 0],
+    uv: { mirrorX: true },
+    glassMats: ['CPP_Glasses', 'EyeTransparent'],
     tweaks: {
-      'Screen glass': {
-        roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.03, transparent: true,
-      },
-      Body: { color: 0x8a8a8d, metalness: 1, roughness: 1, envMapIntensity: 0.85 },
-      'Body .001': { color: 0x848487, metalness: 1, roughness: 1, envMapIntensity: 0.85 },
-      'Body .002': { color: 0x7d7d81, metalness: 1, roughness: 1, envMapIntensity: 0.8 },
-      Button: { color: 0x888a8c, metalness: 0.9, roughness: 0.4, envMapIntensity: 0.8 },
-      'Back glass': { color: 0x2b2927, metalness: 0, roughness: 0.9, envMapIntensity: 0.15 },
-      Camera: {
-        color: 0x000000, emissive: 0x000000, emissiveIntensity: 1,
-        metalness: 0, roughness: 1, envMapIntensity: 0, toneMapped: false,
-      },
-      'Camera glass': {
-        color: 0x000000, metalness: 0, roughness: 1, envMapIntensity: 0, transparent: true, opacity: 0.04,
-      },
+      CPP_Glasses: { roughness: 0.08, metalness: 0, envMapIntensity: 1.4, opacity: 0.28, transparent: true },
+      EyeTransparent: { roughness: 0.04, metalness: 0, envMapIntensity: 1.6, opacity: 0.12, transparent: true },
     },
+  },
+  {
+    id: 'apple_vision_pro',
+    label: 'Apple Vision Pro',
+    subtitle: 'visionOS · DextonOfficial',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/apple_vision_pro.glb',
+    screenMat: 'FAJMtZQLswdvuhO',
+    screenSize: { width: 3660, height: 3200 },
+    rot: [0, Math.PI, Math.PI / 2],
+    uv: {},
+    glassMats: ['NLAQCwOxsrAPIlV', 'LlnrRvRtBSKKJtZ', 'FOugkDgsmvxAjLB', 'nctcFIvFhZfKDLQ'],
+  },
+  {
+    id: 'apple_watch_ultra_2',
+    label: 'Apple Watch Ultra 2',
+    subtitle: 'watchOS · Polyman_3D',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/apple_watch_ultra_2.glb',
+    screenMat: 'edYkGGAdRWeopLP',
+    screenSize: { width: 410, height: 502 },
+    rot: [Math.PI, Math.PI, 0],
+    uv: {},
+    glassMats: ['VJcIxaYCeMHzzAJ', 'EbFYvXZFEOELnji', 'IsuszdatyklnjoT', 'JlRKetQcktLwJwa'],
   },
 ];
 

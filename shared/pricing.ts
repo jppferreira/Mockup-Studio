@@ -45,7 +45,7 @@ export const PLAN_PRICES_GBP = {
 
 export const FREE_DEVICE_IDS = [
   'iphone_15_pro_max',
-  'galaxy_s25_ultra',
+  'galaxy_s26_ultra',
 ] as const;
 
 export const ENTITLEMENTS = {

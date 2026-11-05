@@ -39,7 +39,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
   {
     id: 'solo-hero',
     label: 'Solo Hero',
-    description: 'One phone, classic product angle',
+    description: 'One phone, front-facing hero',
     badge: '1 device',
     category: 'devices',
     preview: 'solo',
@@ -47,7 +47,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     devices: [{
       deviceId: 'iphone_15_pro_max',
-      rotation: { x: -8, y: -23, z: 8 },
+      rotation: { x: 0, y: 0, z: 0 },
       position: { x: 0, y: 0, z: 0 },
       scale: 1,
     }],
@@ -65,13 +65,13 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     devices: [
       {
         deviceId: IOS_DEVICE_ID,
-        rotation: { x: -6, y: -18, z: 4 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 0, y: 0, z: 0 },
         scale: 0.9,
       },
       {
         deviceId: ANDROID_DEVICE_ID,
-        rotation: { x: -6, y: -18, z: 4 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 0, y: 0, z: 0 },
         scale: 0.9,
       },
@@ -80,7 +80,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
   {
     id: 'duo-stack',
     label: 'Duo Stack',
-    description: 'Overlapping phones at offset angles',
+    description: 'Overlapping phones in a stacked lineup',
     badge: '2 devices',
     category: 'devices',
     preview: 'stack',
@@ -90,13 +90,13 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     devices: [
       {
         deviceId: 'iphone_16_pro_max',
-        rotation: { x: -12, y: -32, z: 10 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: -0.55, y: 0.05, z: -0.2 },
         scale: 0.92,
       },
       {
         deviceId: 'iphone_17_pro',
-        rotation: { x: -4, y: 18, z: -6 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 0.7, y: -0.05, z: 0.15 },
         scale: 0.88,
       },
@@ -115,19 +115,19 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     devices: [
       {
         deviceId: 'iphone_15_pro_max',
-        rotation: { x: -10, y: -38, z: 12 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: -1.55, y: 0.05, z: -0.15 },
         scale: 0.78,
       },
       {
         deviceId: 'iphone_16_pro_max',
-        rotation: { x: -8, y: -8, z: 2 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 0, y: 0.1, z: 0.2 },
         scale: 0.86,
       },
       {
-        deviceId: 'galaxy_s25_ultra',
-        rotation: { x: -10, y: 28, z: -10 },
+        deviceId: 'galaxy_s26_ultra',
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 1.55, y: 0.05, z: -0.15 },
         scale: 0.78,
       },
@@ -146,19 +146,19 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     devices: [
       {
         deviceId: 'pixel_9_pro',
-        rotation: { x: -4, y: -8, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: -1.7, y: 0, z: 0 },
         scale: 0.72,
       },
       {
         deviceId: 'iphone_17_pro_max',
-        rotation: { x: -4, y: 0, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 0, y: 0.05, z: 0.1 },
         scale: 0.8,
       },
       {
-        deviceId: 'galaxy_s25_ultra',
-        rotation: { x: -4, y: 8, z: 0 },
+        deviceId: 'galaxy_s26_ultra',
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 1.7, y: 0, z: 0 },
         scale: 0.72,
       },
@@ -176,19 +176,19 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     devices: [
       {
         deviceId: 'iphone_15_pro_max',
-        rotation: { x: -16, y: -42, z: 8 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: -1.4, y: 0.15, z: -0.85 },
         scale: 0.7,
       },
       {
         deviceId: 'iphone_17_pro',
-        rotation: { x: -6, y: -12, z: 4 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 0.15, y: 0, z: 0.35 },
         scale: 0.95,
       },
       {
         deviceId: 'pixel_10_pro',
-        rotation: { x: -14, y: 34, z: -8 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 1.55, y: 0.1, z: -0.55 },
         scale: 0.68,
       },
@@ -206,14 +206,14 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     devices: [
       {
-        deviceId: 'galaxy_s25_ultra',
-        rotation: { x: -8, y: -20, z: 6 },
+        deviceId: 'galaxy_s26_ultra',
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: -0.35, y: 0, z: 0.2 },
         scale: 1,
       },
       {
         deviceId: 'pixel_9_pro_xl',
-        rotation: { x: -14, y: 28, z: -8 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 1.45, y: 0.05, z: -0.35 },
         scale: 0.78,
       },
@@ -253,7 +253,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     shadowSoftness: 3.2,
     devices: [{
       deviceId: 'iphone_16_pro_max',
-      rotation: { x: -12, y: -28, z: 14 },
+      rotation: { x: 0, y: 0, z: 0 },
       position: { x: 0.15, y: -0.15, z: 0.35 },
       scale: 0.92,
     }],
@@ -281,7 +281,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     shadowSoftness: 2.4,
     devices: [{
       deviceId: 'iphone_17_pro',
-      rotation: { x: -4, y: -18, z: 6 },
+      rotation: { x: 0, y: 0, z: 0 },
       position: { x: -0.15, y: -0.2, z: 0.55 },
       scale: 0.95,
     }],
@@ -307,7 +307,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     shadowSoftness: 2.8,
     devices: [{
       deviceId: 'iphone_15_pro_max',
-      rotation: { x: -10, y: -22, z: 8 },
+      rotation: { x: 0, y: 0, z: 0 },
       position: { x: 0, y: 0.55, z: 0.1 },
       scale: 0.88,
     }],
@@ -335,13 +335,13 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     devices: [
       {
         deviceId: 'iphone_17_pro_max',
-        rotation: { x: -8, y: -30, z: 10 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: -0.55, y: -0.1, z: 0.4 },
         scale: 0.82,
       },
       {
-        deviceId: 'galaxy_s25_ultra',
-        rotation: { x: -6, y: 22, z: -8 },
+        deviceId: 'galaxy_s26_ultra',
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 0.85, y: -0.05, z: 0.15 },
         scale: 0.78,
       },
@@ -369,7 +369,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     shadowSoftness: 2.2,
     devices: [{
       deviceId: 'pixel_9_pro',
-      rotation: { x: -6, y: 28, z: -4 },
+      rotation: { x: 0, y: 0, z: 0 },
       position: { x: 0.35, y: -0.25, z: 0.45 },
       scale: 0.9,
     }],
@@ -398,13 +398,13 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     devices: [
       {
         deviceId: IOS_DEVICE_ID,
-        rotation: { x: -8, y: -16, z: 5 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 0, y: -0.05, z: 0.25 },
         scale: 0.85,
       },
       {
         deviceId: ANDROID_DEVICE_ID,
-        rotation: { x: -8, y: -16, z: 5 },
+        rotation: { x: 0, y: 0, z: 0 },
         position: { x: 0, y: -0.05, z: 0.25 },
         scale: 0.85,
       },
@@ -432,7 +432,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     shadowSoftness: 4.2,
     devices: [{
       deviceId: 'iphone_16_pro_max',
-      rotation: { x: -6, y: -18, z: 4 },
+      rotation: { x: 0, y: 0, z: 0 },
       // Lifted slightly so the soft contact shadow reads as floating
       position: { x: 0, y: 0.22, z: 0.45 },
       scale: 0.95,

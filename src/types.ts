@@ -158,6 +158,8 @@ export interface DeviceInstance {
   deviceColor?: DeviceColor;
   /** Per-environment clay finish; falls back to project.clayMode when absent. */
   clayMode?: boolean;
+  /** Laptop lid openness: 0 = closed, 1 = open (default). */
+  lidOpen?: number;
 }
 
 export type CompositionMode = 'single' | 'split';
@@ -312,6 +314,10 @@ export interface MockupProject {
   scale: number;
   /** Key / studio directional light strength */
   lightIntensity: number;
+  /** Key directional light position in scene space */
+  lightPosition: Vec3;
+  /** Key directional light color (CSS hex) */
+  lightColor: string;
   /** Soft fill / ambient light strength */
   fillIntensity: number;
   /** Contact shadow blur — higher = softer edges */
@@ -363,13 +369,14 @@ export function createDeviceInstance(partial?: Partial<DeviceInstance>): DeviceI
   return {
     id: partial?.id ?? `device-${Math.random().toString(36).slice(2, 10)}`,
     deviceId: partial?.deviceId ?? 'iphone_15_pro_max',
-    rotation: partial?.rotation ?? { x: -8, y: -23, z: 8 },
+    rotation: partial?.rotation ?? { x: 0, y: 0, z: 0 },
     scale: partial?.scale ?? 1,
     position: partial?.position ?? { x: 0, y: 0, z: 0 },
     glassReflection: partial?.glassReflection ?? 0.55,
     screenshot: partial?.screenshot !== undefined ? partial.screenshot : null,
     deviceColor: partial?.deviceColor,
     clayMode: partial?.clayMode,
+    lidOpen: partial?.lidOpen,
   };
 }
 
@@ -379,7 +386,7 @@ function kf(time: number, value: number): AnimKeyframe {
   return { id: `kf-${Math.random().toString(36).slice(2, 9)}`, time, value };
 }
 
-/** Default clip: a gentle product turntable on the main device */
+/** Default clip: a gentle product turntable that starts front-facing */
 export function createDefaultAnimation(targetId = 'device-main'): AnimationClip {
   return {
     duration: 4,
@@ -390,13 +397,13 @@ export function createDefaultAnimation(targetId = 'device-main'): AnimationClip 
         id: `track-${targetId}-rot-y`,
         targetId,
         property: 'rotation.y',
-        keyframes: [kf(0, -28), kf(2, 28), kf(4, -28)],
+        keyframes: [kf(0, 0), kf(2, 28), kf(4, 0)],
       },
       {
         id: `track-${targetId}-rot-x`,
         targetId,
         property: 'rotation.x',
-        keyframes: [kf(0, -8), kf(2, -12), kf(4, -8)],
+        keyframes: [kf(0, 0), kf(2, -6), kf(4, 0)],
       },
     ],
   };
@@ -436,8 +443,10 @@ export const DEFAULT_PROJECT: MockupProject = {
   reflectionMapImage: null,
   rotation: { ...primary.rotation },
   scale: primary.scale,
-  lightIntensity: 2.5,
-  fillIntensity: 0.7,
+  lightIntensity: 4.2,
+  lightPosition: { x: 4, y: 5, z: 7 },
+  lightColor: '#ffffff',
+  fillIntensity: 1.6,
   shadowSoftness: 2.5,
   shadowOpacity: 0.32,
   edgeBlurTop: false,
@@ -482,7 +491,7 @@ export const DEVICE_ANIM_PROPERTIES: AnimProperty[] = [
 ];
 
 export const IOS_DEVICE_ID: DeviceId = 'iphone_15_pro_max';
-export const ANDROID_DEVICE_ID: DeviceId = 'galaxy_s25_ultra';
+export const ANDROID_DEVICE_ID: DeviceId = 'galaxy_s26_ultra';
 
 export function buildSplitDevices(base: DeviceInstance): DeviceInstance[] {
   const sharedRotation = { ...base.rotation };

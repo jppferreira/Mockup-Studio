@@ -15,7 +15,8 @@
     "website:build": "vite build --config website/vite.config.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip --arm64",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --arm64 -c.mac.identity=null",
+    "dist:mac:beta": "node scripts/dist-mac-beta.mjs",
     "dist:mac:universal": "npm run build && electron-builder --mac dmg zip --universal"
   },
   "dependencies": {
@@ -32,6 +33,7 @@
     "webm-muxer": "^5.1.4"
   },
   "devDependencies": {
+    "@electron/notarize": "^2.5.0",
     "@types/node": "^22.10.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -56,8 +58,13 @@
       "electron/**/*",
       "package.json"
     ],
+    "afterSign": "scripts/notarize.cjs",
     "mac": {
       "category": "public.app-category.graphics-design",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "electron/entitlements.mac.plist",
+      "entitlementsInherit": "electron/entitlements.mac.plist",
       "extendInfo": {
         "NSCameraUsageDescription": "Mockup Studio uses camera access to mirror your iPhone or iPad screen over USB into the 3D mockup."
       },
@@ -75,6 +82,9 @@
           ]
         }
       ]
+    },
+    "dmg": {
+      "sign": true
     }
   }
 }

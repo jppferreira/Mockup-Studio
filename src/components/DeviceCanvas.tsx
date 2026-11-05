@@ -3,17 +3,18 @@ import {
   type MutableRefObject, type ReactNode,
 } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
-import { ContactShadows, OrbitControls, useGLTF } from '@react-three/drei';
+import { ContactShadows, OrbitControls, TransformControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { getDevice, type DeviceUv } from '../lib/devices';
+import { applyLidOpen, setupLidRig, type LidRig } from '../lib/deviceLid';
 import { applyProgressiveEdgeBlur } from '../lib/edgeBlur';
 import { useScreenEmissiveMap } from '../lib/useScreenTexture';
 import ProceduralDevice from './ProceduralDevice';
-import RotationBall, { type GizmoMode } from './RotationBall';
+import RotationBall, { type GizmoMode, type GizmoTargets } from './RotationBall';
 import SceneProps from './SceneProps';
 import {
-  DEVICE_COLORS, cameraLensFov,
+  DEVICE_COLORS, DEFAULT_PROJECT, cameraLensFov,
   type BackgroundPreset, type CameraLens, type CameraView, type DeviceColor, type DeviceInstance,
   type GradientColors, type MockupProject, type Vec3,
 } from '../types';
@@ -66,6 +67,9 @@ interface Props {
   onRotateDevice?: (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
   onMoveDevice?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
   onGizmoDraggingChange?: (dragging: boolean) => void;
+  /** Show translate gizmo for the key directional light */
+  lightGizmoActive?: boolean;
+  onLightPositionChange?: (position: Vec3) => void;
 }
 
 function applyDeviceFinish(
@@ -104,9 +108,10 @@ function applyDeviceFinish(
         standard.envMapIntensity = 0.08;
         if ('clearcoat' in standard) (standard as THREE.MeshPhysicalMaterial).clearcoat = 0;
       } else {
-        standard.metalness = Math.max(0.55, standard.metalness ?? 0.7);
-        standard.roughness = Math.min(0.45, standard.roughness ?? 0.35);
-        standard.envMapIntensity = Math.max(0.6, standard.envMapIntensity ?? 1);
+        // Keep some metal sheen but leave enough diffuse response so studio light reads on the body
+        standard.metalness = Math.min(0.72, Math.max(0.35, standard.metalness ?? 0.55));
+        standard.roughness = Math.min(0.5, Math.max(0.28, standard.roughness ?? 0.38));
+        standard.envMapIntensity = Math.max(1.15, standard.envMapIntensity ?? 1.25);
       }
       standard.needsUpdate = true;
     }
@@ -205,7 +210,7 @@ function isGlassMaterial(
   if (extraNames.has(name) || tweakGlassNames.has(name)) return true;
   const lower = name.toLowerCase();
   if (/screen|display|oled|lcd/.test(lower) && !/glass/.test(lower)) return false;
-  if (/glass|gloss|crystal|lens|sapphire|transparent/.test(lower)) return true;
+  if (/glass|gloss|crystal|lens|sapphire|transparent|window|visor|element/.test(lower)) return true;
   const standard = mat as THREE.MeshStandardMaterial;
   const physical = mat as THREE.MeshPhysicalMaterial;
   if (standard.transparent && typeof standard.opacity === 'number' && standard.opacity < 0.55) return true;
@@ -324,7 +329,7 @@ function applyGlassReflection(
       const physical = upgradeToPhysical(root, mat);
       seen.add(physical);
       const lower = (physical.name || '').toLowerCase();
-      const thinCover = /screen\s*glass|lensinglass|camglass|cam.?glass|camera.?glass|sapphire|glass\.00|base_glass(?!_black)/.test(lower)
+      const thinCover = /screen\s*glass|lensinglass|camglass|cam.?glass|camera.?glass|sapphire|glass\.00|base_glass(?!_black)|front_?element|antenna_?window|cpp_?glasses|eye.?transparent/.test(lower)
         && !/back|body|panel|frame|frosted/.test(lower);
 
       if (envMap) physical.envMap = envMap;
@@ -387,6 +392,7 @@ function GltfDeviceContent({
   deviceColor,
   clayMode,
   mediaPlaying,
+  lidOpen = 1,
 }: {
   url: string;
   deviceId: string;
@@ -396,9 +402,11 @@ function GltfDeviceContent({
   deviceColor: DeviceColor;
   clayMode: boolean;
   mediaPlaying?: boolean;
+  lidOpen?: number;
 }) {
   const device = getDevice(deviceId);
   const { scene, animations } = useGLTF(url);
+  const lidRigRef = useRef<LidRig | null>(null);
   const root = useMemo(() => {
     const hasSkin = Boolean(scene.getObjectByProperty('isSkinnedMesh', true));
     const cloned = (hasSkin ? cloneSkinned(scene) : scene.clone(true)) as THREE.Object3D;
@@ -417,9 +425,26 @@ function GltfDeviceContent({
       if (Array.isArray(mesh.material)) mesh.material = mesh.material.map(assign);
       else if (mesh.material) mesh.material = assign(mesh.material);
     });
-    poseOpenAnimation(cloned, animations);
+    // Laptop lids are driven by lidOpen — don't freeze an embedded clip pose.
+    if (device.lid) {
+      try {
+        lidRigRef.current = setupLidRig(cloned, device.lid, device.screenMat);
+      } catch (error) {
+        console.warn('Lid rig setup failed; showing model without lid control', error);
+        lidRigRef.current = null;
+      }
+    } else {
+      lidRigRef.current = null;
+      poseOpenAnimation(cloned, animations);
+    }
     return cloned;
-  }, [scene, animations]);
+  }, [scene, animations, device.lid, device.screenMat]);
+
+  useLayoutEffect(() => {
+    if (!lidRigRef.current) return;
+    applyLidOpen(lidRigRef.current, lidOpen);
+  }, [lidOpen, root]);
+
   const [screen, setScreen] = useState<{
     material: THREE.MeshPhysicalMaterial;
     originalEmissiveMap: THREE.Texture | null;
@@ -510,7 +535,7 @@ function DeviceModelView({
   liveStream,
   selected,
   onSelect,
-  onGizmoObject,
+  onGizmoTargets,
   gizmoDraggingRef,
   deviceColor,
   clayMode,
@@ -521,38 +546,44 @@ function DeviceModelView({
   liveStream?: MediaStream | null;
   selected: boolean;
   onSelect?: (payload: DeviceSelectPayload) => void;
-  onGizmoObject?: (object: THREE.Object3D | null) => void;
+  onGizmoTargets?: (targets: GizmoTargets | null) => void;
   gizmoDraggingRef: MutableRefObject<boolean>;
   deviceColor: DeviceColor;
   clayMode: boolean;
   mediaPlaying?: boolean;
 }) {
   const device = getDevice(instance.deviceId);
-  const groupRef = useRef<THREE.Group>(null);
+  const positionRef = useRef<THREE.Group>(null);
+  const rotationRef = useRef<THREE.Group>(null);
   const pointer = useRef({ x: 0, y: 0, moved: false });
 
   const radians = (d: number) => (d * Math.PI) / 180;
 
   useLayoutEffect(() => {
-    const group = groupRef.current;
-    if (!group) return;
+    const positionGroup = positionRef.current;
+    const rotationGroup = rotationRef.current;
+    if (!positionGroup || !rotationGroup) return;
     // While the gizmo is dragging, TransformControls owns the pose — don't fight it.
     if (gizmoDraggingRef.current) {
-      group.scale.setScalar(instance.scale ?? 1);
+      rotationGroup.scale.setScalar(instance.scale ?? 1);
       return;
     }
     const rot = instance.rotation ?? { x: 0, y: 0, z: 0 };
     const pos = instance.position ?? { x: 0, y: 0, z: 0 };
-    group.rotation.set(radians(rot.x), radians(rot.y), radians(rot.z));
-    group.position.set(pos.x, pos.y, pos.z);
-    group.scale.setScalar(instance.scale ?? 1);
+    positionGroup.position.set(pos.x, pos.y, pos.z);
+    rotationGroup.rotation.set(radians(rot.x), radians(rot.y), radians(rot.z));
+    rotationGroup.scale.setScalar(instance.scale ?? 1);
   }, [instance.rotation.x, instance.rotation.y, instance.rotation.z, instance.position?.x, instance.position?.y, instance.position?.z, instance.scale, gizmoDraggingRef]);
 
   useEffect(() => {
     if (!selected) return undefined;
-    onGizmoObject?.(groupRef.current);
-    return () => onGizmoObject?.(null);
-  }, [selected, onGizmoObject, instance.id]);
+    const position = positionRef.current;
+    const rotation = rotationRef.current;
+    if (position && rotation) {
+      onGizmoTargets?.({ position, rotation });
+    }
+    return () => onGizmoTargets?.(null);
+  }, [selected, onGizmoTargets, instance.id]);
 
   const onPointerDown = (event: ThreeEvent<PointerEvent>) => {
     pointer.current = { x: event.clientX, y: event.clientY, moved: false };
@@ -572,33 +603,36 @@ function DeviceModelView({
 
   return (
     <group
-      ref={groupRef}
+      ref={positionRef}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onClick={onClick}
     >
-      {device.kind === 'procedural' ? (
-        <ProceduralDevice
-          device={device}
-          screenshot={screenshot}
-          liveStream={liveStream}
-          finishHex={(DEVICE_COLORS.find((c) => c.id === deviceColor) ?? DEVICE_COLORS[0]).hex}
-          clayMode={clayMode}
-          mediaPlaying={mediaPlaying}
-        />
-      ) : device.url ? (
-        <GltfDeviceContent
-          key={`${device.url}|${device.screenMat}|${device.rot.join(',')}|${device.uv.mirrorX ? 1 : 0}|${device.screenSize.width}x${device.screenSize.height}`}
-          url={device.url}
-          deviceId={device.id}
-          screenshot={screenshot}
-          liveStream={liveStream}
-          glassReflection={instance.glassReflection ?? 0.55}
-          deviceColor={deviceColor}
-          clayMode={clayMode}
-          mediaPlaying={mediaPlaying}
-        />
-      ) : null}
+      <group ref={rotationRef}>
+        {device.kind === 'procedural' ? (
+          <ProceduralDevice
+            device={device}
+            screenshot={screenshot}
+            liveStream={liveStream}
+            finishHex={(DEVICE_COLORS.find((c) => c.id === deviceColor) ?? DEVICE_COLORS[0]).hex}
+            clayMode={clayMode}
+            mediaPlaying={mediaPlaying}
+          />
+        ) : device.url ? (
+          <GltfDeviceContent
+            key={`${device.url}|${device.screenMat}|${device.rot.join(',')}|${device.uv.mirrorX ? 1 : 0}|${device.screenSize.width}x${device.screenSize.height}|${device.lid ? 'lid' : 'nolid'}`}
+            url={device.url}
+            deviceId={device.id}
+            screenshot={screenshot}
+            liveStream={liveStream}
+            glassReflection={instance.glassReflection ?? 0.55}
+            deviceColor={deviceColor}
+            clayMode={clayMode}
+            mediaPlaying={mediaPlaying}
+            lidOpen={instance.lidOpen ?? 1}
+          />
+        ) : null}
+      </group>
     </group>
   );
 }
@@ -701,7 +735,7 @@ function SceneEnvironment({
       rt = pmrem.fromEquirectangular(source);
       scene.environment = rt.texture;
       if ('environmentIntensity' in scene) {
-        (scene as THREE.Scene & { environmentIntensity: number }).environmentIntensity = 1.25;
+        (scene as THREE.Scene & { environmentIntensity: number }).environmentIntensity = 1.9;
       }
       setEnvMap(rt.texture);
       source.dispose();
@@ -758,14 +792,151 @@ function isTypingTarget(target: EventTarget | null) {
 }
 
 function viewOffset(view: CameraView, split: boolean): Vec3 {
-  const z = split ? 7.4 : 5.7;
+  const dist = split ? 7.4 : 5.7;
   const positions: Record<CameraView, Vec3> = {
-    front: { x: 0, y: 0, z },
-    left: { x: split ? -3.4 : -2.7, y: 0.1, z: split ? 6.6 : 5.1 },
-    right: { x: split ? 3.4 : 2.7, y: 0.1, z: split ? 6.6 : 5.1 },
-    top: { x: 0, y: split ? 2.6 : 2.2, z: split ? 6.8 : 5.4 },
+    front: { x: 0, y: 0, z: dist },
+    left: { x: -dist, y: 0, z: 0 },
+    right: { x: dist, y: 0, z: 0 },
+    top: { x: 0, y: dist, z: 0.001 },
   };
   return positions[view];
+}
+
+/** Key directional light with optional drag handle; aims at the scene focus. */
+function KeyLightRig({
+  position,
+  color,
+  intensity,
+  castShadow,
+  shadowSoftness,
+  gizmoActive,
+  target,
+  onPositionChange,
+  onDraggingChange,
+}: {
+  position: Vec3;
+  color: string;
+  intensity: number;
+  castShadow: boolean;
+  shadowSoftness: number;
+  gizmoActive: boolean;
+  target: Vec3;
+  onPositionChange?: (position: Vec3) => void;
+  onDraggingChange?: (dragging: boolean) => void;
+}) {
+  const lightRef = useRef<THREE.DirectionalLight>(null);
+  const [handleObj, setHandleObj] = useState<THREE.Group | null>(null);
+  const draggingRef = useRef(false);
+  const { gl } = useThree();
+  const setHandleRef = useCallback((node: THREE.Group | null) => {
+    setHandleObj((prev) => (prev === node ? prev : node));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (draggingRef.current) return;
+    if (handleObj) {
+      handleObj.position.set(position.x, position.y, position.z);
+    }
+    if (lightRef.current) {
+      lightRef.current.position.set(position.x, position.y, position.z);
+      lightRef.current.target.position.set(target.x, target.y, target.z);
+      lightRef.current.target.updateMatrixWorld();
+    }
+  }, [handleObj, position.x, position.y, position.z, target.x, target.y, target.z]);
+
+  useEffect(() => {
+    const light = lightRef.current;
+    if (!light) return;
+    light.castShadow = castShadow;
+    // 1024² keeps self-shadow cost reasonable while still reading on glass/metal.
+    light.shadow.mapSize.set(1024, 1024);
+    light.shadow.radius = Math.max(1, shadowSoftness * 1.35);
+    light.shadow.bias = -0.0002;
+    light.shadow.normalBias = 0.025;
+    const cam = light.shadow.camera;
+    cam.near = 0.5;
+    cam.far = 24;
+    cam.left = -5;
+    cam.right = 5;
+    cam.top = 5;
+    cam.bottom = -5;
+    cam.updateProjectionMatrix();
+    light.shadow.needsUpdate = true;
+  }, [castShadow, shadowSoftness]);
+
+  const syncFromHandle = () => {
+    const handle = handleObj;
+    const light = lightRef.current;
+    if (!handle || !light) return;
+    light.position.copy(handle.position);
+    light.target.position.set(target.x, target.y, target.z);
+    light.target.updateMatrixWorld();
+  };
+
+  const commitPosition = () => {
+    if (!handleObj || !onPositionChange) return;
+    onPositionChange({
+      x: Number(handleObj.position.x.toFixed(3)),
+      y: Number(handleObj.position.y.toFixed(3)),
+      z: Number(handleObj.position.z.toFixed(3)),
+    });
+  };
+
+  return (
+    <>
+      <directionalLight
+        ref={lightRef}
+        color={color}
+        intensity={intensity}
+        castShadow={castShadow}
+      />
+      <group
+        ref={setHandleRef}
+        position={[position.x, position.y, position.z]}
+        userData={{ exportHide: true }}
+      >
+        <mesh visible={gizmoActive} renderOrder={1005} castShadow={false} receiveShadow={false} userData={{ exportHide: true }}>
+          <sphereGeometry args={[0.14, 20, 20]} />
+          <meshBasicMaterial color={color} depthTest={false} toneMapped={false} />
+        </mesh>
+        {gizmoActive ? (
+          <mesh visible renderOrder={1004} castShadow={false} receiveShadow={false} userData={{ exportHide: true }}>
+            <sphereGeometry args={[0.22, 16, 16]} />
+            <meshBasicMaterial
+              color={color}
+              transparent
+              opacity={0.22}
+              depthTest={false}
+              toneMapped={false}
+            />
+          </mesh>
+        ) : null}
+      </group>
+      {gizmoActive && handleObj ? (
+        <TransformControls
+          object={handleObj}
+          mode="translate"
+          size={0.85}
+          space="world"
+          onMouseDown={() => {
+            draggingRef.current = true;
+            onDraggingChange?.(true);
+            gl.domElement.style.cursor = 'grabbing';
+          }}
+          onObjectChange={() => {
+            syncFromHandle();
+          }}
+          onMouseUp={() => {
+            draggingRef.current = false;
+            syncFromHandle();
+            commitPosition();
+            onDraggingChange?.(false);
+            gl.domElement.style.cursor = '';
+          }}
+        />
+      ) : null}
+    </>
+  );
 }
 
 /** Instant pose write — damping off so format/device re-centers never ease. */
@@ -943,7 +1114,7 @@ function CameraRig({
       }}
       minDistance={split ? 4.4 : 3.6}
       maxDistance={12}
-      minPolarAngle={0.2}
+      minPolarAngle={0.02}
       maxPolarAngle={Math.PI - 0.2}
       onChange={publishOrbit}
       onEnd={publishOrbit}
@@ -1128,22 +1299,22 @@ function SceneDevices({
   onMoveDevice?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
   onGizmoDraggingChange?: (dragging: boolean) => void;
 }) {
-  const [gizmoObject, setGizmoObject] = useState<THREE.Object3D | null>(null);
+  const [gizmoTargets, setGizmoTargets] = useState<GizmoTargets | null>(null);
   const gizmoDraggingRef = useRef(false);
   const selectedId = project.selectedDeviceId;
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
 
-  // Stable callback — only the selected device may publish/clear the gizmo target.
+  // Stable callback — only the selected device may publish/clear the gizmo targets.
   // (Inline per-device callbacks were clearing the gizmo when sibling devices updated.)
-  const bindGizmoObject = useCallback((deviceId: string, object: THREE.Object3D | null) => {
+  const bindGizmoTargets = useCallback((deviceId: string, targets: GizmoTargets | null) => {
     if (deviceId !== selectedIdRef.current) return;
-    setGizmoObject(object);
+    setGizmoTargets(targets);
   }, []);
 
   useEffect(() => {
-    // Selection changed — drop stale object until the new device publishes.
-    setGizmoObject(null);
+    // Selection changed — drop stale pivots until the new device publishes.
+    setGizmoTargets(null);
   }, [selectedId]);
 
   return (
@@ -1168,7 +1339,7 @@ function SceneDevices({
             selected={instance.id === selectedId}
             onSelect={onSelectDevice}
             gizmoDraggingRef={gizmoDraggingRef}
-            onGizmoObject={(object) => bindGizmoObject(instance.id, object)}
+            onGizmoTargets={(targets) => bindGizmoTargets(instance.id, targets)}
             deviceColor={deviceColor}
             clayMode={clayMode}
             mediaPlaying={mediaPlaying}
@@ -1177,8 +1348,8 @@ function SceneDevices({
       })}
       <RotationBall
         key={`gizmo-${selectedId}-${gizmoActive ? 'on' : 'off'}`}
-        object={gizmoObject}
-        active={Boolean(gizmoActive && selectedId && gizmoObject)}
+        targets={gizmoTargets}
+        active={Boolean(gizmoActive && selectedId && gizmoTargets)}
         mode={gizmoMode}
         onDraggingChange={(dragging) => {
           gizmoDraggingRef.current = dragging;
@@ -1216,6 +1387,8 @@ export default function DeviceCanvas({
   onRotateDevice,
   onMoveDevice,
   onGizmoDraggingChange,
+  lightGizmoActive = false,
+  onLightPositionChange,
 }: Props) {
   const selected = project.devices.find((d) => d.id === project.selectedDeviceId) ?? project.devices[0];
   const resolvedFocus = focusPoint ?? selected?.position ?? { x: 0, y: 0, z: 0 };
@@ -1229,6 +1402,10 @@ export default function DeviceCanvas({
     || (project.gradientColors?.center ?? '').toLowerCase().startsWith('#f')
     || (project.gradientColors?.center ?? '').toLowerCase().startsWith('#e')
     || (project.gradientColors?.center ?? '').toLowerCase().startsWith('#fff');
+  const lightPosition = project.lightPosition ?? DEFAULT_PROJECT.lightPosition;
+  const lightColor = project.lightColor ?? DEFAULT_PROJECT.lightColor;
+  const fill = project.fillIntensity ?? DEFAULT_PROJECT.fillIntensity;
+  const keyIntensity = project.lightIntensity * (hasStudioBackdrop ? 1.05 : 1.2);
 
   return (
     <Canvas
@@ -1240,6 +1417,10 @@ export default function DeviceCanvas({
       style={{ width: '100%', height: '100%', background: '#16191f', display: 'block' }}
       onCreated={({ gl }) => {
         gl.setClearColor('#16191f', 1);
+        gl.toneMapping = THREE.ACESFilmicToneMapping;
+        gl.toneMappingExposure = 1.45;
+        gl.shadowMap.enabled = true;
+        gl.shadowMap.type = THREE.PCFSoftShadowMap;
       }}
       onPointerMissed={() => onClearSelection?.()}
     >
@@ -1247,35 +1428,30 @@ export default function DeviceCanvas({
         preset={project.background}
         colors={project.background === 'transparent' ? null : project.gradientColors}
       />
-      <ambientLight intensity={(project.fillIntensity ?? 0.7) * (hasStudioBackdrop ? 1.05 : 0.8)} />
+      <ambientLight intensity={fill * (hasStudioBackdrop ? 1.35 : 1.25)} />
       <hemisphereLight
         args={[
-          hasStudioBackdrop ? '#ffffff' : '#f3f8ff',
-          hasStudioBackdrop ? '#f0f0ee' : '#42434a',
-          (project.fillIntensity ?? 0.7) * (hasStudioBackdrop ? 0.7 : 0.95),
+          hasStudioBackdrop ? '#ffffff' : '#f7fbff',
+          hasStudioBackdrop ? '#f4f4f0' : '#5a5c64',
+          fill * (hasStudioBackdrop ? 1.05 : 1.2),
         ]}
       />
-      <directionalLight
-        position={hasStudioBackdrop ? [2.8, 6.2, 4.2] : [4, 5, 7]}
-        intensity={project.lightIntensity * (hasStudioBackdrop ? 0.72 : 0.85)}
-        // Soft contact shadow handles the “floating” look on white studio;
-        // directional shadow maps stripe badly on large flat white surfaces.
-        castShadow={!hasStudioBackdrop}
-        shadow-mapSize={[2048, 2048]}
-        shadow-radius={Math.max(1, (project.shadowSoftness ?? 2.5) * 1.6)}
-        shadow-bias={-0.00025}
-        shadow-normalBias={0.02}
-        shadow-camera-near={1}
-        shadow-camera-far={24}
-        shadow-camera-left={-6}
-        shadow-camera-right={6}
-        shadow-camera-top={6}
-        shadow-camera-bottom={-6}
+      <KeyLightRig
+        position={lightPosition}
+        color={lightColor}
+        intensity={keyIntensity}
+        castShadow
+        shadowSoftness={project.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness}
+        gizmoActive={lightGizmoActive && gizmoActive}
+        target={resolvedFocus}
+        onPositionChange={onLightPositionChange}
+        onDraggingChange={onGizmoDraggingChange}
       />
       <directionalLight
-        position={hasStudioBackdrop ? [-3.5, 3.5, 2.5] : [-4, 1, -5]}
-        color={hasStudioBackdrop ? '#ffffff' : '#a3d4da'}
-        intensity={hasStudioBackdrop ? 0.85 + (project.fillIntensity ?? 0.7) * 0.35 : 0.55 + (project.fillIntensity ?? 0.7) * 0.9}
+        position={hasStudioBackdrop ? [-3.5, 3.5, 2.5] : [-4, 1.5, -4]}
+        color={hasStudioBackdrop ? '#ffffff' : '#c5e8ec'}
+        intensity={hasStudioBackdrop ? 1.1 + fill * 0.45 : 0.9 + fill * 1.05}
+        castShadow={false}
       />
       <SceneEnvironment
         reflectionMap={project.reflectionMap ?? 'match_background'}
@@ -1292,7 +1468,7 @@ export default function DeviceCanvas({
             mediaPlaying={mediaPlaying}
             liveStream={liveStream}
             liveStreamDeviceId={liveStreamDeviceId}
-            gizmoActive={gizmoActive}
+            gizmoActive={gizmoActive && !lightGizmoActive}
             onSelectDevice={onSelectDevice}
             onRotateDevice={onRotateDevice}
             onMoveDevice={onMoveDevice}
@@ -1336,9 +1512,8 @@ useGLTF.preload('./models/iphone_15_pro_max.glb');
 useGLTF.preload('./models/iphone_16_pro_max.glb');
 useGLTF.preload('./models/iphone_17_pro.glb');
 useGLTF.preload('./models/iphone_17_pro_max.glb');
-useGLTF.preload('./models/iphone_duo.glb');
 useGLTF.preload('./models/pixel_9.glb');
 useGLTF.preload('./models/pixel_9_pro.glb');
 useGLTF.preload('./models/pixel_9_pro_xl.glb');
 useGLTF.preload('./models/pixel_10_pro.glb');
-useGLTF.preload('./models/galaxy_s25_ultra.glb');
+useGLTF.preload('./models/galaxy_s26_ultra.glb');
