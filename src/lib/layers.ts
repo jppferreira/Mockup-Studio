@@ -126,8 +126,14 @@ export function layerLabel(
   }
   const overlay = (project.overlays ?? []).find((item) => item.id === layer.refId);
   if (!overlay) return 'Overlay';
-  if (overlay.kind === 'text') {
-    const text = (overlay.text || 'Text').trim();
+  if (overlay.kind === 'shape') {
+    if (overlay.text === 'ellipse') return 'Ellipse';
+    if (overlay.text === 'triangle') return 'Triangle';
+    return 'Rectangle';
+  }
+  if (overlay.kind === 'path') return 'Pen stroke';
+  if (overlay.kind === 'text' || overlay.kind === 'comment') {
+    const text = (overlay.text || (overlay.kind === 'comment' ? 'Comment' : 'Text')).trim();
     return text.length > 22 ? `${text.slice(0, 20)}…` : text;
   }
   return 'Image overlay';

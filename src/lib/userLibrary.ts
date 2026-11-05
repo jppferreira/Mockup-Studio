@@ -266,6 +266,7 @@ export function loadSavedCompositions(): CompositionTemplate[] {
       fillIntensity: finite(entry.fillIntensity, 0.5),
       shadowOpacity: finite(entry.shadowOpacity, 0.35),
       shadowSoftness: finite(entry.shadowSoftness, 2),
+      showGroundBase: entry.showGroundBase !== false,
       linkSplitTransform: entry.linkSplitTransform !== false,
       cameraView: CAMERA_VIEWS.has(entry.cameraView as CameraView) ? entry.cameraView : undefined,
       cameraLens: CAMERA_LENS_IDS.has(entry.cameraLens as CameraLens) ? entry.cameraLens : undefined,
@@ -284,10 +285,10 @@ export function loadSavedCompositions(): CompositionTemplate[] {
         }))
         : undefined,
       overlays: Array.isArray(entry.overlays) ? entry.overlays.flatMap((overlay) => {
-        if (!overlay || overlay.kind !== 'text') return [];
+        if (!overlay || (overlay.kind !== 'text' && overlay.kind !== 'comment')) return [];
         return [{
           id: typeof overlay.id === 'string' ? overlay.id : newId('overlay'),
-          kind: 'text' as const,
+          kind: overlay.kind === 'comment' ? 'comment' as const : 'text' as const,
           x: clamp(finite(overlay.x, 0.5), 0, 1),
           y: clamp(finite(overlay.y, 0.2), 0, 1),
           scale: clamp(finite(overlay.scale, 1), 0.2, 4),
@@ -297,6 +298,7 @@ export function loadSavedCompositions(): CompositionTemplate[] {
           text: typeof overlay.text === 'string' ? overlay.text.slice(0, 240) : '',
           color: typeof overlay.color === 'string' ? overlay.color.slice(0, 16) : '#ffffff',
           fontSize: clamp(finite(overlay.fontSize, 0.055), 0.01, 0.3),
+          extrusion: clamp(finite(overlay.extrusion, 0), 0, 1),
         }];
       }).slice(0, 12) : undefined,
       animation: cleanAnimation(entry.animation, devices.length),
@@ -347,6 +349,7 @@ export function saveComposition(label: string, project: MockupProject): Composit
     fillIntensity: project.fillIntensity,
     shadowOpacity: project.shadowOpacity,
     shadowSoftness: project.shadowSoftness,
+    showGroundBase: project.showGroundBase !== false,
     lightPosition: { ...project.lightPosition },
     lightColor: project.lightColor,
     cameraView: project.cameraView,
@@ -354,7 +357,7 @@ export function saveComposition(label: string, project: MockupProject): Composit
     edgeBlurTop: project.edgeBlurTop,
     edgeBlurBottom: project.edgeBlurBottom,
     edgeBlurAmount: project.edgeBlurAmount,
-    overlays: (project.overlays ?? []).filter((overlay) => overlay.kind === 'text').slice(0, 12).map((overlay) => ({
+    overlays: (project.overlays ?? []).filter((overlay) => overlay.kind === 'text' || overlay.kind === 'comment').slice(0, 12).map((overlay) => ({
       ...overlay,
       imageData: null,
     })),

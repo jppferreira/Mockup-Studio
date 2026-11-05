@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import {
   createTrack,
+  isCameraProperty,
   moveKeyframesByDelta,
   readProperty,
   removeKeyframes,
@@ -17,6 +18,8 @@ import { promptToAnimationSmart } from '../lib/promptAnimateLocal';
 import {
   ANIM_EASES,
   ANIM_PROPERTIES,
+  CAMERA_ANIM_PROPERTIES,
+  CAMERA_TARGET_ID,
   DEFAULT_CUSTOM_BEZIER,
   type AnimEase,
   type AnimProperty,
@@ -24,6 +27,7 @@ import {
   type AnimationClip,
   type DeviceInstance,
   type EaseBezier,
+  type Vec3,
 } from '../types';
 import EaseGraphEditor from './EaseGraphEditor';
 
@@ -40,6 +44,8 @@ interface Props {
   onPlayingChange: (playing: boolean) => void;
   selectedDevice: DeviceInstance;
   devices: DeviceInstance[];
+  /** World position of the scene camera — used when keying camera lanes. */
+  cameraPose: Vec3;
   soundtrackName?: string | null;
   soundtrackData?: string | null;
   soundtrackStart?: number;
@@ -207,6 +213,7 @@ export default function AnimationTimeline({
   onPlayingChange,
   selectedDevice,
   devices,
+  cameraPose,
   soundtrackName = null,
   soundtrackData = null,
   soundtrackStart = 0,
@@ -293,25 +300,34 @@ export default function AnimationTimeline({
     setMusicDrag(drag);
   };
 
-  const deviceTracks = useMemo(
-    () => clip.tracks.filter((t) => t.targetId === selectedDevice.id),
-    [clip.tracks, selectedDevice.id],
+  const targetFor = (property: AnimProperty) => (
+    isCameraProperty(property) ? CAMERA_TARGET_ID : selectedDevice.id
   );
 
+  const valueFor = (property: AnimProperty) => {
+    if (property === 'camera.x') return cameraPose.x;
+    if (property === 'camera.y') return cameraPose.y;
+    if (property === 'camera.z') return cameraPose.z;
+    return readProperty(selectedDevice, property);
+  };
+
   const visibleTracks = useMemo(() => {
-    const preferred: AnimProperty[] = ['rotation.x', 'rotation.y', 'rotation.z', 'scale'];
-    const byProp = new Map(deviceTracks.map((t) => [t.property, t]));
-    return preferred.map((property) => {
-      const existing = byProp.get(property);
+    const lanes: AnimProperty[] = [
+      'rotation.x', 'rotation.y', 'rotation.z', 'scale',
+      ...CAMERA_ANIM_PROPERTIES,
+    ];
+    return lanes.map((property) => {
+      const targetId = isCameraProperty(property) ? CAMERA_TARGET_ID : selectedDevice.id;
+      const existing = clip.tracks.find((t) => t.targetId === targetId && t.property === property);
       if (existing) return existing;
       return {
-        id: `placeholder-${selectedDevice.id}-${property}`,
-        targetId: selectedDevice.id,
+        id: `placeholder-${targetId}-${property}`,
+        targetId,
         property,
         keyframes: [],
       } satisfies AnimTrack;
     });
-  }, [deviceTracks, selectedDevice.id]);
+  }, [clip.tracks, selectedDevice.id]);
 
   const selectedSet = useMemo(() => new Set(selectedKeys.map(keyId)), [selectedKeys]);
 
@@ -461,9 +477,10 @@ export default function AnimationTimeline({
     });
   };
 
-  const keyProperty = (property: AnimProperty, time = currentTime, value = readProperty(selectedDevice, property)) => {
-    const existing = clip.tracks.find((t) => t.targetId === selectedDevice.id && t.property === property);
-    const base = existing ?? createTrack(selectedDevice.id, property);
+  const keyProperty = (property: AnimProperty, time = currentTime, value = valueFor(property)) => {
+    const targetId = targetFor(property);
+    const existing = clip.tracks.find((t) => t.targetId === targetId && t.property === property);
+    const base = existing ?? createTrack(targetId, property);
     const next = upsertKeyframe(base, time, value);
     onChange({
       ...clip,
@@ -476,12 +493,13 @@ export default function AnimationTimeline({
   const addKeyframeAtPlayhead = (property?: AnimProperty) => {
     const props = property
       ? [property]
-      : (['rotation.x', 'rotation.y', 'rotation.z', 'scale'] as AnimProperty[]);
+      : (['rotation.x', 'rotation.y', 'rotation.z', 'scale', ...CAMERA_ANIM_PROPERTIES] as AnimProperty[]);
     let tracks = [...clip.tracks];
     for (const prop of props) {
-      const existing = tracks.find((t) => t.targetId === selectedDevice.id && t.property === prop);
-      const base = existing ?? createTrack(selectedDevice.id, prop);
-      const value = readProperty(selectedDevice, prop);
+      const targetId = targetFor(prop);
+      const existing = tracks.find((t) => t.targetId === targetId && t.property === prop);
+      const base = existing ?? createTrack(targetId, prop);
+      const value = valueFor(prop);
       const next = upsertKeyframe(base, currentTime, value);
       if (existing) tracks = tracks.map((t) => (t.id === existing.id ? next : t));
       else tracks = [...tracks, next];
@@ -503,7 +521,7 @@ export default function AnimationTimeline({
     const hits: KeyRef[] = [];
     visibleTracksRef.current.forEach((track, laneIndex) => {
       const live = clipRef.current.tracks.find(
-        (t) => t.targetId === selectedDevice.id && t.property === track.property,
+        (t) => t.targetId === track.targetId && t.property === track.property,
       ) ?? track;
       if (live.id.startsWith('placeholder-')) return;
       const laneTop = RULER_H + laneIndex * LANE_H;
@@ -1191,7 +1209,7 @@ export default function AnimationTimeline({
             <span className="timeline-transport-divider" aria-hidden />
 
             <div className="timeline-transport-cluster" role="group" aria-label="Keyframes">
-              <button type="button" className="timeline-icon-btn" onClick={() => addKeyframeAtPlayhead()} title="Key current transform">
+              <button type="button" className="timeline-icon-btn" onClick={() => addKeyframeAtPlayhead()} title="Key device and camera">
                 <Diamond size={13} />
               </button>
               <button type="button" className="timeline-icon-btn" onClick={() => addKeyframeAtPlayhead('rotation.y')} title="Key rotate Y">
@@ -1374,7 +1392,7 @@ export default function AnimationTimeline({
             return (
               <div
                 key={track.id}
-                className={`timeline-label-row ${selectedTrackId === track.id ? 'selected' : ''}`}
+                className={`timeline-label-row ${track.property === 'camera.x' ? 'is-camera-start' : ''} ${selectedTrackId === track.id ? 'selected' : ''}`}
                 onClick={() => setSelectedTrackId(track.id)}
               >
                 <span className="timeline-swatch" />
@@ -1496,12 +1514,12 @@ export default function AnimationTimeline({
           </div>
 
           {visibleTracks.map((track) => {
-            const live = clip.tracks.find((t) => t.targetId === selectedDevice.id && t.property === track.property) ?? track;
+            const live = clip.tracks.find((t) => t.targetId === track.targetId && t.property === track.property) ?? track;
             const sorted = live.keyframes;
             return (
               <div
                 key={track.id}
-                className={`timeline-lane ${selectedTrackId === live.id ? 'selected' : ''}`}
+                className={`timeline-lane ${track.property === 'camera.x' ? 'is-camera-start' : ''} ${selectedTrackId === live.id ? 'selected' : ''}`}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   const time = xToTime(e.clientX);

@@ -13,6 +13,7 @@ import { useScreenEmissiveMap } from '../lib/useScreenTexture';
 import ProceduralDevice from './ProceduralDevice';
 import RotationBall, { type GizmoControl, type GizmoMode, type GizmoTargets } from './RotationBall';
 import SceneProps, { CycloramaBackdrop } from './SceneProps';
+import ExtrudedText from './ExtrudedText';
 import {
   DEVICE_COLORS, DEFAULT_PROJECT, cameraLensFov,
   type BackgroundPreset, type CameraLens, type CameraView, type DeviceColor, type DeviceInstance,
@@ -42,6 +43,8 @@ export interface DeviceSelectPayload {
   openMenu?: boolean;
 }
 
+export type ViewGesture = 'pan' | 'zoom' | 'rotate' | 'longpress' | 'swipe';
+
 interface Props {
   project: MockupProject;
   captureRef: MutableRefObject<CaptureApi | null>;
@@ -61,14 +64,24 @@ interface Props {
   /**
    * Shared dual-pane orbit as an offset from the device look-at.
    * Both panes keep the same viewing angle while each centers on its own device.
+   * lookOffset shifts the pan target so Space-drag can move the frame.
    */
-  sharedOrbit?: { offset: Vec3 } | null;
-  onSharedOrbitChange?: (orbit: { offset: Vec3 }) => void;
+  sharedOrbit?: { offset: Vec3; lookOffset?: Vec3 } | null;
+  onSharedOrbitChange?: (orbit: { offset: Vec3; lookOffset?: Vec3 }) => void;
+  /** User finished orbiting or dollying. World-space camera position. */
+  onCameraCommit?: (position: Vec3) => void;
+  /** Orbit / dolly gesture started — pause playback so the playhead stays put. */
+  onOrbitStart?: () => void;
   /** Device center to frame — camera always looks here. */
   focusPoint?: Vec3 | null;
   /** Bump to force an instant centered snap (no damping / easing). */
   recenterToken?: number;
   onSelectDevice?: (payload: DeviceSelectPayload) => void;
+  /** Playhead used to show or hide extruded text. */
+  overlayTime?: number;
+  selectedPropId?: string | null;
+  onSelectProp?: (id: string) => void;
+  onSelectOverlay?: (id: string) => void;
   /** Device under the pointer, or null when the pointer leaves the canvas. */
   onHoverDevice?: (id: string | null) => void;
   /** Device under a dragged file, or null when the drag leaves the canvas. */
@@ -86,6 +99,10 @@ interface Props {
   onLightPositionChange?: (position: Vec3) => void;
   /** Fired once the user actually pans: Space held and the canvas dragged. */
   onSpacePanDrag?: () => void;
+  /** Active viewport gesture. Rotate matches the default orbit. */
+  viewGesture?: ViewGesture;
+  onSwipe?: (direction: 'left' | 'right') => void;
+  onLongPress?: (point: { clientX: number; clientY: number }) => void;
   /** Pixel ratio override. Thumbnails pass 1 to stay light. */
   pixelRatio?: [number, number];
   /** Fires after the device meshes have mounted — thumbnails wait on this. */
@@ -1425,19 +1442,29 @@ function CameraRig({
   animatedPosition,
   sharedOrbit = null,
   onSharedOrbitChange,
+  onCameraCommit,
+  onOrbitStart,
   focusPoint = null,
   recenterToken = 0,
   onSpacePanDrag,
+  viewGesture = 'rotate',
+  onSwipe,
+  onLongPress,
 }: {
   view: CameraView;
   lens: CameraLens;
   split: boolean;
   animatedPosition?: Vec3 | null;
-  sharedOrbit?: { offset: Vec3 } | null;
-  onSharedOrbitChange?: (orbit: { offset: Vec3 }) => void;
+  sharedOrbit?: { offset: Vec3; lookOffset?: Vec3 } | null;
+  onSharedOrbitChange?: (orbit: { offset: Vec3; lookOffset?: Vec3 }) => void;
+  onCameraCommit?: (position: Vec3) => void;
+  onOrbitStart?: () => void;
   focusPoint?: Vec3 | null;
   recenterToken?: number;
   onSpacePanDrag?: () => void;
+  viewGesture?: ViewGesture;
+  onSwipe?: (direction: 'left' | 'right') => void;
+  onLongPress?: (point: { clientX: number; clientY: number }) => void;
 }) {
   const { camera, gl } = useThree();
   const controls = useRef<any>(null);
@@ -1446,8 +1473,28 @@ function CameraRig({
   const applyingSharedRef = useRef(false);
   const onSharedOrbitChangeRef = useRef(onSharedOrbitChange);
   onSharedOrbitChangeRef.current = onSharedOrbitChange;
+  const onCameraCommitRef = useRef(onCameraCommit);
+  onCameraCommitRef.current = onCameraCommit;
+  const onOrbitStartRef = useRef(onOrbitStart);
+  onOrbitStartRef.current = onOrbitStart;
   const onSpacePanDragRef = useRef(onSpacePanDrag);
   onSpacePanDragRef.current = onSpacePanDrag;
+  const onSwipeRef = useRef(onSwipe);
+  onSwipeRef.current = onSwipe;
+  const onLongPressRef = useRef(onLongPress);
+  onLongPressRef.current = onLongPress;
+  const passiveGesture = (viewGesture === 'longpress' || viewGesture === 'swipe') && !spacePan;
+  const dragPan = viewGesture === 'pan' || spacePan;
+  const dragZoom = viewGesture === 'zoom' && !spacePan;
+  const dragPanRef = useRef(dragPan);
+  dragPanRef.current = dragPan;
+  const viewGestureRef = useRef(viewGesture);
+  viewGestureRef.current = viewGesture;
+  const gesturePanRef = useRef(false);
+  const userOrbitingRef = useRef(false);
+  const settlingRef = useRef(false);
+  const orbitStartPos = useRef(new THREE.Vector3());
+  const settleTimer = useRef<number | null>(null);
   const focus = focusPoint ?? { x: 0, y: 0, z: 0 };
   const focusRef = useRef(focus);
   focusRef.current = focus;
@@ -1467,6 +1514,8 @@ function CameraRig({
 
   // Instant re-center on format / device / view changes (recenterToken or cleared shared orbit).
   useLayoutEffect(() => {
+    if (userOrbitingRef.current || spacePan) return;
+    if (sharedOrbit?.lookOffset) return;
     if (animatedPosition) {
       snapCameraPose(camera, controls.current, animatedPosition, focus);
       return;
@@ -1482,52 +1531,76 @@ function CameraRig({
     );
     requestAnimationFrame(() => { applyingSharedRef.current = false; });
   }, [
-    view, camera, split, recenterToken,
+    view, camera, split, recenterToken, spacePan,
     animatedPosition?.x, animatedPosition?.y, animatedPosition?.z,
     sharedOrbit, focus.x, focus.y, focus.z,
   ]);
 
   // Apply linked dual-pane orbit (same angle, each pane's own device focus) — also instant.
   useLayoutEffect(() => {
-    if (!sharedOrbit || animatedPosition) return;
-    const { offset } = sharedOrbit;
+    if (userOrbitingRef.current || spacePan) return;
+    if (!sharedOrbit) return;
+    if (animatedPosition && !sharedOrbit.lookOffset) return;
+    const { offset, lookOffset } = sharedOrbit;
     const nextPos = {
       x: focus.x + offset.x,
       y: focus.y + offset.y,
       z: focus.z + offset.z,
     };
+    const look = lookOffset
+      ? { x: focus.x + lookOffset.x, y: focus.y + lookOffset.y, z: focus.z + lookOffset.z }
+      : focus;
     const dx = camera.position.x - nextPos.x;
     const dy = camera.position.y - nextPos.y;
     const dz = camera.position.z - nextPos.z;
-    if ((dx * dx + dy * dy + dz * dz) < 1e-8) {
-      if (controls.current) {
-        const t = controls.current.target;
-        if (
-          Math.abs(t.x - focus.x) < 1e-6
-          && Math.abs(t.y - focus.y) < 1e-6
-          && Math.abs(t.z - focus.z) < 1e-6
-        ) return;
-      }
-    }
+    const target = controls.current?.target;
+    const targetMatches = !target || (
+      Math.abs(target.x - look.x) < 1e-6
+      && Math.abs(target.y - look.y) < 1e-6
+      && Math.abs(target.z - look.z) < 1e-6
+    );
+    if ((dx * dx + dy * dy + dz * dz) < 1e-8 && targetMatches) return;
     applyingSharedRef.current = true;
-    snapCameraPose(camera, controls.current, nextPos, focus);
+    snapCameraPose(camera, controls.current, nextPos, look);
     requestAnimationFrame(() => { applyingSharedRef.current = false; });
   }, [
     sharedOrbit?.offset.x, sharedOrbit?.offset.y, sharedOrbit?.offset.z,
-    focus.x, focus.y, focus.z, camera, animatedPosition,
+    sharedOrbit?.lookOffset?.x, sharedOrbit?.lookOffset?.y, sharedOrbit?.lookOffset?.z,
+    focus.x, focus.y, focus.z, camera, animatedPosition, spacePan,
   ]);
   useEffect(() => {
+    const applyMouseMode = (pan: boolean) => {
+      const orbit = controls.current;
+      if (!orbit) return;
+      const gesture = viewGestureRef.current;
+      const zooming = gesture === 'zoom' && !pan;
+      const passive = (gesture === 'longpress' || gesture === 'swipe') && !pan;
+      const panning = gesture === 'pan' || pan;
+      orbit.enabled = !passive;
+      orbit.enablePan = panning;
+      orbit.enableRotate = !panning && !zooming && !passive;
+      orbit.mouseButtons.LEFT = panning
+        ? THREE.MOUSE.PAN
+        : zooming
+          ? THREE.MOUSE.DOLLY
+          : THREE.MOUSE.ROTATE;
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code !== 'Space' || event.repeat || isTypingTarget(event.target)) return;
       event.preventDefault();
+      applyMouseMode(true);
       setSpacePan(true);
     };
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.code !== 'Space') return;
       if (!isTypingTarget(event.target)) event.preventDefault();
+      applyMouseMode(false);
       setSpacePan(false);
     };
-    const onBlur = () => setSpacePan(false);
+    const onBlur = () => {
+      applyMouseMode(false);
+      setSpacePan(false);
+    };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
@@ -1540,13 +1613,20 @@ function CameraRig({
 
   useEffect(() => {
     const el = gl.domElement;
-    el.style.cursor = spacePan ? 'grab' : '';
+    const idleCursor = spacePan || viewGesture === 'pan'
+      ? 'grab'
+      : viewGesture === 'zoom'
+        ? 'zoom-in'
+        : viewGesture === 'swipe'
+          ? 'ew-resize'
+          : '';
+    el.style.cursor = idleCursor;
     const onPointerDown = () => {
-      if (!spacePan) return;
+      if (!spacePan && viewGesture !== 'pan') return;
       el.style.cursor = 'grabbing';
-      onSpacePanDragRef.current?.();
+      if (spacePan) onSpacePanDragRef.current?.();
     };
-    const onPointerUp = () => { el.style.cursor = spacePan ? 'grab' : ''; };
+    const onPointerUp = () => { el.style.cursor = idleCursor; };
     el.addEventListener('pointerdown', onPointerDown);
     el.addEventListener('pointerup', onPointerUp);
     return () => {
@@ -1554,12 +1634,69 @@ function CameraRig({
       el.removeEventListener('pointerdown', onPointerDown);
       el.removeEventListener('pointerup', onPointerUp);
     };
-  }, [gl, spacePan]);
+  }, [gl, spacePan, viewGesture]);
+
+  useEffect(() => {
+    if (viewGesture !== 'longpress' && viewGesture !== 'swipe') return undefined;
+    const el = gl.domElement;
+    let timer = 0;
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+    const clear = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = 0;
+      tracking = false;
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      startX = event.clientX;
+      startY = event.clientY;
+      tracking = true;
+      if (viewGesture === 'longpress') {
+        timer = window.setTimeout(() => {
+          tracking = false;
+          onLongPressRef.current?.({ clientX: startX, clientY: startY });
+        }, 480);
+      }
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (!tracking) return;
+      if (Math.hypot(event.clientX - startX, event.clientY - startY) > 10 && timer) {
+        window.clearTimeout(timer);
+        timer = 0;
+      }
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
+      if (viewGesture === 'swipe' && tracking && Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        onSwipeRef.current?.(dx > 0 ? 'right' : 'left');
+      }
+      clear();
+    };
+    el.addEventListener('pointerdown', onPointerDown);
+    el.addEventListener('pointermove', onPointerMove);
+    el.addEventListener('pointerup', onPointerUp);
+    el.addEventListener('pointercancel', clear);
+    return () => {
+      clear();
+      el.removeEventListener('pointerdown', onPointerDown);
+      el.removeEventListener('pointermove', onPointerMove);
+      el.removeEventListener('pointerup', onPointerUp);
+      el.removeEventListener('pointercancel', clear);
+    };
+  }, [gl, viewGesture]);
 
   const publishOrbit = () => {
-    if (!onSharedOrbitChangeRef.current || applyingSharedRef.current || animatedPosition) return;
+    if (!onSharedOrbitChangeRef.current || applyingSharedRef.current) return;
+    if (animatedPosition && !userOrbitingRef.current) return;
     const f = focusRef.current;
-    // Keep the look-at locked on the device; only share the viewing offset.
+    const panning = userOrbitingRef.current ? gesturePanRef.current : dragPanRef.current;
+    // Screen-space pan moves the look-at. Resetting it here pins the device
+    // to the center and makes Space-drag look like it did nothing.
+    if (panning) return;
+    // Rotate stays aimed at the device. Pan keeps the shifted look-at.
     if (controls.current) {
       controls.current.target.set(f.x, f.y, f.z);
     }
@@ -1572,17 +1709,60 @@ function CameraRig({
     });
   };
 
+  const finishOrbit = () => {
+    settleTimer.current = null;
+    if (!userOrbitingRef.current) return;
+    const moved = camera.position.distanceToSquared(orbitStartPos.current) > 1e-6;
+    if (gesturePanRef.current && controls.current && onSharedOrbitChangeRef.current && !applyingSharedRef.current) {
+      const f = focusRef.current;
+      const target = controls.current.target;
+      onSharedOrbitChangeRef.current({
+        offset: {
+          x: Number((camera.position.x - f.x).toFixed(4)),
+          y: Number((camera.position.y - f.y).toFixed(4)),
+          z: Number((camera.position.z - f.z).toFixed(4)),
+        },
+        lookOffset: {
+          x: Number((target.x - f.x).toFixed(4)),
+          y: Number((target.y - f.y).toFixed(4)),
+          z: Number((target.z - f.z).toFixed(4)),
+        },
+      });
+    } else {
+      publishOrbit();
+    }
+    userOrbitingRef.current = false;
+    settlingRef.current = false;
+    if (!moved) return;
+    onCameraCommitRef.current?.({
+      x: camera.position.x,
+      y: camera.position.y,
+      z: camera.position.z,
+    });
+  };
+
+  const armSettle = () => {
+    if (settleTimer.current != null) window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(finishOrbit, 90);
+  };
+
+  useEffect(() => () => {
+    if (settleTimer.current != null) window.clearTimeout(settleTimer.current);
+  }, []);
+
   return (
     <OrbitControls
       ref={controls}
       makeDefault
+      enabled={!passiveGesture}
       enableDamping
       dampingFactor={0.06}
-      enablePan={spacePan}
-      enableRotate={!spacePan}
+      enablePan={dragPan}
+      enableRotate={!dragPan && !dragZoom && !passiveGesture}
+      enableZoom
       screenSpacePanning
       mouseButtons={{
-        LEFT: spacePan ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
+        LEFT: dragPan ? THREE.MOUSE.PAN : dragZoom ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE,
         MIDDLE: THREE.MOUSE.DOLLY,
         RIGHT: THREE.MOUSE.PAN,
       }}
@@ -1590,8 +1770,23 @@ function CameraRig({
       maxDistance={12}
       minPolarAngle={0.02}
       maxPolarAngle={Math.PI - 0.2}
-      onChange={publishOrbit}
-      onEnd={publishOrbit}
+      onStart={() => {
+        userOrbitingRef.current = true;
+        gesturePanRef.current = dragPanRef.current;
+        settlingRef.current = false;
+        if (settleTimer.current != null) window.clearTimeout(settleTimer.current);
+        orbitStartPos.current.copy(camera.position);
+        onOrbitStartRef.current?.();
+      }}
+      onChange={() => {
+        publishOrbit();
+        if (settlingRef.current) armSettle();
+      }}
+      onEnd={() => {
+        if (!userOrbitingRef.current) return;
+        settlingRef.current = true;
+        armSettle();
+      }}
     />
   );
 }
@@ -2005,9 +2200,15 @@ export default function DeviceCanvas({
   gizmoActive = true,
   sharedOrbit = null,
   onSharedOrbitChange,
+  onCameraCommit,
+  onOrbitStart,
   focusPoint = null,
   recenterToken = 0,
   onSelectDevice,
+  overlayTime = 0,
+  selectedPropId = null,
+  onSelectProp,
+  onSelectOverlay,
   onHoverDevice,
   onDragTargetDevice,
   onDeviceContextMenu,
@@ -2019,6 +2220,9 @@ export default function DeviceCanvas({
   lightGizmoActive = false,
   onLightPositionChange,
   onSpacePanDrag,
+  viewGesture = 'rotate',
+  onSwipe,
+  onLongPress,
   pixelRatio,
   onSceneReady,
 }: Props) {
@@ -2028,7 +2232,8 @@ export default function DeviceCanvas({
   const showSoftStudioSweep = project.background === 'studio' && !hasStudioBackdrop;
   const studioSet = hasStudioBackdrop || showSoftStudioSweep;
   const floorY = studioSet ? -1.55 : -1.63;
-  const showGroundBase = project.background !== 'transparent'
+  const showGroundBase = project.showGroundBase !== false
+    && project.background !== 'transparent'
     && !studioSet
     && !(project.sceneProps ?? []).some((p) => (
       p.kind === 'concrete_slab' || p.kind === 'pedestal' || p.kind === 'studio_backdrop'
@@ -2103,7 +2308,16 @@ export default function DeviceCanvas({
           {showGroundBase && (
             <SoftGroundDisc y={floorY} color={project.gradientColors?.edge ?? '#090b0e'} />
           )}
-          <SceneProps props={project.sceneProps ?? []} />
+          <SceneProps
+            props={project.sceneProps ?? []}
+            selectedId={selectedPropId}
+            onSelect={onSelectProp}
+          />
+          <ExtrudedText
+            overlays={project.overlays}
+            time={overlayTime}
+            onSelect={onSelectOverlay}
+          />
           <SceneDevices
             project={project}
             gizmoMode={gizmoMode}
@@ -2142,9 +2356,14 @@ export default function DeviceCanvas({
         animatedPosition={cameraPosition}
         sharedOrbit={sharedOrbit}
         onSharedOrbitChange={onSharedOrbitChange}
+        onCameraCommit={onCameraCommit}
+        onOrbitStart={onOrbitStart}
         focusPoint={resolvedFocus}
         recenterToken={recenterToken}
         onSpacePanDrag={onSpacePanDrag}
+        viewGesture={viewGesture}
+        onSwipe={onSwipe}
+        onLongPress={onLongPress}
       />
       <CaptureBridge
         captureRef={captureRef}

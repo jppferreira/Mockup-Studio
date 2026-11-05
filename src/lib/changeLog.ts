@@ -103,6 +103,7 @@ function overlaySig(overlays: SceneOverlay[] | undefined) {
     text: overlay.text ?? '',
     color: overlay.color ?? '',
     fontSize: overlay.fontSize ?? 0,
+    extrusion: overlay.extrusion ?? 0,
     image: overlay.imageData ? overlay.imageData.length : 0,
     start: round(overlay.startTime),
     end: round(overlay.endTime),

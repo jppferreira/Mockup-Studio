@@ -232,6 +232,7 @@ export function validateProject(value: unknown): MockupProject {
     fillIntensity: number(input.fillIntensity, DEFAULT_PROJECT.fillIntensity, 0, 2.5),
     shadowSoftness: number(input.shadowSoftness, DEFAULT_PROJECT.shadowSoftness, 0.2, 8),
     shadowOpacity: number(input.shadowOpacity, DEFAULT_PROJECT.shadowOpacity, 0, 0.85),
+    showGroundBase: input.showGroundBase !== false,
     edgeBlurTop: typeof input.edgeBlurTop === 'boolean'
       ? input.edgeBlurTop
       : input.edgeBlurEnabled === true,
@@ -308,7 +309,12 @@ function normalizeOverlays(input: Partial<MockupProject>): SceneOverlay[] {
   if (!Array.isArray(input.overlays)) return [];
   return input.overlays.slice(0, 24).flatMap((raw, index) => {
     const item = (raw ?? {}) as Partial<SceneOverlay>;
-    const kind = item.kind === 'image' ? 'image' : item.kind === 'text' ? 'text' : null;
+    const kind = item.kind === 'image' ? 'image'
+      : item.kind === 'comment' ? 'comment'
+        : item.kind === 'shape' ? 'shape'
+          : item.kind === 'path' ? 'path'
+            : item.kind === 'text' ? 'text'
+              : null;
     if (!kind) return [];
     const imageData = kind === 'image'
       && typeof item.imageData === 'string'
@@ -325,11 +331,16 @@ function normalizeOverlays(input: Partial<MockupProject>): SceneOverlay[] {
       opacity: number(item.opacity, 1, 0, 1),
       startTime: number(item.startTime, 0, 0, 60),
       endTime: number(item.endTime, 30, 0, 60),
-      text: typeof item.text === 'string' ? item.text.slice(0, 160) : undefined,
+      text: kind === 'shape'
+        ? (item.text === 'ellipse' || item.text === 'triangle' ? item.text : 'rect')
+        : kind === 'path'
+          ? (typeof item.text === 'string' ? item.text.slice(0, 8000) : '')
+          : (typeof item.text === 'string' ? item.text.slice(0, 160) : undefined),
       color: typeof item.color === 'string' && /^#([0-9a-fA-F]{6})$/.test(item.color.trim())
         ? item.color.trim().toLowerCase()
         : '#ffffff',
       fontSize: number(item.fontSize, 0.055, 0.02, 0.2),
+      extrusion: number(item.extrusion, 0, 0, 1),
       imageData,
     })];
   });

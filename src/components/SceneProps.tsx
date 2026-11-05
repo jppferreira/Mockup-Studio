@@ -227,7 +227,7 @@ function makeClayMaps(color: string, seed = 1): MaterialMaps {
   };
 }
 
-function ClayMaterial({ color, seed = 1 }: { color: string; seed?: number }) {
+function ClayMaterial({ color, seed = 1, selected = false }: { color: string; seed?: number; selected?: boolean }) {
   const maps = useMemo(() => makeClayMaps(color, seed), [color, seed]);
   return (
     <meshPhysicalMaterial
@@ -238,6 +238,8 @@ function ClayMaterial({ color, seed = 1 }: { color: string; seed?: number }) {
       normalScale={new THREE.Vector2(0.35, 0.35)}
       roughness={0.86}
       metalness={0}
+      emissive={selected ? '#c5f2b6' : '#000000'}
+      emissiveIntensity={selected ? 0.22 : 0}
       sheen={0.85}
       sheenRoughness={0.62}
       sheenColor={color}
@@ -615,7 +617,24 @@ export function CycloramaBackdrop({ color, floor }: { color: string; floor?: str
   );
 }
 
-function PropMesh({ prop }: { prop: SceneProp }) {
+function ClayHelix({ color, seed, selected = false }: { color: string; seed: number; selected?: boolean }) {
+  const geometry = useMemo(() => {
+    const points = Array.from({ length: 96 }, (_, index) => {
+      const t = index / 95;
+      const angle = t * Math.PI * 7;
+      return new THREE.Vector3(Math.cos(angle) * 0.26, t * 1.15 - 0.55, Math.sin(angle) * 0.26);
+    });
+    return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points), 120, 0.055, 10, false);
+  }, []);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return (
+    <mesh castShadow receiveShadow geometry={geometry}>
+      <ClayMaterial color={color} seed={seed} selected={selected} />
+    </mesh>
+  );
+}
+
+function PropMesh({ prop, selected = false, onSelect }: { prop: SceneProp; selected?: boolean; onSelect?: (id: string) => void }) {
   const scale = asScale(prop.scale);
   const rot = prop.rotation;
   const pos = prop.position;
@@ -631,29 +650,48 @@ function PropMesh({ prop }: { prop: SceneProp }) {
         THREE.MathUtils.degToRad(rot.z),
       ]}
       scale={scale}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect?.(prop.id);
+      }}
     >
       {prop.kind === 'clay_sphere' && (
         <mesh castShadow receiveShadow>
           <sphereGeometry args={[0.55, 64, 64]} />
-          <ClayMaterial color={clay} seed={seed} />
+          <ClayMaterial color={clay} seed={seed} selected={selected} />
         </mesh>
       )}
       {prop.kind === 'clay_cube' && (
         <RoundedBox args={[0.9, 0.9, 0.9]} radius={0.12} smoothness={6} castShadow receiveShadow>
-          <ClayMaterial color={clay} seed={seed} />
+          <ClayMaterial color={clay} seed={seed} selected={selected} />
         </RoundedBox>
       )}
       {prop.kind === 'clay_cylinder' && (
         <mesh castShadow receiveShadow>
           <cylinderGeometry args={[0.42, 0.42, 0.95, 64]} />
-          <ClayMaterial color={clay} seed={seed} />
+          <ClayMaterial color={clay} seed={seed} selected={selected} />
         </mesh>
       )}
       {prop.kind === 'clay_torus' && (
         <mesh castShadow receiveShadow rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[0.48, 0.17, 48, 72]} />
-          <ClayMaterial color={clay} seed={seed} />
+          <ClayMaterial color={clay} seed={seed} selected={selected} />
         </mesh>
+      )}
+      {prop.kind === 'clay_cone' && (
+        <mesh castShadow receiveShadow position={[0, 0.42, 0]}>
+          <coneGeometry args={[0.46, 0.9, 48]} />
+          <ClayMaterial color={clay} seed={seed} selected={selected} />
+        </mesh>
+      )}
+      {prop.kind === 'clay_pyramid' && (
+        <mesh castShadow receiveShadow position={[0, 0.4, 0]}>
+          <coneGeometry args={[0.55, 0.86, 4]} />
+          <ClayMaterial color={clay} seed={seed} selected={selected} />
+        </mesh>
+      )}
+      {prop.kind === 'clay_helix' && (
+        <ClayHelix color={clay} seed={seed} selected={selected} />
       )}
       {prop.kind === 'concrete_wall' && (
         <group position={[0, 1.25, 0]}>
@@ -710,12 +748,20 @@ function StudioBackdrop({ color }: { color: string }) {
   return <CycloramaBackdrop color={color} />;
 }
 
-export default function SceneProps({ props }: { props: SceneProp[] }) {
+export default function SceneProps({
+  props,
+  selectedId = null,
+  onSelect,
+}: {
+  props: SceneProp[];
+  selectedId?: string | null;
+  onSelect?: (id: string) => void;
+}) {
   if (!props.length) return null;
   return (
     <group>
       {props.map((prop) => (
-        <PropMesh key={prop.id} prop={prop} />
+        <PropMesh key={prop.id} prop={prop} selected={prop.id === selectedId} onSelect={onSelect} />
       ))}
     </group>
   );

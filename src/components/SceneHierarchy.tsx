@@ -22,7 +22,7 @@ import {
   type ScenePreset,
 } from '../types';
 
-type Selection =
+export type SceneLayerSelection =
   | { kind: 'scene'; id: string }
   | { kind: 'device'; id: string }
   | { kind: 'screen'; deviceId: string }
@@ -33,6 +33,13 @@ type Selection =
   | { kind: 'key-light' }
   | { kind: 'rim-light' }
   | { kind: 'shadow' };
+
+export function sameLayerSelection(a: SceneLayerSelection, b: SceneLayerSelection) {
+  if (a.kind !== b.kind) return false;
+  if ('id' in a && 'id' in b) return a.id === b.id;
+  if ('deviceId' in a && 'deviceId' in b) return a.deviceId === b.deviceId;
+  return true;
+}
 
 type SceneHierarchyProps = {
   project: MockupProject;
@@ -48,7 +55,11 @@ type SceneHierarchyProps = {
   onOpenSection: (sectionId: string) => void;
   onOpenAssets: () => void;
   onSelectOverlay: (overlayId: string) => void;
+  onSelectProp: (propId: string) => void;
+  onRemoveProp: (propId: string) => void;
   onFocusKeyLight: () => void;
+  onSelectionChange: (selection: SceneLayerSelection) => void;
+  layerPin?: { kind: 'device' | 'prop' | 'overlay'; id: string; token: number } | null;
 };
 
 function sceneRowLabel(scene: CompositionScene, count: number) {
@@ -80,12 +91,16 @@ export default function SceneHierarchy({
   onOpenSection,
   onOpenAssets,
   onSelectOverlay,
+  onSelectProp,
+  onRemoveProp,
   onFocusKeyLight,
+  onSelectionChange,
+  layerPin = null,
 }: SceneHierarchyProps) {
   const selectedDeviceId = project.selectedDeviceId;
   const [openSceneIds, setOpenSceneIds] = useState<string[]>(() => [activeSceneId]);
   const [openDeviceIds, setOpenDeviceIds] = useState<string[]>(() => [selectedDeviceId]);
-  const [selection, setSelection] = useState<Selection>({ kind: 'device', id: selectedDeviceId });
+  const [selection, setSelection] = useState<SceneLayerSelection>({ kind: 'device', id: selectedDeviceId });
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -103,6 +118,39 @@ export default function SceneHierarchy({
       current.kind === 'device' ? { kind: 'device', id: selectedDeviceId } : current
     ));
   }, [selectedDeviceId]);
+
+  useEffect(() => {
+    onSelectionChange(selection);
+  }, [selection, onSelectionChange]);
+
+  useEffect(() => {
+    if (!layerPin) return;
+    setSelection(
+      layerPin.kind === 'device'
+        ? { kind: 'device', id: layerPin.id }
+        : layerPin.kind === 'prop'
+          ? { kind: 'prop', id: layerPin.id }
+          : { kind: 'overlay', id: layerPin.id },
+    );
+  }, [layerPin]);
+
+  useEffect(() => {
+    setSelection((current) => {
+      if (current.kind === 'device' && !project.devices.some((device) => device.id === current.id)) {
+        return { kind: 'device', id: project.selectedDeviceId };
+      }
+      if (current.kind === 'prop' && !(project.sceneProps ?? []).some((prop) => prop.id === current.id)) {
+        return { kind: 'device', id: project.selectedDeviceId };
+      }
+      if (current.kind === 'overlay' && !(project.overlays ?? []).some((overlay) => overlay.id === current.id)) {
+        return { kind: 'device', id: project.selectedDeviceId };
+      }
+      if ((current.kind === 'screen' || current.kind === 'backdrop') && !project.devices.some((device) => device.id === current.deviceId)) {
+        return { kind: 'device', id: project.selectedDeviceId };
+      }
+      return current;
+    });
+  }, [project.devices, project.sceneProps, project.overlays, project.selectedDeviceId]);
 
   const layers = useMemo(() => ensureCompositionLayers(project), [project]);
   const isVisible = (kind: 'device' | 'prop' | 'overlay', refId: string) => (
@@ -229,7 +277,7 @@ export default function SceneHierarchy({
                           >
                             <img src={deviceSelected ? iconDownSelected : iconDown} alt="" />
                           </button>
-                          <button type="button" className="scene-tree-main" onClick={() => selectDevice(device)}>
+                          <button type="button" className="scene-tree-main" title="Backspace removes this device" onClick={() => selectDevice(device)}>
                             <img src={deviceSelected ? iconCubeSelected : iconCube} alt="" />
                             <span>{label}</span>
                           </button>
@@ -307,25 +355,52 @@ export default function SceneHierarchy({
                   })}
 
                   {(project.sceneProps ?? []).map((prop) => (
-                    <button
+                    <div
                       key={prop.id}
-                      type="button"
                       className={`scene-tree-row is-studio ${!isVisible('prop', prop.id) ? 'is-hidden' : ''} ${selection.kind === 'prop' && selection.id === prop.id ? 'is-selected' : ''}`}
-                      onClick={() => setSelection({ kind: 'prop', id: prop.id })}
+                      role="treeitem"
                     >
-                      <img src={iconCube} alt="" />
-                      <span>{propLabel(prop.kind)}</span>
-                    </button>
+                      <button
+                        type="button"
+                        className="scene-tree-main"
+                        title="Select shape · Backspace removes"
+                        onClick={() => {
+                          setSelection({ kind: 'prop', id: prop.id });
+                          onSelectProp(prop.id);
+                        }}
+                      >
+                        <img src={iconCube} alt="" />
+                        <span>{propLabel(prop.kind)}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="scene-tree-remove"
+                        title={`Remove ${propLabel(prop.kind)}`}
+                        aria-label={`Remove ${propLabel(prop.kind)}`}
+                        onClick={() => onRemoveProp(prop.id)}
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
                   ))}
 
                   {(project.overlays ?? []).map((overlay) => {
-                    const text = overlay.kind === 'text' ? (overlay.text || 'Text').trim() : 'Image overlay';
+                    const text = overlay.kind === 'comment'
+                      ? (overlay.text || 'Comment').trim()
+                      : overlay.kind === 'shape'
+                        ? (overlay.text === 'ellipse' ? 'Ellipse' : overlay.text === 'triangle' ? 'Triangle' : 'Rectangle')
+                        : overlay.kind === 'path'
+                          ? 'Pen stroke'
+                          : overlay.kind === 'text'
+                            ? (overlay.text || 'Text').trim()
+                            : 'Image overlay';
                     const label = text.length > 22 ? `${text.slice(0, 20)}…` : text;
                     return (
                       <button
                         key={overlay.id}
                         type="button"
                         className={`scene-tree-row is-studio ${!isVisible('overlay', overlay.id) ? 'is-hidden' : ''} ${selection.kind === 'overlay' && selection.id === overlay.id ? 'is-selected' : ''}`}
+                        title="Backspace removes this layer"
                         onClick={() => {
                           setSelection({ kind: 'overlay', id: overlay.id });
                           onSelectOverlay(overlay.id);

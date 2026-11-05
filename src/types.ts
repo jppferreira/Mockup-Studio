@@ -175,6 +175,9 @@ export type ScenePropKind =
   | 'clay_cube'
   | 'clay_cylinder'
   | 'clay_torus'
+  | 'clay_helix'
+  | 'clay_cone'
+  | 'clay_pyramid'
   | 'concrete_wall'
   | 'concrete_slab'
   | 'pedestal'
@@ -195,6 +198,7 @@ export interface SceneProp {
 
 export const SCENE_PROP_KINDS: ScenePropKind[] = [
   'clay_sphere', 'clay_cube', 'clay_cylinder', 'clay_torus',
+  'clay_helix', 'clay_cone', 'clay_pyramid',
   'concrete_wall', 'concrete_slab', 'pedestal', 'studio_backdrop',
   'rock', 'stage',
 ];
@@ -330,6 +334,8 @@ export interface MockupProject {
   shadowSoftness: number;
   /** Contact shadow darkness */
   shadowOpacity: number;
+  /** Soft disc under the device; turn off for a floating product shot */
+  showGroundBase: boolean;
   /** Soft progressive blur along the top of the frame */
   edgeBlurTop: boolean;
   /** Soft progressive blur along the bottom of the frame */
@@ -477,6 +483,7 @@ export const DEFAULT_PROJECT: MockupProject = {
   fillIntensity: 1.6,
   shadowSoftness: 2.5,
   shadowOpacity: 0.32,
+  showGroundBase: true,
   edgeBlurTop: false,
   edgeBlurBottom: false,
   edgeBlurAmount: 24,
