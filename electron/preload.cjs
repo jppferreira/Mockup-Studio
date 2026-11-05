@@ -3,11 +3,25 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('mockupDesktop', {
   saveProject: (contents, proposedName) => ipcRenderer.invoke('project:save', { contents, proposedName }),
   openProject: () => ipcRenderer.invoke('project:open'),
+  cloudStatus: () => ipcRenderer.invoke('cloud:status'),
+  cloudUse: (provider) => ipcRenderer.invoke('cloud:use', provider),
+  cloudPick: () => ipcRenderer.invoke('cloud:pick'),
+  cloudClear: () => ipcRenderer.invoke('cloud:clear'),
+  cloudList: () => ipcRenderer.invoke('cloud:list'),
+  cloudRead: (filePath) => ipcRenderer.invoke('cloud:read', filePath),
+  cloudWrite: (payload) => ipcRenderer.invoke('cloud:write', payload),
+  cloudRemove: (filePath) => ipcRenderer.invoke('cloud:remove', filePath),
+  onCloudChanged: (handler) => {
+    const listener = () => handler();
+    ipcRenderer.on('cloud:changed', listener);
+    return () => ipcRenderer.removeListener('cloud:changed', listener);
+  },
   saveImage: (dataUrl, proposedName) => ipcRenderer.invoke('image:save', { dataUrl, proposedName }),
   saveMedia: (dataBase64, proposedName, extension, mimeType) => ipcRenderer.invoke('media:save', {
     dataBase64, proposedName, extension, mimeType,
   }),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  readClipboardImage: () => ipcRenderer.invoke('clipboard:readImage'),
   ensureCameraAccess: () => ipcRenderer.invoke('media:ensureCameraAccess'),
   figmaRequest: (apiPath, token) => ipcRenderer.invoke('figma:request', { apiPath, token }),
   figmaFetchImage: (imageUrl, token) => ipcRenderer.invoke('figma:fetchImage', { imageUrl, token }),

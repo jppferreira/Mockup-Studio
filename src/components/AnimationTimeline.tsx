@@ -12,7 +12,8 @@ import {
   setKeyframeEase,
   upsertKeyframe,
 } from '../lib/animation';
-import { PROMPT_SUGGESTIONS, promptToAnimation } from '../lib/promptAnimate';
+import { PROMPT_SUGGESTIONS } from '../lib/promptAnimate';
+import { promptToAnimationSmart } from '../lib/promptAnimateLocal';
 import {
   ANIM_EASES,
   ANIM_PROPERTIES,
@@ -1035,17 +1036,20 @@ export default function AnimationTimeline({
     const text = raw.trim();
     if (!text || promptBusy) return;
     setPromptBusy(true);
-    try {
-      const result = promptToAnimation(text, clip, selectedDevice);
+    void promptToAnimationSmart(text, clip, selectedDevice, devices, (status) => {
+      setPromptStatus(status);
+    }).then((result) => {
       onChange(result.clip);
       onSeek(0);
       onPlayingChange(result.label !== 'Clear');
       setPromptStatus(result.summary);
       setPrompt('');
       setPromptOpen(true);
-    } finally {
+    }).catch(() => {
+      setPromptStatus('Could not build that motion');
+    }).finally(() => {
       window.setTimeout(() => setPromptBusy(false), 120);
-    }
+    });
   };
 
   const onPromptSubmit = (event: FormEvent) => {
@@ -1103,7 +1107,7 @@ export default function AnimationTimeline({
                     setPrompt(e.target.value);
                     if (promptStatus) setPromptStatus(null);
                   }}
-                  placeholder="Describe a motion…"
+                  placeholder={promptBusy ? 'Building motion…' : 'Describe a motion…'}
                   aria-label="Animate with prompt"
                   disabled={promptBusy}
                   autoComplete="off"

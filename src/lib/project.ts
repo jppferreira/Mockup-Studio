@@ -7,7 +7,7 @@ import {
   ANIM_PROPERTIES, BACKGROUNDS, BUILTIN_GRADIENTS, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT,
   DEVICE_COLORS, MAX_COMPOSITION_SCENES, SCENE_PROP_KINDS, createCompositionScene, createDefaultAnimation,
   createDeviceInstance, createSceneProp, ensureCompositionScenes, getSelectedDevice,
-  normalizeGradientColors, syncProjectFromActiveScene, syncProjectFromSelected,
+  resolveSceneGradient, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimKeyframe, type AnimProperty, type AnimTrack, type AnimationClip,
   type CompositionScene, type DeviceColor, type DeviceInstance, type MockupProject,
   type PublishTarget, type ReflectionMapSetting, type SceneProp, type ScenePropKind, type Vec3,
@@ -136,7 +136,7 @@ export function validateProject(value: unknown): MockupProject {
   const gradientFallback = builtinGradient ?? savedGradient ?? DEFAULT_GRADIENT;
   const gradientColors = bg === 'transparent'
     ? { ...DEFAULT_GRADIENT }
-    : normalizeGradientColors(input.gradientColors, gradientFallback);
+    : resolveSceneGradient(bg, input.gradientColors, gradientFallback);
 
   const color = DEVICE_COLORS.some((p) => p.id === input.deviceColor) ? input.deviceColor! : DEFAULT_PROJECT.deviceColor;
   const clayMode = input.clayMode === true || color === 'clay';
@@ -299,7 +299,7 @@ function normalizeCompositionScenes(
       background: backgroundId,
       gradientColors: backgroundId === 'transparent'
         ? { ...DEFAULT_GRADIENT }
-        : normalizeGradientColors(item.gradientColors, gradientFallback),
+        : resolveSceneGradient(backgroundId, item.gradientColors, gradientFallback),
     });
   });
 }

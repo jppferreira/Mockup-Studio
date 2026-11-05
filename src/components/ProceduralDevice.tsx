@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { RoundedBox } from '@react-three/drei';
+import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { DeviceModel } from '../lib/devices';
 import { useScreenEmissiveMap } from '../lib/useScreenTexture';
@@ -37,6 +38,7 @@ function ScreenPlane({
   screenSize,
   name = 'ProceduralScreen',
   mediaPlaying,
+  dropHighlight = false,
 }: {
   width: number;
   height: number;
@@ -47,6 +49,7 @@ function ScreenPlane({
   screenSize: { width: number; height: number };
   name?: string;
   mediaPlaying?: boolean;
+  dropHighlight?: boolean;
 }) {
   const geometry = useMemo(() => makeScreenGeometry(width, height, radius), [width, height, radius]);
   const material = useMemo(
@@ -69,6 +72,20 @@ function ScreenPlane({
     material.dispose();
   }, [geometry, material]);
 
+  useEffect(() => {
+    if (!dropHighlight) return undefined;
+    const previous = material.emissive.clone();
+    const previousIntensity = material.emissiveIntensity;
+    material.emissive.set('#d6ff3a');
+    material.emissiveIntensity = 1.2;
+    material.needsUpdate = true;
+    return () => {
+      material.emissive.copy(previous);
+      material.emissiveIntensity = previousIntensity;
+      material.needsUpdate = true;
+    };
+  }, [dropHighlight, material]);
+
   useScreenEmissiveMap({
     material,
     screenshot,
@@ -81,7 +98,45 @@ function ScreenPlane({
     },
   });
 
-  return <mesh geometry={geometry} position={position} material={material} />;
+  return (
+    <group>
+      <mesh geometry={geometry} position={position} material={material} />
+      {dropHighlight && (
+        <PulsingScreenGlow geometry={geometry} position={position} />
+      )}
+    </group>
+  );
+}
+
+function PulsingScreenGlow({
+  geometry,
+  position,
+}: {
+  geometry: THREE.BufferGeometry;
+  position: [number, number, number];
+}) {
+  const mat = useMemo(() => new THREE.MeshBasicMaterial({
+    name: 'screen-drop-highlight',
+    color: '#d6ff3a',
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+    toneMapped: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -8,
+    polygonOffsetUnits: -8,
+    side: THREE.DoubleSide,
+  }), []);
+
+  useEffect(() => () => mat.dispose(), [mat]);
+
+  useFrame(({ clock }) => {
+    mat.opacity = 0.42 + Math.sin(clock.elapsedTime * 5.5) * 0.2;
+  });
+
+  return (
+    <mesh geometry={geometry} position={position} material={mat} renderOrder={8} raycast={() => null} />
+  );
 }
 
 function TitaniumMaterial({ color, clayMode }: { color: string; clayMode?: boolean }) {
@@ -131,6 +186,7 @@ function DuoHalf({
   screenSize,
   clayMode,
   mediaPlaying,
+  dropHighlight = false,
 }: {
   side: 'left' | 'right';
   finish: string;
@@ -141,6 +197,7 @@ function DuoHalf({
   screenSize: { width: number; height: number };
   clayMode?: boolean;
   mediaPlaying?: boolean;
+  dropHighlight?: boolean;
 }) {
   const isCover = side === 'right';
   return (
@@ -165,6 +222,7 @@ function DuoHalf({
         screenSize={screenSize}
         name={isCover ? 'CoverScreen' : 'ProceduralScreen'}
         mediaPlaying={mediaPlaying}
+        dropHighlight={dropHighlight}
       />
 
       {/* Thin glass overlay for reflections */}
@@ -229,6 +287,7 @@ function DuoPhone({
   finishHex,
   clayMode,
   mediaPlaying,
+  dropHighlight = false,
 }: {
   device: DeviceModel;
   screenshot: string | null;
@@ -236,6 +295,7 @@ function DuoPhone({
   finishHex?: string;
   clayMode?: boolean;
   mediaPlaying?: boolean;
+  dropHighlight?: boolean;
 }) {
   const finish = finishHex ?? device.finish ?? '#c8ccd1';
   const halfW = 1.18;
@@ -256,6 +316,7 @@ function DuoPhone({
             screenSize={device.screenSize}
             clayMode={clayMode}
             mediaPlaying={mediaPlaying}
+            dropHighlight={dropHighlight}
           />
         </group>
       </group>
@@ -271,6 +332,7 @@ function DuoPhone({
             screenSize={device.screenSize}
             clayMode={clayMode}
             mediaPlaying={mediaPlaying}
+            dropHighlight={dropHighlight}
           />
         </group>
       </group>
@@ -297,6 +359,7 @@ export default function ProceduralDevice({
   finishHex,
   clayMode,
   mediaPlaying,
+  dropHighlight = false,
 }: {
   device: DeviceModel;
   screenshot: string | null;
@@ -304,6 +367,7 @@ export default function ProceduralDevice({
   finishHex?: string;
   clayMode?: boolean;
   mediaPlaying?: boolean;
+  dropHighlight?: boolean;
 }) {
   const group = useRef<THREE.Group>(null);
 
@@ -329,6 +393,7 @@ export default function ProceduralDevice({
         finishHex={finishHex}
         clayMode={clayMode}
         mediaPlaying={mediaPlaying}
+        dropHighlight={dropHighlight}
       />
     </group>
   );

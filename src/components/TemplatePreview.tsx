@@ -48,6 +48,21 @@ export default function TemplatePreview({ layout }: { layout: CompositionTemplat
           <span className="prop studio-shadow" />
         </>
       )}
+      {layout === 'rocks' && (
+        <>
+          <span className="prop rock r3" />
+          <span className="prop rock r2" />
+          <span className="prop rock r1" />
+          <span className="phone p1" />
+        </>
+      )}
+      {layout === 'stage' && (
+        <>
+          <span className="prop stage-base" />
+          <span className="prop stage-deck" />
+          <span className="phone p1" />
+        </>
+      )}
     </div>
   );
 }

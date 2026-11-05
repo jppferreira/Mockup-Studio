@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { Box, Check, Trash2, Upload } from 'lucide-react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ChangeEvent } from 'react';
+import { Check, Trash2 } from 'lucide-react';
 import {
   deleteCustomDevice,
   importCustomDevice,
@@ -19,7 +19,11 @@ interface Props {
   onNotify: (message: string) => void;
 }
 
-export default function CustomDevicePanel({
+export type CustomDevicePanelHandle = {
+  openImport: () => void;
+};
+
+const CustomDevicePanel = forwardRef<CustomDevicePanelHandle, Props>(function CustomDevicePanel({
   selectedDeviceId,
   customDevices,
   disabled,
@@ -27,9 +31,14 @@ export default function CustomDevicePanel({
   onUpdated,
   onDeleted,
   onNotify,
-}: Props) {
+}, ref) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  useImperativeHandle(ref, () => ({
+    openImport: () => {
+      if (!disabled) fileRef.current?.click();
+    },
+  }), [disabled]);
   const [materials, setMaterials] = useState<string[]>([]);
   const selected = isCustomDeviceId(selectedDeviceId)
     ? customDevices.find((d) => d.id === selectedDeviceId)
@@ -79,33 +88,8 @@ export default function CustomDevicePanel({
     onNotify(`Removed “${label}”`);
   };
 
-  const showBringYourOwn = !busy && customDevices.length === 0;
-
   return (
-    <div className="custom-device-panel">
-      <div className="field-caption">Your models</div>
-      {(showBringYourOwn || busy) && (
-        <button
-          type="button"
-          className="button full-outline compact"
-          disabled={disabled || busy}
-          onClick={() => fileRef.current?.click()}
-        >
-          <Upload size={14} />
-          {busy ? 'Importing…' : 'Import GLB / GLTF'}
-        </button>
-      )}
-      {!showBringYourOwn && !busy && (
-        <button
-          type="button"
-          className="button full-outline compact"
-          disabled={disabled}
-          onClick={() => fileRef.current?.click()}
-        >
-          <Upload size={14} />
-          Import another model
-        </button>
-      )}
+    <>
       <input
         ref={fileRef}
         type="file"
@@ -114,16 +98,10 @@ export default function CustomDevicePanel({
         onChange={(e) => { void onFile(e); }}
       />
 
-      {customDevices.length > 0 && !busy && (
-        <div className="custom-device-count">{customDevices.length} custom model{customDevices.length === 1 ? '' : 's'} saved</div>
-      )}
-
       {selected && (
+        <details className="custom-device-disclosure">
+          <summary>{busy ? 'Importing…' : 'Model settings'}</summary>
         <div className="custom-device-editor">
-          <div className="custom-device-editor-head">
-            <Box size={14} />
-            <strong>Tune “{selected.label}”</strong>
-          </div>
 
           <label className="field-stack">
             <span>Name</span>
@@ -248,7 +226,10 @@ export default function CustomDevicePanel({
             <Trash2 size={13} /> Remove this model
           </button>
         </div>
+        </details>
       )}
-    </div>
+    </>
   );
-}
+});
+
+export default CustomDevicePanel;

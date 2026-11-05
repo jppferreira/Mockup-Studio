@@ -12,6 +12,8 @@ export interface ProjectTab {
   animTime: number;
   animPlaying: boolean;
   timelineOpen: boolean;
+  /** File inside the iCloud / Drive sync folder, when this tab is saved there. */
+  syncPath?: string | null;
 }
 
 export function createProjectTabId() {

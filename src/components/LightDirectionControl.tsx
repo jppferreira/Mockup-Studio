@@ -65,9 +65,6 @@ interface Props {
   onChange: (position: Vec3) => void;
 }
 
-const TOP_SIZE = 148;
-const ELEV_W = 44;
-const ELEV_H = 148;
 const MAX_DIST = 14;
 const MIN_DIST = 2;
 
@@ -162,7 +159,6 @@ export default function LightDirectionControl({
           <div
             ref={topRef}
             className={`light-direction-pad light-direction-top ${dragging === 'top' ? 'is-dragging' : ''}`}
-            style={{ width: TOP_SIZE, height: TOP_SIZE }}
             onPointerDown={onTopPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
@@ -209,11 +205,10 @@ export default function LightDirectionControl({
         </div>
 
         <div className="light-direction-pane">
-          <div className="light-direction-pane-label">Elevation</div>
+          <div className="light-direction-pane-label">Side</div>
           <div
             ref={elevRef}
             className={`light-direction-pad light-direction-elev ${dragging === 'elev' ? 'is-dragging' : ''}`}
-            style={{ width: ELEV_W, height: ELEV_H }}
             onPointerDown={onElevPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
@@ -254,46 +249,44 @@ export default function LightDirectionControl({
         </div>
       </div>
 
-      <div className="light-direction-legend">
-        <span className="light-legend-device"><i /> Device</span>
-        <span className="light-legend-sun" style={{ ['--light-swatch' as string]: color }}><i /> Light</span>
-      </div>
-
       <div className="light-direction-sliders">
-        <label className="light-angle-field">
-          <span>Angle</span>
+        <label className="slider-field">
+          <span className="slider-label">Angle</span>
           <input
             type="range"
             min={-180}
             max={180}
             step={1}
             value={Math.round(spherical.azimuth)}
+            style={{ ['--slider-fill' as string]: `${((spherical.azimuth + 180) / 360) * 100}%` }}
             onChange={(e) => commitSpherical(Number(e.target.value), spherical.elevation, spherical.distance)}
             aria-label="Light angle around device"
           />
           <span className="slider-number">{Math.round(spherical.azimuth)}°</span>
         </label>
-        <label className="light-angle-field">
-          <span>Height</span>
+        <label className="slider-field">
+          <span className="slider-label">Height</span>
           <input
             type="range"
             min={-10}
             max={80}
             step={1}
             value={Math.round(spherical.elevation)}
+            style={{ ['--slider-fill' as string]: `${((spherical.elevation + 10) / 90) * 100}%` }}
             onChange={(e) => commitSpherical(spherical.azimuth, Number(e.target.value), spherical.distance)}
             aria-label="Light height angle"
           />
           <span className="slider-number">{Math.round(spherical.elevation)}°</span>
         </label>
-        <label className="light-angle-field">
-          <span>Distance</span>
+        <label className="slider-field">
+          <span className="slider-label">Distance</span>
           <input
             type="range"
             min={MIN_DIST}
             max={MAX_DIST}
             step={0.1}
             value={Number(spherical.distance.toFixed(1))}
+            style={{ ['--slider-fill' as string]: `${((spherical.distance - MIN_DIST) / (MAX_DIST - MIN_DIST)) * 100}%` }}
             onChange={(e) => commitSpherical(spherical.azimuth, spherical.elevation, Number(e.target.value))}
             aria-label="Light distance"
           />

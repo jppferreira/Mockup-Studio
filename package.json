@@ -4,12 +4,13 @@
   "version": "0.1.1",
   "license": "UNLICENSED",
   "description": "Local-first 3D device mockup studio for macOS",
+  "productName": "Mockup Studio",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "license:issue": "node scripts/issue-license.mjs",
     "fulfill:dev": "node server/index.mjs",
-    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5175 --strictPort\" \"wait-on http://127.0.0.1:5175 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5175 electron .\"",
+    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5175 --strictPort\" \"wait-on http://127.0.0.1:5175 && node scripts/brand-electron-dev.cjs && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5175 electron .\"",
     "dev:web": "vite --host 127.0.0.1 --port 5175 --strictPort",
     "website": "vite --config website/vite.config.ts",
     "website:build": "vite build --config website/vite.config.ts",
@@ -60,6 +61,7 @@
     ],
     "afterSign": "scripts/notarize.cjs",
     "mac": {
+      "icon": "build/icon.icns",
       "category": "public.app-category.graphics-design",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,

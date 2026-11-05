@@ -63,7 +63,10 @@ export type ReflectionMapId =
 export type ReflectionMapSetting = ReflectionMapId | 'custom';
 export type { DeviceId };
 
-/** Radial gradient stops for studio backgrounds / ground colour. */
+/**
+ * Studio cyclorama stops.
+ * `center` is the lit wall, `mid` the cove, `edge` the floor.
+ */
 export interface GradientColors {
   center: string;
   mid: string;
@@ -98,7 +101,7 @@ export function createCompositionScene(partial?: Partial<CompositionScene>): Com
     background: partial?.background ?? 'midnight',
     gradientColors: partial?.gradientColors
       ? { ...partial.gradientColors }
-      : { center: '#363e49', mid: '#1d232b', edge: '#0d1016' },
+      : { center: '#a7b0c2', mid: '#3c4558', edge: '#222836' },
   };
 }
 
@@ -175,7 +178,9 @@ export type ScenePropKind =
   | 'concrete_wall'
   | 'concrete_slab'
   | 'pedestal'
-  | 'studio_backdrop';
+  | 'studio_backdrop'
+  | 'rock'
+  | 'stage';
 
 export interface SceneProp {
   id: string;
@@ -191,6 +196,7 @@ export interface SceneProp {
 export const SCENE_PROP_KINDS: ScenePropKind[] = [
   'clay_sphere', 'clay_cube', 'clay_cylinder', 'clay_torus',
   'concrete_wall', 'concrete_slab', 'pedestal', 'studio_backdrop',
+  'rock', 'stage',
 ];
 
 export function createSceneProp(partial: Partial<SceneProp> & { kind: ScenePropKind }): SceneProp {
@@ -410,10 +416,32 @@ export function createDefaultAnimation(targetId = 'device-main'): AnimationClip 
 }
 
 export const BUILTIN_GRADIENTS: Record<Exclude<BuiltinBackgroundId, 'transparent'>, GradientColors> = {
-  midnight: { center: '#363e49', mid: '#1d232b', edge: '#0d1016' },
-  studio: { center: '#ffffff', mid: '#f7f7f5', edge: '#ecece8' },
-  mint: { center: '#487e6c', mid: '#18463c', edge: '#071916' },
-  sunset: { center: '#c07a9d', mid: '#5c456e', edge: '#191428' },
+  midnight: { center: '#a7b0c2', mid: '#3c4558', edge: '#222836' },
+  studio: { center: '#f6f4f0', mid: '#e4dfd6', edge: '#c9c3b8' },
+  mint: { center: '#9ed9c6', mid: '#246456', edge: '#0e2c26' },
+  sunset: { center: '#f3c6d4', mid: '#6d5078', edge: '#1c1626' },
+};
+
+/** Earlier built-in palettes. Untouched looks are lifted onto the current one on load. */
+const LEGACY_BUILTIN_GRADIENTS: Record<Exclude<BuiltinBackgroundId, 'transparent'>, GradientColors[]> = {
+  midnight: [
+    { center: '#363e49', mid: '#1d232b', edge: '#0d1016' },
+    { center: '#6d7786', mid: '#2c333d', edge: '#090b0e' },
+    { center: '#a7b0c2', mid: '#3c4558', edge: '#141820' },
+  ],
+  studio: [
+    { center: '#ffffff', mid: '#f7f7f5', edge: '#ecece8' },
+    { center: '#ffffff', mid: '#e4e3de', edge: '#b7b6b0' },
+    { center: '#ffffff', mid: '#d4d0c8', edge: '#8a877f' },
+  ],
+  mint: [
+    { center: '#487e6c', mid: '#18463c', edge: '#071916' },
+    { center: '#6fbfa4', mid: '#1a4d42', edge: '#061412' },
+  ],
+  sunset: [
+    { center: '#c07a9d', mid: '#5c456e', edge: '#191428' },
+    { center: '#e7a8c0', mid: '#5a4068', edge: '#120e1c' },
+  ],
 };
 
 export const DEFAULT_GRADIENT: GradientColors = { ...BUILTIN_GRADIENTS.midnight };
@@ -656,10 +684,10 @@ export function renameCompositionScene(project: MockupProject, sceneId: string, 
 }
 
 export const BACKGROUNDS: ScenePreset[] = [
-  { id: 'midnight', label: 'Midnight', description: 'Dramatic dark studio', gradient: BUILTIN_GRADIENTS.midnight },
-  { id: 'studio', label: 'Soft Studio', description: 'Clean white backdrop', gradient: BUILTIN_GRADIENTS.studio },
-  { id: 'mint', label: 'Emerald', description: 'Rich green gradient', gradient: BUILTIN_GRADIENTS.mint },
-  { id: 'sunset', label: 'Sunset', description: 'Warm purple glow', gradient: BUILTIN_GRADIENTS.sunset },
+  { id: 'midnight', label: 'Midnight', description: 'Soft blue-charcoal studio', gradient: BUILTIN_GRADIENTS.midnight },
+  { id: 'studio', label: 'Soft Studio', description: 'Warm paper cyclorama', gradient: BUILTIN_GRADIENTS.studio },
+  { id: 'mint', label: 'Emerald', description: 'Soft green studio', gradient: BUILTIN_GRADIENTS.mint },
+  { id: 'sunset', label: 'Sunset', description: 'Soft dusk wash', gradient: BUILTIN_GRADIENTS.sunset },
   { id: 'transparent', label: 'Transparent', description: 'No background', gradient: null },
 ];
 
@@ -668,7 +696,7 @@ export function isTransparentBackground(id: BackgroundPreset): boolean {
 }
 
 export function gradientCss(colors: GradientColors): string {
-  return `radial-gradient(circle at 35% 30%, ${colors.center}, ${colors.mid} 58%, ${colors.edge})`;
+  return `radial-gradient(ellipse 88% 72% at 50% 34%, ${colors.center}, transparent 70%), linear-gradient(180deg, ${colors.mid} 0%, ${colors.center} 30%, ${colors.mid} 62%, ${colors.edge} 100%)`;
 }
 
 export function findBuiltinBackground(id: string): ScenePreset | undefined {
@@ -691,6 +719,24 @@ export function normalizeGradientColors(input: Partial<GradientColors> | undefin
     mid: normalizeHex(input?.mid, fallback.mid),
     edge: normalizeHex(input?.edge, fallback.edge),
   };
+}
+
+function gradientsEqual(a: GradientColors, b: GradientColors) {
+  return a.center === b.center && a.mid === b.mid && a.edge === b.edge;
+}
+
+/** Keep custom colours, but lift untouched built-in looks onto the studio cyclorama. */
+export function resolveSceneGradient(
+  backgroundId: string,
+  input: Partial<GradientColors> | undefined,
+  fallback: GradientColors,
+): GradientColors {
+  const normalized = normalizeGradientColors(input, fallback);
+  const key = backgroundId as keyof typeof BUILTIN_GRADIENTS;
+  const legacy = LEGACY_BUILTIN_GRADIENTS[key];
+  const current = BUILTIN_GRADIENTS[key];
+  if (legacy && current && legacy.some((entry) => gradientsEqual(normalized, entry))) return { ...current };
+  return normalized;
 }
 
 export function gradientForBackground(

@@ -1,11 +1,26 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, session, systemPreferences } = require('electron');
+const { app, BrowserWindow, clipboard, ipcMain, dialog, nativeImage, shell, session, systemPreferences } = require('electron');
 const fs = require('node:fs/promises');
+const { existsSync } = require('node:fs');
 const path = require('node:path');
+
+const APP_NAME = 'Mockup Studio';
+app.setName(APP_NAME);
+
+function appIconFile() {
+  const candidates = [
+    path.join(__dirname, '../build/icon.png'),
+    path.join(process.resourcesPath || '', 'icon.png'),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) || '';
+}
 const { registerAndroidMirrorIpc, stopAndroidMirrorSession } = require('./androidMirror.cjs');
+const { registerCloudLibraryIpc, getLibraryDir } = require('./cloudLibrary.cjs');
 
 function createWindow() {
+  const iconFile = appIconFile();
   const win = new BrowserWindow({
-    title: 'Mockup Studio',
+    title: APP_NAME,
+    icon: iconFile || undefined,
     width: 1510,
     height: 960,
     minWidth: 1040,
@@ -37,10 +52,25 @@ function createWindow() {
 }
 
 function allowMediaPermission(permission) {
-  return permission === 'media' || permission === 'mediaKeySystem' || permission === 'display-capture';
+  return permission === 'media'
+    || permission === 'mediaKeySystem'
+    || permission === 'display-capture'
+    || permission === 'clipboard-read'
+    || permission === 'clipboard-sanitized-write';
 }
 
 app.whenReady().then(() => {
+  const iconFile = appIconFile();
+  if (iconFile) {
+    const image = nativeImage.createFromPath(iconFile);
+    if (process.platform === 'darwin' && app.dock && !image.isEmpty()) app.dock.setIcon(image);
+    app.setAboutPanelOptions({
+      applicationName: APP_NAME,
+      applicationVersion: app.getVersion(),
+      iconPath: iconFile,
+    });
+  }
+
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(allowMediaPermission(permission));
   });
@@ -78,9 +108,11 @@ app.whenReady().then(() => {
 
   ipcMain.handle('project:save', async (_event, { contents, proposedName }) => {
     if (typeof contents !== 'string' || contents.length > 45_000_000) throw new Error('Invalid project size');
+    const libraryDir = await getLibraryDir();
+    const baseName = `${sanitizeName(proposedName)}.mockup.json`;
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: 'Save Mockup Studio project',
-      defaultPath: `${sanitizeName(proposedName)}.mockup.json`,
+      defaultPath: libraryDir ? path.join(libraryDir, baseName) : baseName,
       filters: [{ name: 'Mockup Studio Project', extensions: ['json'] }],
     });
     if (canceled || !filePath) return { canceled: true };
@@ -89,8 +121,10 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('project:open', async () => {
+    const libraryDir = await getLibraryDir();
     const { canceled, filePaths } = await dialog.showOpenDialog({
       title: 'Open Mockup Studio project',
+      defaultPath: libraryDir || undefined,
       properties: ['openFile'],
       filters: [{ name: 'Mockup Studio Project', extensions: ['json'] }],
     });
@@ -98,7 +132,7 @@ app.whenReady().then(() => {
     const stat = await fs.stat(filePaths[0]);
     if (stat.size > 45_000_000) throw new Error('Project exceeds maximum file size');
     const contents = await fs.readFile(filePaths[0], 'utf8');
-    return { canceled: false, contents };
+    return { canceled: false, contents, path: filePaths[0] };
   });
 
   ipcMain.handle('image:save', async (_event, { dataUrl, proposedName }) => {
@@ -131,6 +165,15 @@ app.whenReady().then(() => {
     if (canceled || !filePath) return { canceled: true };
     await fs.writeFile(filePath, Buffer.from(dataBase64, 'base64'));
     return { canceled: false, path: filePath };
+  });
+
+  ipcMain.handle('clipboard:readImage', async () => {
+    const image = clipboard.readImage();
+    if (image.isEmpty()) return { ok: false };
+    const { width, height } = image.getSize();
+    if (!width || !height) return { ok: false };
+    if (width * height > 40_000_000) throw new Error('Use an image under 20 MB.');
+    return { ok: true, dataUrl: image.toDataURL(), name: 'pasted.png' };
   });
 
   ipcMain.handle('shell:openExternal', async (_event, rawUrl) => {
@@ -171,6 +214,7 @@ app.whenReady().then(() => {
   });
 
   registerAndroidMirrorIpc(ipcMain);
+  registerCloudLibraryIpc(ipcMain);
 
   ipcMain.handle('figma:fetchImage', async (_event, { imageUrl, token }) => {
     if (typeof imageUrl !== 'string' || imageUrl.length > 4096) {
