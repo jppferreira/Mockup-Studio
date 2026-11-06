@@ -57,51 +57,48 @@
       }
       html.is-desktop .splash-lights { visibility: hidden; }
       .splash-lights img { display: block; }
-      .splash-logo {
+      .splash-brand {
         position: absolute;
         left: 119px;
-        top: 20px;
-        width: 26px;
-        height: 27px;
-      }
-      .splash-logo span {
-        position: absolute;
         top: 0;
-        width: 12px;
-        height: 27px;
-        border-radius: 6px;
-        background: #5cecb6;
+        height: 67px;
+        display: flex;
+        align-items: center;
       }
-      .splash-logo span:first-child { left: 0; }
-      .splash-logo span:last-child { left: 14px; }
+      .splash-logo {
+        width: 36px;
+        height: 36px;
+        flex: none;
+      }
+      .splash-logo img {
+        display: block;
+        width: 36px;
+        height: 36px;
+        object-fit: contain;
+      }
       .splash-word {
-        position: absolute;
-        left: 154px;
-        top: 18px;
-        margin: 0;
+        margin: 0 0 0 9px;
         font-size: 22px;
         font-weight: 700;
         line-height: 30px;
         letter-spacing: 0;
         color: #f6f7fb;
+        white-space: nowrap;
       }
       .splash-rule {
-        position: absolute;
-        left: 284px;
-        top: 16px;
         width: 1px;
         height: 36px;
+        margin: 0 24px;
         background: #363b46;
+        flex: none;
       }
       .splash-preparing {
-        position: absolute;
-        left: 309px;
-        top: 24px;
         margin: 0;
         font-size: 13px;
         font-weight: 400;
         line-height: 18px;
         color: #a0a7b6;
+        white-space: nowrap;
       }
       .splash-stage {
         position: relative;
@@ -251,8 +248,8 @@
         color: #687183;
       }
     </style>
-    <script type="module" crossorigin src="./assets/index-CZIFWsjK.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-yHrZPFah.css">
+    <script type="module" crossorigin src="./assets/index-SFTKTxoO.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BPZ0JkND.css">
   </head>
   <body>
     <div id="app-splash" role="status" aria-live="polite" aria-busy="true" aria-label="Preparing your project">
@@ -262,10 +259,12 @@
           <img src="./splash/macos-yellow.svg" alt="" width="12" height="12" />
           <img src="./splash/macos-green.svg" alt="" width="12" height="12" />
         </div>
-        <div class="splash-logo" aria-hidden="true"><span></span><span></span></div>
-        <p class="splash-word">MOKERO</p>
-        <div class="splash-rule" aria-hidden="true"></div>
-        <p class="splash-preparing">Preparing your project</p>
+        <div class="splash-brand">
+          <div class="splash-logo" aria-hidden="true"><img src="./splash/logo.png" alt="" width="36" height="36" /></div>
+          <p class="splash-word">Mockup Studio</p>
+          <div class="splash-rule" aria-hidden="true"></div>
+          <p class="splash-preparing">Preparing your project</p>
+        </div>
       </header>
       <div class="splash-stage">
         <div class="splash-canvas">
