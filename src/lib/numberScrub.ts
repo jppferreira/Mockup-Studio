@@ -114,8 +114,8 @@ export function installNumberScrub() {
     }
     event.preventDefault();
     event.stopPropagation();
-    const fine = event.shiftKey ? 0.1 : 1;
-    const next = session.startValue + (dx / PIXELS_PER_STEP) * session.step * fine;
+    const px = event.shiftKey ? PIXELS_PER_STEP * 10 : PIXELS_PER_STEP;
+    const next = session.startValue + (dx / px) * session.step;
     writeValue(session.input, next, session.step);
   }, true);
 
