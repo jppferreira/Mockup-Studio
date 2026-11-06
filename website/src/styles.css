@@ -551,7 +551,7 @@ a {
   z-index: 1;
   overflow: hidden;
   max-height: min(58vh, 620px);
-  border-radius: 20px 20px 0 0;
+  border-radius: 20px;
   transform: translateZ(0);
   isolation: isolate;
 }
@@ -563,8 +563,7 @@ a {
 }
 
 .hero-shot-cut .app-shot-frame {
-  border-radius: 18px 18px 0 0;
-  border-bottom: none;
+  border-radius: 18px;
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.06),
     0 0 0 1px rgba(0, 0, 0, 0.35),
@@ -707,6 +706,7 @@ a {
   height: auto;
   vertical-align: top;
   background: transparent;
+  border-radius: inherit;
 }
 
 .brand-lockup {
