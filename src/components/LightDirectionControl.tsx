@@ -262,7 +262,22 @@ export default function LightDirectionControl({
             onChange={(e) => commitSpherical(Number(e.target.value), spherical.elevation, spherical.distance)}
             aria-label="Light angle around device"
           />
-          <span className="slider-number">{Math.round(spherical.azimuth)}°</span>
+          <span className="slider-number" data-scrub title="Drag left or right to adjust. Shift for finer steps.">
+            <input
+              type="number"
+              min={-180}
+              max={180}
+              step={1}
+              value={Math.round(spherical.azimuth)}
+              aria-label="Light angle around device"
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                if (!Number.isFinite(next)) return;
+                commitSpherical(next, spherical.elevation, spherical.distance);
+              }}
+            />
+            <span className="slider-number-unit">°</span>
+          </span>
         </label>
         <label className="slider-field">
           <span className="slider-label">Height</span>
@@ -276,7 +291,22 @@ export default function LightDirectionControl({
             onChange={(e) => commitSpherical(spherical.azimuth, Number(e.target.value), spherical.distance)}
             aria-label="Light height angle"
           />
-          <span className="slider-number">{Math.round(spherical.elevation)}°</span>
+          <span className="slider-number" data-scrub title="Drag left or right to adjust. Shift for finer steps.">
+            <input
+              type="number"
+              min={-10}
+              max={80}
+              step={1}
+              value={Math.round(spherical.elevation)}
+              aria-label="Light height angle"
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                if (!Number.isFinite(next)) return;
+                commitSpherical(spherical.azimuth, next, spherical.distance);
+              }}
+            />
+            <span className="slider-number-unit">°</span>
+          </span>
         </label>
         <label className="slider-field">
           <span className="slider-label">Distance</span>
@@ -290,7 +320,21 @@ export default function LightDirectionControl({
             onChange={(e) => commitSpherical(spherical.azimuth, spherical.elevation, Number(e.target.value))}
             aria-label="Light distance"
           />
-          <span className="slider-number">{spherical.distance.toFixed(1)}</span>
+          <span className="slider-number" data-scrub title="Drag left or right to adjust. Shift for finer steps.">
+            <input
+              type="number"
+              min={MIN_DIST}
+              max={MAX_DIST}
+              step={0.1}
+              value={Number(spherical.distance.toFixed(1))}
+              aria-label="Light distance"
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                if (!Number.isFinite(next)) return;
+                commitSpherical(spherical.azimuth, spherical.elevation, next);
+              }}
+            />
+          </span>
         </label>
       </div>
     </div>

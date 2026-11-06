@@ -276,7 +276,22 @@ function SliderField({ label, value, min, max, step = 1, unit = '°', onChange }
         style={{ ['--slider-fill' as string]: `${fill}%` }}
         onChange={(e) => onChange(Number(e.target.value))}
       />
-      <span className="slider-number">{value.toFixed(digits)}{unit}</span>
+      <span className="slider-number" data-scrub title="Drag left or right to adjust. Shift for finer steps.">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={Number(value.toFixed(digits))}
+          aria-label={label}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            if (!Number.isFinite(next)) return;
+            onChange(Math.min(max, Math.max(min, next)));
+          }}
+        />
+        {unit ? <span className="slider-number-unit">{unit}</span> : null}
+      </span>
     </label>
   );
 }
@@ -5553,7 +5568,24 @@ export default function App() {
                   )}
                   <div className="overlay-row">
                     <label>
-                      X
+                      <span className="overlay-axis-head">
+                        X
+                        <input
+                          type="number"
+                          className="overlay-axis-num"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={Number(overlay.x.toFixed(2))}
+                          aria-label="Position X"
+                          title="Drag left or right to adjust. Shift for finer steps."
+                          onChange={(e) => {
+                            const next = Number(e.target.value);
+                            if (!Number.isFinite(next)) return;
+                            patchOverlay(overlay.id, { x: Math.min(1, Math.max(0, next)) });
+                          }}
+                        />
+                      </span>
                       <input
                         type="range"
                         min={0}
@@ -5564,7 +5596,24 @@ export default function App() {
                       />
                     </label>
                     <label>
-                      Y
+                      <span className="overlay-axis-head">
+                        Y
+                        <input
+                          type="number"
+                          className="overlay-axis-num"
+                          min={0}
+                          max={1}
+                          step={0.01}
+                          value={Number(overlay.y.toFixed(2))}
+                          aria-label="Position Y"
+                          title="Drag left or right to adjust. Shift for finer steps."
+                          onChange={(e) => {
+                            const next = Number(e.target.value);
+                            if (!Number.isFinite(next)) return;
+                            patchOverlay(overlay.id, { y: Math.min(1, Math.max(0, next)) });
+                          }}
+                        />
+                      </span>
                       <input
                         type="range"
                         min={0}

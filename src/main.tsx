@@ -4,7 +4,10 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { isSiteUnlocked, SiteGate } from './components/SiteGate';
 import { applyAccentTheme, readAccentColor, readAccentTheme } from './lib/accentTheme';
+import { installNumberScrub } from './lib/numberScrub';
 import './styles.css';
+
+installNumberScrub();
 
 applyAccentTheme(readAccentTheme(), readAccentColor());
 
