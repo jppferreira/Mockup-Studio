@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-accent="purple">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -57,51 +57,48 @@
       }
       html.is-desktop .splash-lights { visibility: hidden; }
       .splash-lights img { display: block; }
-      .splash-logo {
+      .splash-brand {
         position: absolute;
         left: 119px;
-        top: 20px;
-        width: 26px;
-        height: 27px;
-      }
-      .splash-logo span {
-        position: absolute;
         top: 0;
-        width: 12px;
-        height: 27px;
-        border-radius: 6px;
-        background: #5cecb6;
+        height: 67px;
+        display: flex;
+        align-items: center;
       }
-      .splash-logo span:first-child { left: 0; }
-      .splash-logo span:last-child { left: 14px; }
+      .splash-logo {
+        width: 36px;
+        height: 36px;
+        flex: none;
+      }
+      .splash-logo img {
+        display: block;
+        width: 36px;
+        height: 36px;
+        object-fit: contain;
+      }
       .splash-word {
-        position: absolute;
-        left: 154px;
-        top: 18px;
-        margin: 0;
+        margin: 0 0 0 9px;
         font-size: 22px;
         font-weight: 700;
         line-height: 30px;
         letter-spacing: 0;
         color: #f6f7fb;
+        white-space: nowrap;
       }
       .splash-rule {
-        position: absolute;
-        left: 284px;
-        top: 16px;
         width: 1px;
         height: 36px;
+        margin: 0 24px;
         background: #363b46;
+        flex: none;
       }
       .splash-preparing {
-        position: absolute;
-        left: 309px;
-        top: 24px;
         margin: 0;
         font-size: 13px;
         font-weight: 400;
         line-height: 18px;
         color: #a0a7b6;
+        white-space: nowrap;
       }
       .splash-stage {
         position: relative;
@@ -121,40 +118,33 @@
         transform-origin: center center;
       }
       .splash-canvas img { display: block; max-width: none; }
-      .splash-glow { position: absolute; left: 476px; top: 74px; }
-      .splash-orbit-outer { position: absolute; left: 658px; top: 135px; }
-      .splash-orbit-middle { position: absolute; left: 688px; top: 165px; }
-      .splash-orbit-inner { position: absolute; left: 728px; top: 205px; }
-      .splash-phone {
+      .splash-aurora {
         position: absolute;
-        left: 749.05px;
-        top: 101.27px;
-        width: 135px;
-        height: 250px;
-        transform: rotate(-15deg);
-        overflow: hidden;
+        left: 510px;
+        top: 78px;
+        width: 540px;
+        height: 340px;
+        pointer-events: none;
+        background:
+          radial-gradient(ellipse 38% 42% at 34% 58%, rgba(70, 196, 255, 0.34) 0%, transparent 64%),
+          radial-gradient(ellipse 36% 40% at 68% 54%, rgba(168, 112, 255, 0.22) 0%, transparent 66%),
+          radial-gradient(ellipse 52% 46% at 50% 60%, rgba(154, 186, 255, 0.2) 0%, transparent 70%);
+        filter: blur(34px);
+        mix-blend-mode: screen;
+        animation: splash-aurora 14s ease-in-out infinite;
       }
-      .splash-phone img { position: absolute; }
-      .splash-phone .p1 { left: 5.845px; top: 2.4px; }
-      .splash-phone .p2 { left: 3.605px; top: 3.375px; }
-      .splash-phone .p3 { left: 7.196px; top: 5.775px; }
-      .splash-phone .p4 { left: 10.355px; top: 10.575px; }
-      .splash-phone .pscreen {
-        left: -45.455px;
-        top: -2.875px;
-        -webkit-mask-image: url("./splash/phone-mask.svg");
-        mask-image: url("./splash/phone-mask.svg");
-        -webkit-mask-repeat: no-repeat;
-        mask-repeat: no-repeat;
-        -webkit-mask-position: 57.383px 28.959px;
-        mask-position: 57.383px 28.959px;
-        -webkit-mask-size: 170.07px 250.748px;
-        mask-size: 170.07px 250.748px;
+      @keyframes splash-aurora {
+        0%, 100% { transform: scale(1) translate3d(0, 0, 0); opacity: 0.82; }
+        50% { transform: scale(1.03) translate3d(4px, -3px, 0); opacity: 1; }
       }
-      .splash-phone .p5 { left: 49.505px; top: 13.45px; }
-      .splash-phone .p6 { left: 76.95px; top: 16.35px; }
-      .splash-phone .p7 { left: 2.055px; top: 55.698px; }
-      .splash-phone .p8 { left: 4.496px; top: 230.3px; }
+      .splash-phones {
+        position: absolute;
+        left: 590px;
+        top: 118px;
+        width: 380px;
+        height: auto;
+        pointer-events: none;
+      }
       .splash-title {
         position: absolute;
         left: 0;
@@ -195,8 +185,9 @@
         width: 0;
         height: 7px;
         border-radius: 4px;
-        background: #5cecb6;
+        background: #b794ff;
       }
+      html[data-accent="green"] .splash-progress-fill { background: #5cecb6; }
       .splash-status {
         position: absolute;
         left: 562px;
@@ -215,8 +206,9 @@
         font-size: 14px;
         font-weight: 600;
         line-height: 19px;
-        color: #5cecb6;
+        color: #b794ff;
       }
+      html[data-accent="green"] .splash-percent { color: #5cecb6; }
       .splash-divider {
         position: absolute;
         left: 588px;
@@ -260,28 +252,17 @@
           <img src="./splash/macos-yellow.svg" alt="" width="12" height="12" />
           <img src="./splash/macos-green.svg" alt="" width="12" height="12" />
         </div>
-        <div class="splash-logo" aria-hidden="true"><span></span><span></span></div>
-        <p class="splash-word">MOKERO</p>
-        <div class="splash-rule" aria-hidden="true"></div>
-        <p class="splash-preparing">Preparing your project</p>
+        <div class="splash-brand">
+          <div class="splash-logo" aria-hidden="true"><img src="./splash/logo.png" alt="" width="36" height="36" /></div>
+          <p class="splash-word">Mockup Studio</p>
+          <div class="splash-rule" aria-hidden="true"></div>
+          <p class="splash-preparing">Preparing your project</p>
+        </div>
       </header>
       <div class="splash-stage">
         <div class="splash-canvas">
-          <img class="splash-glow" src="./splash/ambient-glow.svg" alt="" width="600" height="600" />
-          <img class="splash-orbit-outer" src="./splash/orbit-outer.svg" alt="" width="245" height="245" />
-          <img class="splash-orbit-middle" src="./splash/orbit-middle.svg" alt="" width="185" height="185" />
-          <img class="splash-orbit-inner" src="./splash/orbit-inner.svg" alt="" width="105" height="105" />
-          <div class="splash-phone" aria-hidden="true">
-            <img class="p1" src="./splash/phone-1.svg" alt="" width="122.85" height="244.231" />
-            <img class="p2" src="./splash/phone-2.svg" alt="" width="123.3" height="242.308" />
-            <img class="p3" src="./splash/phone-3.svg" alt="" width="118.35" height="235.577" />
-            <img class="p4" src="./splash/phone-4.svg" alt="" width="114.75" height="228.846" />
-            <img class="pscreen" src="./splash/phone-screen.svg" alt="" width="232.2" height="292.308" />
-            <img class="p5" src="./splash/phone-5.svg" alt="" width="37.8" height="11.0577" />
-            <img class="p6" src="./splash/phone-6.svg" alt="" width="4.5" height="4.80769" />
-            <img class="p7" src="./splash/phone-7.svg" alt="" width="5.8" height="66.9808" />
-            <img class="p8" src="./splash/phone-8.svg" alt="" width="118.8" height="1.44231" />
-          </div>
+          <div class="splash-aurora" aria-hidden="true"></div>
+          <img class="splash-phones" src="./splash/phones-fan.png" alt="" width="1024" height="682" />
           <h1 class="splash-title">Making space for your ideas</h1>
           <p class="splash-opening">Opening iPhone Product Reveal</p>
           <div class="splash-progress" aria-hidden="true">

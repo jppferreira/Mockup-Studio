@@ -27,7 +27,7 @@ export default function CloudSyncPanel({
       {!desktop ? (
         <>
           <strong>Sync from the Mac app</strong>
-          <p>The desktop app can keep projects in iCloud Drive or Google Drive and update them automatically.</p>
+          <p>The desktop app can keep projects and templates in iCloud Drive or Google Drive and update them automatically.</p>
         </>
       ) : configured && cloud?.missing ? (
         <>
@@ -55,7 +55,7 @@ export default function CloudSyncPanel({
         <>
           <strong>Save to iCloud or Google Drive</strong>
           <p>
-            Pick a folder those apps already sync. Mockup Studio saves your projects there automatically. Nothing is uploaded to Mockup Studio.
+            Pick a folder those apps already sync. Mockup Studio saves your projects and templates there automatically. Nothing is uploaded to Mockup Studio.
           </p>
           <div className="sync-actions">
             <button type="button" disabled={busy} onClick={() => onUse('icloud')}>iCloud Drive</button>
@@ -67,7 +67,7 @@ export default function CloudSyncPanel({
         <>
           <strong>Save to iCloud or Google Drive</strong>
           <p>
-            Pick a folder those apps already sync. Mockup Studio saves your projects there automatically. Nothing is uploaded to Mockup Studio.
+            Pick a folder those apps already sync. Mockup Studio saves your projects and templates there automatically. Nothing is uploaded to Mockup Studio.
           </p>
           <div className="sync-actions">
             <button

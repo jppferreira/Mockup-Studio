@@ -23,6 +23,7 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
   headphones: Headphones,
   glasses: Glasses,
 };
+import AccentThemePicker from './AccentThemePicker';
 import CloudSyncPanel, { type CloudTarget } from './CloudSyncPanel';
 import type { CloudLibraryStatus, CloudProjectEntry } from '../lib/cloudLibrary';
 import { isDesktopApp } from '../lib/phoneMirror';
@@ -33,7 +34,6 @@ import {
   type CompositionTemplate,
   type TemplateCategory,
 } from '../lib/templates';
-import { deleteSavedComposition, loadSavedCompositions } from '../lib/userLibrary';
 import type { MockupProject } from '../types';
 import type { LicenseState } from '../lib/license';
 import { planLabel } from '../lib/license';
@@ -128,6 +128,8 @@ export default function ProjectsDashboard({
   onOpenFile,
   onStartTemplate,
   onStartDevice,
+  onDeleteSavedTemplate,
+  savedCompositions,
   onExplorePro,
   onFeedback,
   deviceUnlocked,
@@ -150,6 +152,8 @@ export default function ProjectsDashboard({
   onOpenFile: () => void;
   onStartTemplate: (template: CompositionTemplate) => void;
   onStartDevice: (deviceId: string) => void;
+  onDeleteSavedTemplate: (id: string) => void;
+  savedCompositions: CompositionTemplate[];
   onExplorePro: () => void;
   onFeedback: () => void;
   deviceUnlocked: (deviceId: string) => boolean;
@@ -161,7 +165,6 @@ export default function ProjectsDashboard({
   const [menuId, setMenuId] = useState<string | null>(null);
   const [deviceFilter, setDeviceFilter] = useState<DeviceCategoryFilter>('all');
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>('devices');
-  const [savedCompositions, setSavedCompositions] = useState<CompositionTemplate[]>(() => loadSavedCompositions());
   const desktop = isDesktopApp();
 
   useEffect(() => {
@@ -221,10 +224,10 @@ export default function ProjectsDashboard({
     : section === 'models'
       ? { kicker: 'Library', title: '3D models', sub: 'Pick a device and start a scene with it.' }
       : section === 'templates'
-        ? { kicker: 'Library', title: 'Templates', sub: 'Start from a device layout, a pre-built scene, or a composition you saved.' }
+        ? { kicker: 'Library', title: 'Templates', sub: 'Start from a device layout, a pre-built scene, or a template you saved.' }
         : section === 'assets'
           ? { kicker: 'Library', title: 'My assets', sub: 'Screenshots saved from recent scenes.' }
-          : { kicker: 'Workspace', title: 'Settings', sub: 'License, project files, and feedback.' };
+          : { kicker: 'Workspace', title: 'Settings', sub: 'Theme, license, project files, and feedback.' };
 
   return (
     <div className={`projects-dash ${desktop ? 'is-desktop' : ''}`}>
@@ -234,7 +237,7 @@ export default function ProjectsDashboard({
             <i />
             <i />
           </span>
-          <strong>MOKERO</strong>
+          <strong>Mockup Studio</strong>
         </div>
         <span className="dash-header-rule" aria-hidden />
         <span className="dash-header-label">Your workspace</span>
@@ -476,11 +479,11 @@ export default function ProjectsDashboard({
                   Pre-compositions
                 </button>
                 <button type="button" role="tab" aria-selected={templateCategory === 'saved'} className={templateCategory === 'saved' ? 'is-active' : ''} onClick={() => setTemplateCategory('saved')}>
-                  Your compositions
+                  Your templates
                 </button>
               </div>
               {templateCategory === 'saved' && visibleTemplates.length === 0 ? (
-                <p className="dash-empty">Save a composition from Transform while a project is open. It will show up here.</p>
+                <p className="dash-empty">Save as template from the File menu or Transform while a project is open. With sync on, templates also live in your iCloud or Drive folder.</p>
               ) : (
               <div className="dash-grid">
                 {visibleTemplates.map((template) => (
@@ -500,7 +503,7 @@ export default function ProjectsDashboard({
                         className="dash-card-more dash-saved-remove"
                         title={`Remove ${template.label}`}
                         aria-label={`Remove ${template.label}`}
-                        onClick={() => setSavedCompositions(deleteSavedComposition(template.id))}
+                        onClick={() => onDeleteSavedTemplate(template.id)}
                       >
                         <Trash2 size={14} />
                       </button>
@@ -549,6 +552,9 @@ export default function ProjectsDashboard({
 
           {section === 'settings' && (
             <div className="dash-settings">
+              <div className="dash-setting">
+                <AccentThemePicker />
+              </div>
               <CloudSyncPanel
                 cloud={cloud}
                 busy={cloudBusy}
@@ -562,7 +568,7 @@ export default function ProjectsDashboard({
               </div>
               <button type="button" className="dash-setting" onClick={onOpenFile}>
                 <strong>Open a project file</strong>
-                <span>Load a composition you saved earlier</span>
+                <span>Load a template you saved earlier</span>
               </button>
               <button type="button" className="dash-setting" onClick={onExplorePro}>
                 <strong>Explore Pro</strong>

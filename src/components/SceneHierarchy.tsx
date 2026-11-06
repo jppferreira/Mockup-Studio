@@ -10,6 +10,22 @@ import iconCamera from '../assets/scene-hierarchy/icon-camera.svg';
 import iconSun from '../assets/scene-hierarchy/icon-sun.svg';
 import iconLayers from '../assets/scene-hierarchy/icon-layers.svg';
 import iconEye from '../assets/scene-hierarchy/icon-eye.svg';
+function TreeChevron() {
+  return (
+    <svg className="scene-tree-glyph" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TreeCube() {
+  return (
+    <svg className="scene-tree-glyph" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M15.75 5.25V12.75L9 16.5L2.25 12.75V5.25L9 1.5L15.75 5.25ZM2.25 5.25L9 9M9 16.5V9M15.75 5.25L9 9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 import { getDevice } from '../lib/devices';
 import { bindScrollMore, pinToContainerTop } from '../lib/scrollMore';
 import { ensureCompositionLayers } from '../lib/layers';
@@ -30,6 +46,7 @@ export type SceneLayerSelection =
   | { kind: 'prop'; id: string }
   | { kind: 'overlay'; id: string }
   | { kind: 'camera' }
+  | { kind: 'reflection' }
   | { kind: 'key-light' }
   | { kind: 'rim-light' }
   | { kind: 'shadow' };
@@ -161,7 +178,7 @@ export default function SceneHierarchy({
     const devices = project.devices.filter((device) => isVisible('device', device.id));
     const props = (project.sceneProps ?? []).filter((prop) => isVisible('prop', prop.id));
     const overlays = (project.overlays ?? []).filter((overlay) => isVisible('overlay', overlay.id));
-    return devices.length * 3 + props.length + overlays.length + 4;
+    return devices.length * 3 + props.length + overlays.length + 5;
   }, [project, layers]);
 
   const pinBranch = (attr: string, id: string) => {
@@ -428,11 +445,22 @@ export default function SceneHierarchy({
                   </button>
                   <button
                     type="button"
+                    className={`scene-tree-row is-studio ${selection.kind === 'reflection' ? 'is-selected' : ''}`}
+                    onClick={() => {
+                      setSelection({ kind: 'reflection' });
+                      onOpenSection('reflection');
+                    }}
+                  >
+                    <img src={iconImage} alt="" />
+                    <span>Reflection</span>
+                  </button>
+                  <button
+                    type="button"
                     className={`scene-tree-row is-studio ${selection.kind === 'key-light' ? 'is-selected' : ''}`}
                     onClick={() => {
                       setSelection({ kind: 'key-light' });
                       onFocusKeyLight();
-                      onOpenSection('environment');
+                      onOpenSection('light');
                     }}
                   >
                     <img src={iconSun} alt="" />
@@ -443,7 +471,7 @@ export default function SceneHierarchy({
                     className={`scene-tree-row is-studio ${selection.kind === 'rim-light' ? 'is-selected' : ''}`}
                     onClick={() => {
                       setSelection({ kind: 'rim-light' });
-                      onOpenSection('environment');
+                      onOpenSection('rim');
                     }}
                   >
                     <img src={iconSun} alt="" />
@@ -454,7 +482,7 @@ export default function SceneHierarchy({
                     className={`scene-tree-row is-studio ${selection.kind === 'shadow' ? 'is-selected' : ''}`}
                     onClick={() => {
                       setSelection({ kind: 'shadow' });
-                      onOpenSection('environment');
+                      onOpenSection('shadow');
                     }}
                   >
                     <img src={iconLayers} alt="" />

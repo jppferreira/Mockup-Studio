@@ -4,6 +4,7 @@ import type { CloudLibraryStatus, CloudListRow } from './lib/cloudLibrary';
 
 declare global {
 declare const __APP_VERSION__: string;
+declare const __SITE_GATE_SHA256__: string;
 
 interface ImportMetaEnv {
   readonly VITE_CHECKOUT_PRO_URL?: string;
@@ -36,6 +37,17 @@ interface Window {
       unchanged: boolean;
     }>;
     cloudRemove: (filePath: string) => Promise<{ ok: boolean }>;
+    cloudTemplatesRead: () => Promise<{
+      path: string;
+      contents: string | null;
+      updatedAt: number;
+      missing: boolean;
+    }>;
+    cloudTemplatesWrite: (contents: string) => Promise<{
+      path: string;
+      updatedAt: number;
+      unchanged: boolean;
+    }>;
     onCloudChanged: (handler: () => void) => () => void;
     saveImage: (dataUrl: string, proposedName: string) => Promise<{ canceled: boolean; path?: string }>;
     saveMedia: (

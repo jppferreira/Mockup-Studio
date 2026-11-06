@@ -1,7 +1,7 @@
 <svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="19" height="19" viewBox="0 0 19 19" fill="none" xmlns="http://www.w3.org/2000/svg">
 <g id="Icon / image">
-<path id="Vector" d="M3.95833 2.375H15.0417C15.9161 2.375 16.625 3.08388 16.625 3.95833V15.0417C16.625 15.9161 15.9161 16.625 15.0417 16.625H3.95833C3.08388 16.625 2.375 15.9161 2.375 15.0417V3.95833C2.375 3.08388 3.08388 2.375 3.95833 2.375Z" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke="#AEB6C4"/>
-<path id="Vector_2" d="M8.3125 7.125C8.3125 7.78084 7.78084 8.3125 7.125 8.3125C6.46916 8.3125 5.9375 7.78084 5.9375 7.125C5.9375 6.46916 6.46916 5.9375 7.125 5.9375C7.78084 5.9375 8.3125 6.46916 8.3125 7.125Z" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke="#AEB6C4"/>
-<path id="Vector_3" d="M16.625 12.6667L11.875 7.91667L3.16667 16.625" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke="#AEB6C4"/>
+<path id="Vector" d="M3.95833 2.375H15.0417C15.9161 2.375 16.625 3.08388 16.625 3.95833V15.0417C16.625 15.9161 15.9161 16.625 15.0417 16.625H3.95833C3.08388 16.625 2.375 15.9161 2.375 15.0417V3.95833C2.375 3.08388 3.08388 2.375 3.95833 2.375Z" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke="#b794ff"/>
+<path id="Vector_2" d="M8.3125 7.125C8.3125 7.78084 7.78084 8.3125 7.125 8.3125C6.46916 8.3125 5.9375 7.78084 5.9375 7.125C5.9375 6.46916 6.46916 5.9375 7.125 5.9375C7.78084 5.9375 8.3125 6.46916 8.3125 7.125Z" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke="#b794ff"/>
+<path id="Vector_3" d="M16.625 12.6667L11.875 7.91667L3.16667 16.625" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" stroke="#b794ff"/>
 </g>
 </svg>

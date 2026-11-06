@@ -14,6 +14,7 @@ import ProceduralDevice from './ProceduralDevice';
 import RotationBall, { type GizmoControl, type GizmoMode, type GizmoTargets } from './RotationBall';
 import SceneProps, { CycloramaBackdrop } from './SceneProps';
 import ExtrudedText from './ExtrudedText';
+import { AnnotationDrawController, ModelAnnotationLayer, type AnnotationMark } from './ModelAnnotations';
 import {
   DEVICE_COLORS, DEFAULT_PROJECT, cameraLensFov,
   type BackgroundPreset, type CameraLens, type CameraView, type DeviceColor, type DeviceInstance,
@@ -82,6 +83,7 @@ interface Props {
   selectedPropId?: string | null;
   onSelectProp?: (id: string) => void;
   onSelectOverlay?: (id: string) => void;
+  selectedOverlayId?: string | null;
   /** Device under the pointer, or null when the pointer leaves the canvas. */
   onHoverDevice?: (id: string | null) => void;
   /** Device under a dragged file, or null when the drag leaves the canvas. */
@@ -103,6 +105,9 @@ interface Props {
   viewGesture?: ViewGesture;
   onSwipe?: (direction: 'left' | 'right') => void;
   onLongPress?: (point: { clientX: number; clientY: number }) => void;
+  /** Draw or pin notes in device space so they follow the model. */
+  annotate?: 'pen' | 'comment' | null;
+  onAnnotation?: (mark: AnnotationMark) => void;
   /** Pixel ratio override. Thumbnails pass 1 to stay light. */
   pixelRatio?: [number, number];
   /** Fires after the device meshes have mounted — thumbnails wait on this. */
@@ -814,6 +819,7 @@ function DeviceGrabController({
   registry,
   gizmoControlRef,
   gizmoDraggingRef,
+  annotateRef,
   onSelect,
   onMove,
   onDraggingChange,
@@ -821,6 +827,7 @@ function DeviceGrabController({
   registry: MutableRefObject<Map<string, THREE.Object3D>>;
   gizmoControlRef: MutableRefObject<GizmoControl | null>;
   gizmoDraggingRef: MutableRefObject<boolean>;
+  annotateRef: MutableRefObject<boolean>;
   onSelect?: (payload: DeviceSelectPayload) => void;
   onMove?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
   onDraggingChange?: (dragging: boolean) => void;
@@ -844,6 +851,7 @@ function DeviceGrabController({
     const normal = new THREE.Vector3();
 
     const onCapture = (event: PointerEvent) => {
+      if (annotateRef.current) return;
       if (event.button !== 0 || draggingRef.current || gizmoDraggingRef.current) return;
       const orbit = controls as { enabled?: boolean; enableRotate?: boolean; enablePan?: boolean } | null;
       if (orbit?.enablePan && orbit.enableRotate === false) return;
@@ -950,7 +958,7 @@ function DeviceGrabController({
     return () => {
       element.removeEventListener('pointerdown', onCapture, true);
     };
-  }, [camera, gl, scene, controls, registry, gizmoControlRef, gizmoDraggingRef]);
+  }, [camera, gl, scene, controls, registry, gizmoControlRef, gizmoDraggingRef, annotateRef]);
 
   return null;
 }
@@ -968,6 +976,11 @@ function DeviceModelView({
   clayMode,
   mediaPlaying,
   dropHighlight = false,
+  anchorRegistry,
+  overlays,
+  overlayTime = 0,
+  selectedOverlayId = null,
+  onSelectOverlay,
 }: {
   instance: DeviceInstance;
   screenshot: string | null;
@@ -977,10 +990,15 @@ function DeviceModelView({
   onGizmoTargets?: (deviceId: string, targets: GizmoTargets | null) => void;
   gizmoDraggingRef: MutableRefObject<boolean>;
   grabRegistry: MutableRefObject<Map<string, THREE.Object3D>>;
+  anchorRegistry: MutableRefObject<Map<string, THREE.Object3D>>;
   deviceColor: DeviceColor;
   clayMode: boolean;
   mediaPlaying?: boolean;
   dropHighlight?: boolean;
+  overlays?: MockupProject['overlays'];
+  overlayTime?: number;
+  selectedOverlayId?: string | null;
+  onSelectOverlay?: (id: string) => void;
 }) {
   const device = getDevice(instance.deviceId);
   const positionRef = useRef<THREE.Group>(null);
@@ -1007,13 +1025,19 @@ function DeviceModelView({
 
   useLayoutEffect(() => {
     const group = positionRef.current;
+    const anchor = rotationRef.current;
     if (!group) return undefined;
     group.userData.deviceGrabId = instance.id;
     grabRegistry.current.set(instance.id, group);
+    if (anchor) {
+      anchor.userData.annotationAnchorId = instance.id;
+      anchorRegistry.current.set(instance.id, anchor);
+    }
     return () => {
       if (grabRegistry.current.get(instance.id) === group) grabRegistry.current.delete(instance.id);
+      if (anchor && anchorRegistry.current.get(instance.id) === anchor) anchorRegistry.current.delete(instance.id);
     };
-  }, [grabRegistry, instance.id]);
+  }, [anchorRegistry, grabRegistry, instance.id]);
 
   useLayoutEffect(() => {
     if (!selected) return undefined;
@@ -1072,6 +1096,13 @@ function DeviceModelView({
             dropHighlight={dropHighlight}
           />
         ) : null}
+        <ModelAnnotationLayer
+          deviceId={instance.id}
+          overlays={overlays}
+          time={overlayTime}
+          selectedId={selectedOverlayId}
+          onSelect={onSelectOverlay}
+        />
       </group>
     </group>
   );
@@ -1450,6 +1481,7 @@ function CameraRig({
   viewGesture = 'rotate',
   onSwipe,
   onLongPress,
+  annotate = null,
 }: {
   view: CameraView;
   lens: CameraLens;
@@ -1465,6 +1497,7 @@ function CameraRig({
   viewGesture?: ViewGesture;
   onSwipe?: (direction: 'left' | 'right') => void;
   onLongPress?: (point: { clientX: number; clientY: number }) => void;
+  annotate?: 'pen' | 'comment' | null;
 }) {
   const { camera, gl } = useThree();
   const controls = useRef<any>(null);
@@ -1613,13 +1646,17 @@ function CameraRig({
 
   useEffect(() => {
     const el = gl.domElement;
-    const idleCursor = spacePan || viewGesture === 'pan'
-      ? 'grab'
-      : viewGesture === 'zoom'
-        ? 'zoom-in'
-        : viewGesture === 'swipe'
-          ? 'ew-resize'
-          : '';
+    const idleCursor = annotate === 'pen'
+      ? 'crosshair'
+      : annotate === 'comment'
+        ? 'copy'
+        : spacePan || viewGesture === 'pan'
+          ? 'grab'
+          : viewGesture === 'zoom'
+            ? 'zoom-in'
+            : viewGesture === 'swipe'
+              ? 'ew-resize'
+              : '';
     el.style.cursor = idleCursor;
     const onPointerDown = () => {
       if (!spacePan && viewGesture !== 'pan') return;
@@ -1634,7 +1671,7 @@ function CameraRig({
       el.removeEventListener('pointerdown', onPointerDown);
       el.removeEventListener('pointerup', onPointerUp);
     };
-  }, [gl, spacePan, viewGesture]);
+  }, [gl, spacePan, viewGesture, annotate]);
 
   useEffect(() => {
     if (viewGesture !== 'longpress' && viewGesture !== 'swipe') return undefined;
@@ -2090,6 +2127,11 @@ function SceneDevices({
   onMoveDevice,
   onGizmoDraggingChange,
   screenDropDeviceId = null,
+  annotate = null,
+  onAnnotation,
+  overlayTime = 0,
+  selectedOverlayId = null,
+  onSelectOverlay,
 }: {
   project: MockupProject;
   gizmoMode: GizmoMode;
@@ -2105,10 +2147,18 @@ function SceneDevices({
   onMoveDevice?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
   onGizmoDraggingChange?: (dragging: boolean) => void;
   screenDropDeviceId?: string | null;
+  annotate?: 'pen' | 'comment' | null;
+  onAnnotation?: (mark: AnnotationMark) => void;
+  overlayTime?: number;
+  selectedOverlayId?: string | null;
+  onSelectOverlay?: (id: string) => void;
 }) {
   const [gizmoTargets, setGizmoTargets] = useState<GizmoTargets | null>(null);
   const gizmoDraggingRef = useRef(false);
   const grabRegistry = useRef(new Map<string, THREE.Object3D>());
+  const anchorRegistry = useRef(new Map<string, THREE.Object3D>());
+  const annotateRef = useRef(false);
+  annotateRef.current = annotate != null;
   const gizmoControlRef = useRef<GizmoControl | null>(null);
   const selectedId = project.selectedDeviceId;
   const selectedIdRef = useRef(selectedId);
@@ -2149,6 +2199,11 @@ function SceneDevices({
             clayMode={clayMode}
             mediaPlaying={mediaPlaying}
             dropHighlight={instance.id === screenDropDeviceId}
+            anchorRegistry={anchorRegistry}
+            overlays={project.overlays}
+            overlayTime={overlayTime}
+            selectedOverlayId={selectedOverlayId}
+            onSelectOverlay={onSelectOverlay}
           />
         );
       })}
@@ -2161,9 +2216,16 @@ function SceneDevices({
         registry={grabRegistry}
         gizmoControlRef={gizmoControlRef}
         gizmoDraggingRef={gizmoDraggingRef}
+        annotateRef={annotateRef}
         onSelect={onSelectDevice}
         onMove={onMoveDevice}
         onDraggingChange={onGizmoDraggingChange}
+      />
+      <AnnotationDrawController
+        mode={annotate ?? null}
+        registry={anchorRegistry}
+        onCommit={onAnnotation}
+        onSelect={onSelectOverlay}
       />
       <RotationBall
         key={`gizmo-${selectedId}-${gizmoActive ? 'on' : 'off'}`}
@@ -2209,6 +2271,7 @@ export default function DeviceCanvas({
   selectedPropId = null,
   onSelectProp,
   onSelectOverlay,
+  selectedOverlayId = null,
   onHoverDevice,
   onDragTargetDevice,
   onDeviceContextMenu,
@@ -2223,6 +2286,8 @@ export default function DeviceCanvas({
   viewGesture = 'rotate',
   onSwipe,
   onLongPress,
+  annotate = null,
+  onAnnotation,
   pixelRatio,
   onSceneReady,
 }: Props) {
@@ -2333,6 +2398,11 @@ export default function DeviceCanvas({
             onMoveDevice={onMoveDevice}
             onGizmoDraggingChange={onGizmoDraggingChange}
             screenDropDeviceId={screenDropDeviceId}
+            annotate={annotate}
+            onAnnotation={onAnnotation}
+            overlayTime={overlayTime}
+            selectedOverlayId={selectedOverlayId}
+            onSelectOverlay={onSelectOverlay}
           />
           <SceneReady onReady={onSceneReady} />
           {project.background !== 'transparent' && (project.shadowOpacity ?? 0.32) > 0.01 && (
@@ -2364,6 +2434,7 @@ export default function DeviceCanvas({
         viewGesture={viewGesture}
         onSwipe={onSwipe}
         onLongPress={onLongPress}
+        annotate={annotate}
       />
       <CaptureBridge
         captureRef={captureRef}

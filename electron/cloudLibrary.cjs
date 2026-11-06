@@ -6,7 +6,9 @@ const { app, dialog, BrowserWindow } = require('electron');
 
 const LIBRARY_FOLDER_NAME = 'Mockup Studio';
 const CONFIG_NAME = 'cloud-library.json';
+const TEMPLATES_FILE_NAME = 'templates.library.json';
 const MAX_BYTES = 45_000_000;
+const MAX_TEMPLATES_BYTES = 8_000_000;
 const PREVIEW_LIMIT = 280_000;
 const SLIM_MEDIA_LIMIT = 180_000;
 
@@ -316,6 +318,7 @@ async function listProjects() {
       }
       continue;
     }
+    if (name === TEMPLATES_FILE_NAME) continue;
     if (!name.endsWith('.mockup.json') || name.startsWith('.')) continue;
     const filePath = path.join(config.dir, name);
     try {
@@ -438,6 +441,51 @@ async function removeProject(filePath) {
   return { ok: true };
 }
 
+async function templatesPath() {
+  const config = await readConfig();
+  if (!config) throw new Error('Choose a sync folder first.');
+  await fs.mkdir(config.dir, { recursive: true });
+  const root = await fs.realpath(config.dir);
+  return path.join(root, TEMPLATES_FILE_NAME);
+}
+
+async function readTemplates() {
+  const target = await templatesPath();
+  try {
+    const stat = await fs.stat(target);
+    if (!stat.isFile() || stat.size > MAX_TEMPLATES_BYTES) {
+      return { path: target, contents: null, updatedAt: 0, missing: true };
+    }
+    const contents = await fs.readFile(target, 'utf8');
+    return { path: target, contents, updatedAt: stat.mtimeMs, missing: false };
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return { path: target, contents: null, updatedAt: 0, missing: true };
+    }
+    throw error;
+  }
+}
+
+async function writeTemplates(contents) {
+  if (typeof contents !== 'string' || !contents || contents.length > MAX_TEMPLATES_BYTES) {
+    throw new Error('Invalid templates library size');
+  }
+  const target = await templatesPath();
+  let unchanged = false;
+  try {
+    unchanged = (await fs.readFile(target, 'utf8')) === contents;
+  } catch {
+    unchanged = false;
+  }
+  if (!unchanged) {
+    const tmp = path.join(path.dirname(target), `.${TEMPLATES_FILE_NAME}.${process.pid}.tmp`);
+    await fs.writeFile(tmp, contents, 'utf8');
+    await fs.rename(tmp, target);
+  }
+  const stat = await fs.stat(target);
+  return { path: target, updatedAt: stat.mtimeMs, unchanged };
+}
+
 let watchers = [];
 let watchTimer = null;
 
@@ -482,6 +530,8 @@ function registerCloudLibraryIpc(ipcMain) {
   ipcMain.handle('cloud:read', (_event, filePath) => readProject(filePath));
   ipcMain.handle('cloud:write', (_event, payload) => writeProject(payload || {}));
   ipcMain.handle('cloud:remove', (_event, filePath) => removeProject(filePath));
+  ipcMain.handle('cloud:templatesRead', () => readTemplates());
+  ipcMain.handle('cloud:templatesWrite', (_event, contents) => writeTemplates(contents));
   void restartWatch();
 }
 
@@ -501,6 +551,8 @@ module.exports = {
   readProject,
   writeProject,
   removeProject,
+  readTemplates,
+  writeTemplates,
   clearLibrary,
   sanitizeCloudName: sanitizeName,
 };
