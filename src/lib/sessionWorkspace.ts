@@ -8,6 +8,18 @@ import {
 
 const SESSION_KEY = 'workspace';
 
+/** True only for a reload of this document, not a fresh visit to the site or app. */
+export function isDocumentReload(): boolean {
+  try {
+    const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
+    if (nav?.type) return nav.type === 'reload';
+  } catch {
+    /* Older runtimes only expose the legacy navigation type. */
+  }
+  const legacy = performance.navigation;
+  return legacy?.type === 1;
+}
+
 const ASPECT_IDS = new Set<string>(EXPORT_ASPECTS.map((item) => item.id));
 const RESOLUTION_IDS = new Set<string>(EXPORT_RESOLUTIONS.map((item) => item.id));
 
@@ -118,10 +130,12 @@ export async function loadSessionWorkspace(): Promise<SessionWorkspace | null> {
       /* Skip a tab whose project no longer validates. */
     }
   }
-  if (!tabs.length) return null;
-  const activeId = typeof raw.activeId === 'string' && tabs.some((tab) => tab.id === raw.activeId)
-    ? raw.activeId
-    : tabs[0].id;
   const frameSize = sanitizeSessionFrameSize(raw.frameSize) ?? undefined;
+  if (!tabs.length && !frameSize) return null;
+  const activeId = tabs.length === 0
+    ? null
+    : (typeof raw.activeId === 'string' && tabs.some((tab) => tab.id === raw.activeId)
+      ? raw.activeId
+      : tabs[0].id);
   return { tabs, activeId, frameSize };
 }

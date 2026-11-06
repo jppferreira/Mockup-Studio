@@ -129,7 +129,7 @@ function planePoint(
   return toLocal(anchor, target);
 }
 
-function pinTexture(index: number, text: string, selected: boolean, accent: string) {
+function pinTexture(index: number, text: string, selected: boolean, accent: string, fill: string, ink: string) {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
   canvas.height = 192;
@@ -137,7 +137,7 @@ function pinTexture(index: number, text: string, selected: boolean, accent: stri
   if (!ctx) return null;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   roundRect(ctx, 10, 36, 492, 124, 28);
-  ctx.fillStyle = selected ? '#fff4d2' : '#f4e7c3';
+  ctx.fillStyle = fill;
   ctx.fill();
   if (selected) {
     ctx.strokeStyle = accent;
@@ -146,14 +146,14 @@ function pinTexture(index: number, text: string, selected: boolean, accent: stri
   }
   ctx.beginPath();
   ctx.arc(64, 98, 24, 0, Math.PI * 2);
-  ctx.fillStyle = '#2a2418';
+  ctx.fillStyle = ink;
   ctx.fill();
-  ctx.fillStyle = '#f4e7c3';
+  ctx.fillStyle = fill;
   ctx.font = '700 28px "SF Pro Display", "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(String(index), 64, 100);
-  ctx.fillStyle = '#2a2418';
+  ctx.fillStyle = ink;
   ctx.textAlign = 'left';
   ctx.font = '600 30px "SF Pro Display", "Segoe UI", system-ui, sans-serif';
   const body = (text || 'Comment').replace(/\s+/g, ' ').trim() || 'Comment';
@@ -259,9 +259,11 @@ function CommentPin({
   const point = overlay.anchor?.points[0];
   const [accentTheme, , accentColor] = useAccentTheme();
   const accent = accentPair(accentTheme, accentColor).accent;
+  const fill = overlay.fill || '#f4e7c3';
+  const ink = overlay.color || '#2a2418';
   const texture = useMemo(
-    () => (point ? pinTexture(index, overlay.text ?? 'Comment', selected, accent) : null),
-    [index, overlay.text, selected, point, accent],
+    () => (point ? pinTexture(index, overlay.text ?? 'Comment', selected, accent, fill, ink) : null),
+    [index, overlay.text, selected, point, accent, fill, ink],
   );
 
   useEffect(() => () => texture?.dispose(), [texture]);
@@ -376,21 +378,25 @@ export function ModelAnnotationLayer({
 
 export function AnnotationDrawController({
   mode,
+  ink = INK,
   registry,
   onCommit,
   onSelect,
 }: {
   mode: 'pen' | 'comment' | null;
+  ink?: string;
   registry: MutableRefObject<Map<string, THREE.Object3D>>;
   onCommit?: (mark: AnnotationMark) => void;
   onSelect?: (id: string) => void;
 }) {
   const { camera, gl, controls } = useThree();
   const modeRef = useRef(mode);
+  const inkRef = useRef(ink);
   const onCommitRef = useRef(onCommit);
   const onSelectRef = useRef(onSelect);
   const controlsRef = useRef(controls);
   modeRef.current = mode;
+  inkRef.current = ink;
   onCommitRef.current = onCommit;
   onSelectRef.current = onSelect;
   controlsRef.current = controls;
@@ -484,7 +490,7 @@ export function AnnotationDrawController({
       screens = [screenPoint(event, element)];
       if (modeRef.current === 'pen') {
         const geometry = new THREE.BufferGeometry().setFromPoints(locals);
-        const material = new THREE.LineBasicMaterial({ color: INK, toneMapped: false, depthTest: true });
+        const material = new THREE.LineBasicMaterial({ color: inkRef.current, toneMapped: false, depthTest: true });
         draft = new THREE.Line(geometry, material);
         draft.frustumCulled = false;
         draft.userData.annotation = true;

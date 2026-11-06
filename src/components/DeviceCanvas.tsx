@@ -1,5 +1,5 @@
 import {
-  Suspense, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type MutableRefObject, type ReactNode,
 } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
@@ -9,19 +9,33 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import { getDevice, type DeviceUv } from '../lib/devices';
 import { applyLidOpen, setupLidRig, type LidRig } from '../lib/deviceLid';
 import { applyProgressiveEdgeBlur } from '../lib/edgeBlur';
+import { accentPair, useAccentTheme } from '../lib/accentTheme';
+import {
+  createNeutralStudioEnvironment,
+  installRenderGrade,
+  NEUTRAL_ENVIRONMENT_INTENSITY,
+  renderOutputGain,
+  setRenderGradeGain,
+} from '../lib/renderRealism';
 import { useScreenEmissiveMap } from '../lib/useScreenTexture';
+import {
+  applySurfaceLook,
+  ReflectionDriveContext,
+  SceneEnvMapContext,
+  surfaceLook,
+  type ReflectionStyle,
+} from '../lib/reflectionStyle';
 import ProceduralDevice from './ProceduralDevice';
 import RotationBall, { type GizmoControl, type GizmoMode, type GizmoTargets } from './RotationBall';
 import SceneProps, { CycloramaBackdrop } from './SceneProps';
 import ExtrudedText from './ExtrudedText';
 import { AnnotationDrawController, ModelAnnotationLayer, type AnnotationMark } from './ModelAnnotations';
 import {
-  DEVICE_COLORS, DEFAULT_PROJECT, cameraLensFov,
+  DEVICE_COLORS, DEFAULT_PROJECT, EYE_CAMERA_DISTANCE, EYE_PERSPECTIVE_FOV, EYE_SPLIT_CAMERA_DISTANCE, cameraLensFov,
   type BackgroundPreset, type CameraLens, type CameraView, type DeviceColor, type DeviceInstance,
   type GradientColors, type MockupProject, type Vec3,
 } from '../types';
 
-const SceneEnvMapContext = createContext<THREE.Texture | null>(null);
 
 export type CaptureApi = {
   toPng: (width: number, height: number) => Promise<string>;
@@ -107,6 +121,8 @@ interface Props {
   onLongPress?: (point: { clientX: number; clientY: number }) => void;
   /** Draw or pin notes in device space so they follow the model. */
   annotate?: 'pen' | 'comment' | null;
+  /** Stroke colour used while drawing an annotation. */
+  annotateInk?: string;
   onAnnotation?: (mark: AnnotationMark) => void;
   /** Pixel ratio override. Thumbnails pass 1 to stay light. */
   pixelRatio?: [number, number];
@@ -317,41 +333,34 @@ function upgradeToPhysical(
   return phys;
 }
 
-/** Glossy clearcoat on the screen itself — reflections sit on top of the screenshot. */
+/** Screen glass. The style sets roughness and clearcoat; intensity must stay above 0 or the clearcoat lobe is black. */
 function applyScreenClearcoat(
   screenMaterial: THREE.MeshStandardMaterial,
+  style: ReflectionStyle,
   amount: number,
+  clay: boolean,
   envMap?: THREE.Texture | null,
 ) {
-  const t = Math.min(1, Math.max(0, amount));
   const physical = (screenMaterial as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial
     ? screenMaterial as THREE.MeshPhysicalMaterial
     : null;
   if (!physical) return;
-  if (envMap) physical.envMap = envMap;
-  // Base stays matte/emissive so the screenshot reads cleanly
-  physical.metalness = 0;
-  physical.roughness = 1;
-  physical.envMapIntensity = 0;
-  physical.transmission = 0;
-  // Clearcoat layer = front glass reflection over the image
-  physical.clearcoat = t;
-  physical.clearcoatRoughness = Math.max(0.02, 0.22 - t * 0.18);
-  physical.specularIntensity = 1;
-  physical.needsUpdate = true;
+  applySurfaceLook(physical, surfaceLook('screen', style, amount, clay), envMap ?? null);
 }
 
 function applyGlassReflection(
   root: THREE.Object3D,
   screenMat: string,
+  style: ReflectionStyle,
   amount: number,
+  clay: boolean,
   glassMats: string[] = [],
   tweaks?: Record<string, Record<string, number | boolean | string>>,
   envMap?: THREE.Texture | null,
   screenMaterial?: THREE.MeshStandardMaterial | null,
 ) {
   const t = Math.min(1, Math.max(0, amount));
-  if (screenMaterial) applyScreenClearcoat(screenMaterial, amount, envMap);
+  if (screenMaterial) applyScreenClearcoat(screenMaterial, style, amount, clay, envMap);
 
   const extraNames = new Set(glassMats);
   const tweakGlassNames = new Set(
@@ -374,10 +383,8 @@ function applyGlassReflection(
       const thinCover = /screen\s*glass|lensinglass|camglass|cam.?glass|camera.?glass|sapphire|glass\.00|base_glass(?!_black)|front_?element|antenna_?window|cpp_?glasses|eye.?transparent/.test(lower)
         && !/back|body|panel|frame|frosted/.test(lower);
 
-      if (envMap) physical.envMap = envMap;
-      physical.transmission = 0;
-      physical.metalness = 0;
-      physical.specularIntensity = 1;
+      const look = surfaceLook('glass', style, amount, clay);
+      applySurfaceLook(physical, look, envMap ?? null);
       physical.specularColor = new THREE.Color(0xffffff);
 
       if (thinCover) {
@@ -386,26 +393,16 @@ function applyGlassReflection(
         physical.transparent = true;
         physical.depthWrite = false;
         physical.blending = THREE.AdditiveBlending;
-        physical.opacity = 0.2 + t * 0.65;
-        physical.roughness = Math.max(0.02, 0.28 - t * 0.24);
-        physical.envMapIntensity = 1.2 + t * 2.8;
-        physical.clearcoat = 0.4 + t * 0.6;
-        physical.clearcoatRoughness = Math.max(0.02, 0.2 - t * 0.16);
+        physical.opacity = style === 'mirror' ? 0.55 + t * 0.3 : style === 'matte' ? 0.12 : 0.28 + t * 0.3;
         mesh.renderOrder = 2;
-      } else {
-        // Body / back / camera glass — glossy opaque or lightly tinted
+      } else if (physical.transparent || (physical.opacity ?? 1) < 0.55) {
         physical.blending = THREE.NormalBlending;
-        physical.envMapIntensity = 0.7 + t * 2.4;
-        physical.roughness = Math.max(0.04, 0.45 - t * 0.38);
-        physical.clearcoat = 0.3 + t * 0.7;
-        physical.clearcoatRoughness = Math.max(0.03, 0.28 - t * 0.22);
-        if (physical.transparent || (physical.opacity ?? 1) < 0.55) {
-          physical.transparent = true;
-          physical.depthWrite = false;
-          physical.opacity = Math.min(0.55, Math.max(0.12, 0.14 + t * 0.35));
-        } else {
-          physical.depthWrite = true;
-        }
+        physical.transparent = true;
+        physical.depthWrite = false;
+        physical.opacity = style === 'mirror' ? 0.5 : style === 'matte' ? 0.14 : 0.32;
+      } else {
+        physical.blending = THREE.NormalBlending;
+        physical.depthWrite = true;
       }
 
       physical.needsUpdate = true;
@@ -505,6 +502,7 @@ function GltfDeviceContent({
   screenshot,
   liveStream,
   glassReflection,
+  reflectionStyle,
   deviceColor,
   clayMode,
   mediaPlaying,
@@ -516,6 +514,7 @@ function GltfDeviceContent({
   screenshot: string | null;
   liveStream?: MediaStream | null;
   glassReflection: number;
+  reflectionStyle: ReflectionStyle;
   deviceColor: DeviceColor;
   clayMode: boolean;
   mediaPlaying?: boolean;
@@ -619,7 +618,9 @@ function GltfDeviceContent({
       applyGlassReflection(
         root,
         device.screenMat,
-        clayMode ? Math.min(glassReflection, 0.12) : glassReflection,
+        reflectionStyle,
+        glassReflection,
+        clayMode,
         device.glassMats,
         device.tweaks,
         envMap,
@@ -628,7 +629,7 @@ function GltfDeviceContent({
     } catch (err) {
       console.warn('[glass reflection]', err);
     }
-  }, [root, device, glassReflection, envMap, screen, clayMode]);
+  }, [root, device, glassReflection, reflectionStyle, envMap, screen, clayMode]);
 
   const applyUv = useCallback((tex: THREE.Texture, original?: THREE.Texture | null) => {
     applyUvTransform(tex, device.uv, original);
@@ -864,17 +865,28 @@ function DeviceGrabController({
       raycaster.setFromCamera(ndc, camera);
       const hits = raycaster.intersectObjects(scene.children, true);
       let deviceId: string | null = null;
+      let gizmoHit = false;
       for (const hit of hits) {
         const kind = classifyPointerHit(hit.object);
         if (kind === 'skip') continue;
-        if (kind === 'gizmo') continue;
-        const id = deviceGrabId(hit.object);
-        if (id) deviceId = id;
+        // Rings are drawn on top of the device, so a ring anywhere along the
+        // ray owns the drag — even when the body is geometrically closer.
+        if (kind === 'gizmo') {
+          gizmoHit = true;
+          break;
+        }
+        deviceId = deviceGrabId(hit.object);
         break;
       }
-      // Rings overlap the body. Grabbing the device moves it; rings only win
-      // where they stick out past the mesh.
-      if (!deviceId) return;
+      if (!gizmoHit) {
+        for (const hit of hits) {
+          if (classifyPointerHit(hit.object) === 'gizmo') {
+            gizmoHit = true;
+            break;
+          }
+        }
+      }
+      if (gizmoHit || !deviceId) return;
       const grabbedId = deviceId;
       const group = registry.current.get(grabbedId);
       if (!group) return;
@@ -1071,6 +1083,11 @@ function DeviceModelView({
       onClick={onClick}
     >
       <group ref={rotationRef}>
+        <ReflectionDriveContext.Provider value={{
+          style: instance.reflectionStyle ?? 'glossy',
+          amount: instance.glassReflection ?? 0.55,
+          clay: clayMode,
+        }}>
         {device.kind === 'procedural' ? (
           <ProceduralDevice
             device={device}
@@ -1089,6 +1106,7 @@ function DeviceModelView({
             screenshot={screenshot}
             liveStream={liveStream}
             glassReflection={instance.glassReflection ?? 0.55}
+            reflectionStyle={instance.reflectionStyle ?? 'glossy'}
             deviceColor={deviceColor}
             clayMode={clayMode}
             mediaPlaying={mediaPlaying}
@@ -1096,6 +1114,7 @@ function DeviceModelView({
             dropHighlight={dropHighlight}
           />
         ) : null}
+        </ReflectionDriveContext.Provider>
         <ModelAnnotationLayer
           deviceId={instance.id}
           overlays={overlays}
@@ -1224,7 +1243,7 @@ function SceneEnvironment({
   colors?: GradientColors | null;
   children?: ReactNode;
 }) {
-  const { gl, scene } = useThree();
+  const { gl } = useThree();
   const colorKey = colors ? `${colors.center}-${colors.mid}-${colors.edge}` : '';
   const [envMap, setEnvMap] = useState<THREE.Texture | null>(null);
 
@@ -1241,10 +1260,6 @@ function SceneEnvironment({
       source.colorSpace = THREE.SRGBColorSpace;
       source.needsUpdate = true;
       rt = pmrem.fromEquirectangular(source);
-      scene.environment = rt.texture;
-      if ('environmentIntensity' in scene) {
-        (scene as THREE.Scene & { environmentIntensity: number }).environmentIntensity = 1.15;
-      }
       setEnvMap(rt.texture);
       source.dispose();
     };
@@ -1279,18 +1294,47 @@ function SceneEnvironment({
 
     return () => {
       cancelled = true;
-      if (rt && scene.environment === rt.texture) scene.environment = null;
       setEnvMap(null);
       rt?.dispose();
       pmrem.dispose();
     };
-  }, [gl, scene, reflectionMap, reflectionMapImage, background, colorKey, colors]);
+  }, [gl, reflectionMap, reflectionMapImage, background, colorKey, colors]);
 
   return (
     <SceneEnvMapContext.Provider value={envMap}>
       {children}
     </SceneEnvMapContext.Provider>
   );
+}
+
+/** Always-on neutral HDRI. Reflection maps stay on the glass only. */
+function NeutralStudioLight() {
+  const { gl, scene } = useThree();
+  useEffect(() => {
+    const environment = createNeutralStudioEnvironment(gl);
+    const previous = scene.environment;
+    const previousIntensity = scene.environmentIntensity;
+    scene.environment = environment.texture;
+    scene.environmentIntensity = NEUTRAL_ENVIRONMENT_INTENSITY;
+    return () => {
+      if (scene.environment === environment.texture) {
+        scene.environment = previous;
+        scene.environmentIntensity = previousIntensity;
+      }
+      environment.dispose();
+    };
+  }, [gl, scene]);
+  return null;
+}
+
+/** Follows the brand accent: purple and green stay cool, warm accents go warm. */
+function RenderGradeSync() {
+  const gl = useThree((state) => state.gl);
+  const [theme, , color] = useAccentTheme();
+  useEffect(() => {
+    setRenderGradeGain(gl, renderOutputGain(accentPair(theme, color).accent));
+  }, [gl, theme, color]);
+  return null;
 }
 
 function isTypingTarget(target: EventTarget | null) {
@@ -1300,7 +1344,7 @@ function isTypingTarget(target: EventTarget | null) {
 }
 
 function viewOffset(view: CameraView, split: boolean): Vec3 {
-  const dist = split ? 7.4 : 5.7;
+  const dist = split ? EYE_SPLIT_CAMERA_DISTANCE : EYE_CAMERA_DISTANCE;
   const positions: Record<CameraView, Vec3> = {
     front: { x: 0, y: 0, z: dist },
     left: { x: -dist, y: 0, z: 0 },
@@ -1356,9 +1400,9 @@ function KeyLightRig({
     const light = lightRef.current;
     if (!light) return;
     light.castShadow = castShadow;
-    // 1024² keeps self-shadow cost reasonable while still reading on glass/metal.
-    light.shadow.mapSize.set(1024, 1024);
-    light.shadow.radius = Math.max(1, shadowSoftness * 1.35);
+    // PCF uses radius (PCF soft ignores it). 2048 keeps a wide penumbra from breaking up.
+    light.shadow.mapSize.set(2048, 2048);
+    light.shadow.radius = Math.max(2, shadowSoftness * 6);
     light.shadow.bias = -0.0002;
     light.shadow.normalBias = 0.025;
     const cam = light.shadow.camera;
@@ -2128,6 +2172,7 @@ function SceneDevices({
   onGizmoDraggingChange,
   screenDropDeviceId = null,
   annotate = null,
+  annotateInk,
   onAnnotation,
   overlayTime = 0,
   selectedOverlayId = null,
@@ -2148,6 +2193,7 @@ function SceneDevices({
   onGizmoDraggingChange?: (dragging: boolean) => void;
   screenDropDeviceId?: string | null;
   annotate?: 'pen' | 'comment' | null;
+  annotateInk?: string;
   onAnnotation?: (mark: AnnotationMark) => void;
   overlayTime?: number;
   selectedOverlayId?: string | null;
@@ -2223,6 +2269,7 @@ function SceneDevices({
       />
       <AnnotationDrawController
         mode={annotate ?? null}
+        ink={annotateInk}
         registry={anchorRegistry}
         onCommit={onAnnotation}
         onSelect={onSelectOverlay}
@@ -2287,6 +2334,7 @@ export default function DeviceCanvas({
   onSwipe,
   onLongPress,
   annotate = null,
+  annotateInk,
   onAnnotation,
   pixelRatio,
   onSceneReady,
@@ -2301,7 +2349,8 @@ export default function DeviceCanvas({
     && project.background !== 'transparent'
     && !studioSet
     && !(project.sceneProps ?? []).some((p) => (
-      p.kind === 'concrete_slab' || p.kind === 'pedestal' || p.kind === 'studio_backdrop'
+      p.kind === 'concrete_slab' || p.kind === 'pedestal' || p.kind === 'stone_plinth'
+      || p.kind === 'metal_disc' || p.kind === 'studio_backdrop'
       || p.kind === 'stage' || p.kind === 'rock'
     ));
   const lightPosition = project.lightPosition ?? DEFAULT_PROJECT.lightPosition;
@@ -2315,14 +2364,15 @@ export default function DeviceCanvas({
       dpr={pixelRatio ?? [1, 2]}
       shadows
       gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' }}
-      camera={{ position: [0, 0, 5.7], fov: 38, near: 0.1, far: 100 }}
+      camera={{ position: [0, 0, EYE_CAMERA_DISTANCE], fov: EYE_PERSPECTIVE_FOV, near: 0.1, far: 100 }}
       style={{ width: '100%', height: '100%', background: '#16191f', display: 'block' }}
       onCreated={({ gl }) => {
         gl.setClearColor('#16191f', 1);
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = 1.45;
         gl.shadowMap.enabled = true;
-        gl.shadowMap.type = THREE.PCFSoftShadowMap;
+        gl.shadowMap.type = THREE.PCFShadowMap;
+        installRenderGrade(gl);
       }}
       onPointerMissed={() => onClearSelection?.()}
     >
@@ -2330,12 +2380,14 @@ export default function DeviceCanvas({
         preset={project.background}
         colors={project.background === 'transparent' ? null : project.gradientColors}
       />
-      <ambientLight intensity={fill * (studioSet ? 1.35 : 1.25)} />
+      <NeutralStudioLight />
+      <RenderGradeSync />
+      <ambientLight intensity={fill * (studioSet ? 0.95 : 0.8)} />
       <hemisphereLight
         args={[
-          studioSet ? '#fffaf4' : '#f7fbff',
-          studioSet ? '#e7e1d8' : '#5a5c64',
-          fill * (studioSet ? 1.05 : 1.2),
+          studioSet ? '#fffaf4' : '#f4f5f6',
+          studioSet ? '#e4ddd4' : '#8a8782',
+          fill * (studioSet ? 1.05 : 1.15),
         ]}
       />
       <KeyLightRig
@@ -2399,6 +2451,7 @@ export default function DeviceCanvas({
             onGizmoDraggingChange={onGizmoDraggingChange}
             screenDropDeviceId={screenDropDeviceId}
             annotate={annotate}
+            annotateInk={annotateInk}
             onAnnotation={onAnnotation}
             overlayTime={overlayTime}
             selectedOverlayId={selectedOverlayId}
@@ -2412,7 +2465,7 @@ export default function DeviceCanvas({
               position={[0, floorY + 0.012, studioSet ? 0.15 : 0]}
               opacity={studioSet ? Math.min(0.34, (project.shadowOpacity ?? 0.32) * 0.9) : Math.min(0.26, (project.shadowOpacity ?? 0.32) * 0.8)}
               scale={studioSet ? 9 : 8}
-              blur={Math.max(5.2, (project.shadowSoftness ?? 2.5) * 1.8)}
+              blur={Math.max(5.2, (project.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness) * 1.8)}
               far={studioSet ? 7 : 6}
               color="#12141a"
             />

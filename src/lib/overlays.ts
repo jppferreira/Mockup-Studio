@@ -28,7 +28,10 @@ export interface SceneOverlay {
   startTime: number;
   endTime: number;
   text?: string;
+  /** Text colour, or the stroke colour of an annotation. */
   color?: string;
+  /** Comment bubble background. */
+  fill?: string;
   /** Relative font size vs frame short edge */
   fontSize?: number;
   /** 0 keeps type flat. Above 0 extrudes it into the 3D scene. */
@@ -51,6 +54,7 @@ export function createOverlay(partial?: Partial<SceneOverlay> & { kind?: Overlay
     endTime: partial?.endTime ?? 30,
     text: partial?.text ?? (kind === 'comment' ? 'Comment' : kind === 'shape' ? 'rect' : kind === 'text' ? 'Your headline' : undefined),
     color: partial?.color ?? '#ffffff',
+    fill: partial?.fill ?? (kind === 'comment' ? '#f4e7c3' : undefined),
     fontSize: partial?.fontSize ?? 0.055,
     extrusion: partial?.extrusion ?? 0,
     imageData: partial?.imageData ?? null,
@@ -146,7 +150,7 @@ export async function drawOverlays(
         const boxW = Math.min(width * 0.7, widest + size * 1.4);
         const boxH = lines.length * lineHeight + size * 0.7;
         const radius = Math.min(14, size * 0.45);
-        ctx.fillStyle = '#f4e7c3';
+        ctx.fillStyle = overlay.fill || '#f4e7c3';
         ctx.beginPath();
         ctx.roundRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH, radius);
         ctx.fill();

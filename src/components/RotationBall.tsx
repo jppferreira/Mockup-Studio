@@ -116,6 +116,7 @@ function addVisibleRing(
   mesh.name = name;
   mesh.renderOrder = 1000;
   mesh.userData.isGizmoHandle = true;
+  mesh.userData.customRing = true;
   root.add(mesh);
 }
 
@@ -145,16 +146,22 @@ function prepareGizmos(rotate: ControlsHandle | null, translate: ControlsHandle 
     for (const child of rotatePicker.children) {
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh) continue;
-      // Keep ring hit targets slim so axis arrows remain easy to grab.
+      // Wide enough to grab, still a band so the arrow tips stay reachable.
       const major = child.name === 'E' ? 1.2 : 1;
-      const tube = child.name === 'E' ? 0.08 : 0.1;
+      const tube = child.name === 'E' ? 0.11 : 0.16;
       thickenTorus(mesh.geometry, major, tube);
       mesh.userData.isGizmoHandle = true;
     }
-    addVisibleRing(rotateRoot, 'X', 1, 0.028, 0xff3355, null);
-    addVisibleRing(rotateRoot, 'Y', 1, 0.028, 0x35d36a, [0, 0, -Math.PI / 2]);
-    addVisibleRing(rotateRoot, 'Z', 1, 0.028, 0x3c7dff, [0, Math.PI / 2, 0]);
-    addVisibleRing(rotateRoot, 'E', 1.2, 0.02, 0xf0c84b, [0, Math.PI / 2, 0]);
+    // Match the picker tori. The gizmo rewrites each handle's quaternion
+    // every frame, so a ring stays under the cursor only when its baked
+    // shape matches the invisible picker of the same name.
+    addVisibleRing(rotateRoot, 'X', 1, 0.04, 0xff3355, [0, -Math.PI / 2, -Math.PI / 2]);
+    addVisibleRing(rotateRoot, 'Y', 1, 0.04, 0x35d36a, [Math.PI / 2, 0, 0]);
+    addVisibleRing(rotateRoot, 'Z', 1, 0.04, 0x3c7dff, [0, 0, -Math.PI / 2]);
+    addVisibleRing(rotateRoot, 'E', 1.25, 0.026, 0xf0c84b, null);
+    for (const child of [...rotateRoot.children]) {
+      if (!child.userData.customRing) child.removeFromParent();
+    }
     markGizmoHandles(rotateRoot);
     rotate.userData.gizmoPrepared = true;
   }
@@ -232,6 +239,92 @@ function setControlsEnabled(controls: ControlsHandle | null, enabled: boolean) {
   controls.enabled = enabled;
 }
 
+type RotateRig = ControlsHandle & {
+  pointerMove?: (pointer: { x: number; y: number; button: number }) => void;
+  pointStart?: THREE.Vector3;
+  pointEnd?: THREE.Vector3;
+  quaternionStart?: THREE.Quaternion;
+  worldQuaternionStart?: THREE.Quaternion;
+  worldPosition?: THREE.Vector3;
+  cameraPosition?: THREE.Vector3;
+  camera?: THREE.Camera;
+  eye?: THREE.Vector3;
+  object?: THREE.Object3D;
+  axis?: string | null;
+  mode?: string;
+  dragging?: boolean;
+  space?: string;
+  size?: number;
+  rotationAngle?: number;
+  unit?: { X: THREE.Vector3; Y: THREE.Vector3; Z: THREE.Vector3 };
+};
+
+const easedQuat = new THREE.Quaternion();
+const worldAxis = new THREE.Vector3();
+const arcStart = new THREE.Vector3();
+const arcEnd = new THREE.Vector3();
+
+/**
+ * Stock axis rings spin from a fixed gain (20 / camera distance), so a short
+ * drag whips the device. Scale that gain down to about one radian per
+ * ring-radius of travel, and fall back to the pointer's arc when the axis
+ * faces the camera (the linear gain blows up there).
+ */
+function easeGimbalRotation(controls: RotateRig | null) {
+  if (!controls?.pointerMove || controls.userData.gimbalEased) return;
+  controls.userData.gimbalEased = true;
+  const original = controls.pointerMove.bind(controls);
+  controls.pointerMove = (pointer) => {
+    original(pointer);
+    const axis = controls.axis;
+    const object = controls.object;
+    if (controls.mode !== 'rotate' || !controls.dragging || !object) return;
+    if (axis !== 'X' && axis !== 'Y' && axis !== 'Z') return;
+    if (controls.space !== 'local') return;
+    const unit = controls.unit?.[axis];
+    const quatStart = controls.quaternionStart;
+    const worldQuat = controls.worldQuaternionStart;
+    const eye = controls.eye;
+    if (!unit || !quatStart || !worldQuat || !eye) return;
+
+    worldAxis.copy(unit).applyQuaternion(worldQuat);
+    const facing = Math.abs(worldAxis.dot(eye));
+    const raw = controls.rotationAngle ?? 0;
+    let angle = raw;
+
+    const start = controls.pointStart;
+    const end = controls.pointEnd;
+    const linearBroken = !Number.isFinite(raw) || facing > 0.99;
+    if (linearBroken && start && end && start.lengthSq() > 1e-6 && end.lengthSq() > 1e-6) {
+      const arc = start.angleTo(end);
+      arcStart.copy(start);
+      arcEnd.copy(end);
+      const sign = arcStart.cross(arcEnd).dot(worldAxis) >= 0 ? 1 : -1;
+      angle = Number.isFinite(arc) ? sign * arc : 0;
+    } else if (Number.isFinite(raw) && raw !== 0) {
+      const distance = controls.worldPosition && controls.cameraPosition
+        ? Math.max(0.5, controls.worldPosition.distanceTo(controls.cameraPosition))
+        : 6;
+      const fov = (controls.camera as THREE.PerspectiveCamera | undefined)?.fov ?? 38;
+      const zoom = (controls.camera as THREE.PerspectiveCamera | undefined)?.zoom || 1;
+      const k = 1.9 * Math.tan(THREE.MathUtils.degToRad(fov) / 2);
+      const factor = distance * Math.min(k / zoom, 7);
+      // three-stdlib scales rotate handles by factor * size / 7.
+      const ringRadius = Math.max(0.2, factor * (controls.size ?? 1) / 7);
+      // Current angle is offset * 20 / distance. Want about offset / ringRadius.
+      const scale = THREE.MathUtils.clamp(distance / (20 * ringRadius), 0.2, 0.6);
+      angle = raw * scale;
+    } else {
+      return;
+    }
+
+    object.quaternion.copy(quatStart);
+    object.quaternion.multiply(easedQuat.setFromAxisAngle(unit, angle)).normalize();
+    controls.rotationAngle = angle;
+    controls.dispatchEvent({ type: 'objectChange' });
+  };
+}
+
 /** Stable Euler readout matching how DeviceModelView applies rotation.set(x,y,z). */
 function readRotation(object: THREE.Object3D): Vec3 {
   const euler = new THREE.Euler().setFromQuaternion(object.quaternion, 'XYZ');
@@ -295,6 +388,7 @@ export default function RotationBall({
     if (!ready) return;
     const id = requestAnimationFrame(() => {
       prepareGizmos(rotateRef.current, translateRef.current);
+      easeGimbalRotation(rotateRef.current);
       styleGizmo(rotateRef.current, 'rotate');
       styleGizmo(translateRef.current, 'translate');
       if (!dragToolRef.current) {
@@ -358,9 +452,9 @@ export default function RotationBall({
   const translateEnabled = listening && (dragTool === null || dragTool === 'translate');
   const rotateEnabled = listening && (dragTool === null || dragTool === 'rotate');
 
-  // Keep arrows a touch larger than rings so tip grabs stay one-axis.
-  const translateSize = mode === 'translate' || dragTool === 'translate' ? 1.2 : 1.1;
-  const rotateSize = mode === 'rotate' || dragTool === 'rotate' ? 0.95 : 0.88;
+  // Arrow tips stay just past the rings so a move and a turn are different grabs.
+  const translateSize = mode === 'translate' || dragTool === 'translate' ? 1.38 : 1.26;
+  const rotateSize = mode === 'rotate' || dragTool === 'rotate' ? 1.18 : 1.08;
 
   return (
     <>

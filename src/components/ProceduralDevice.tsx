@@ -1,9 +1,21 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useContext, useEffect, useMemo, useRef } from 'react';
 import { RoundedBox } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { DeviceModel } from '../lib/devices';
+import { TONE_CAMERA_RING, TONE_STAINLESS, TONE_STAINLESS_DARK } from '../lib/referenceTones';
+import {
+  ReflectionDriveContext,
+  SceneEnvMapContext,
+  surfaceLook,
+} from '../lib/reflectionStyle';
 import { useScreenEmissiveMap } from '../lib/useScreenTexture';
+
+function useSurfaceLook(kind: 'screen' | 'glass') {
+  const drive = useContext(ReflectionDriveContext);
+  const envMap = useContext(SceneEnvMapContext);
+  return { envMap, look: surfaceLook(kind, drive.style, drive.amount, drive.clay) };
+}
 
 function makeScreenGeometry(width: number, height: number, radius: number) {
   const shape = new THREE.Shape();
@@ -51,21 +63,40 @@ function ScreenPlane({
   mediaPlaying?: boolean;
   dropHighlight?: boolean;
 }) {
+  const { envMap, look } = useSurfaceLook('screen');
   const geometry = useMemo(() => makeScreenGeometry(width, height, radius), [width, height, radius]);
   const material = useMemo(
     () =>
-      new THREE.MeshStandardMaterial({
+      new THREE.MeshPhysicalMaterial({
         name,
         color: '#000000',
         emissive: '#ffffff',
         emissiveIntensity: 1,
-        metalness: 0,
-        roughness: 1,
         toneMapped: false,
-        envMapIntensity: 0,
       }),
     [name],
   );
+
+  useEffect(() => {
+    material.envMap = envMap;
+    material.roughness = look.roughness;
+    material.metalness = look.metalness;
+    material.clearcoat = look.clearcoat;
+    material.clearcoatRoughness = look.clearcoatRoughness;
+    material.envMapIntensity = look.envMapIntensity;
+    material.roughnessMap = null;
+    material.metalnessMap = null;
+    material.transmission = 0;
+    material.needsUpdate = true;
+  }, [
+    material,
+    envMap,
+    look.roughness,
+    look.metalness,
+    look.clearcoat,
+    look.clearcoatRoughness,
+    look.envMapIntensity,
+  ]);
 
   useEffect(() => () => {
     geometry.dispose();
@@ -164,14 +195,36 @@ function TitaniumMaterial({ color, clayMode }: { color: string; clayMode?: boole
 }
 
 function GlassBezel() {
+  const { envMap, look } = useSurfaceLook('glass');
   return (
     <meshPhysicalMaterial
       color="#05070a"
-      metalness={0.2}
-      roughness={0.18}
-      clearcoat={1}
-      clearcoatRoughness={0.05}
-      envMapIntensity={0.7}
+      metalness={look.metalness}
+      roughness={look.roughness}
+      clearcoat={look.clearcoat}
+      clearcoatRoughness={look.clearcoatRoughness}
+      envMapIntensity={look.envMapIntensity}
+      envMap={envMap ?? undefined}
+    />
+  );
+}
+
+function GlassSheet() {
+  const { envMap, look } = useSurfaceLook('glass');
+  const drive = useContext(ReflectionDriveContext);
+  const opacity = drive.clay ? 0.04 : drive.style === 'mirror' ? 0.22 : drive.style === 'matte' ? 0.06 : 0.12;
+  return (
+    <meshPhysicalMaterial
+      color="#ffffff"
+      metalness={look.metalness}
+      roughness={look.roughness}
+      transparent
+      opacity={opacity}
+      depthWrite={false}
+      envMapIntensity={look.envMapIntensity}
+      envMap={envMap ?? undefined}
+      clearcoat={look.clearcoat}
+      clearcoatRoughness={look.clearcoatRoughness}
     />
   );
 }
@@ -228,18 +281,7 @@ function DuoHalf({
       {/* Thin glass overlay for reflections */}
       {!clayMode && (
         <RoundedBox args={[halfW - 0.1, height - 0.12, 0.004]} radius={0.065} smoothness={6} position={[0, 0, 0.074]}>
-          <meshPhysicalMaterial
-            color="#ffffff"
-            metalness={0}
-            roughness={0.05}
-            transmission={0.92}
-            thickness={0.02}
-            transparent
-            opacity={0.12}
-            envMapIntensity={1.4}
-            clearcoat={1}
-            clearcoatRoughness={0.02}
-          />
+          <GlassSheet />
         </RoundedBox>
       )}
 
@@ -265,11 +307,11 @@ function DuoHalf({
               <group key={i} position={[x, y, -0.03]}>
                 <mesh rotation={[Math.PI / 2, 0, 0]}>
                   <cylinderGeometry args={[0.085, 0.085, 0.025, 48]} />
-                  <meshStandardMaterial color="#3a3d44" metalness={0.95} roughness={0.2} envMapIntensity={1} />
+                  <meshStandardMaterial color={TONE_CAMERA_RING} metalness={0.95} roughness={0.2} envMapIntensity={1} />
                 </mesh>
                 <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, -0.015]}>
                   <circleGeometry args={[0.055, 48]} />
-                  <meshPhysicalMaterial color="#090d12" metalness={0.8} roughness={0.05} clearcoat={1} />
+                  <GlassBezel />
                 </mesh>
               </group>
             ))}
@@ -340,12 +382,12 @@ function DuoPhone({
       {/* Multi-piece hinge */}
       <mesh>
         <cylinderGeometry args={[0.04, 0.04, height - 0.22, 32]} />
-        <meshStandardMaterial color="#9aa0a6" metalness={0.95} roughness={0.22} envMapIntensity={1.2} />
+        <meshStandardMaterial color={TONE_STAINLESS} metalness={0.95} roughness={0.22} envMapIntensity={1.2} />
       </mesh>
       {[-0.85, 0, 0.85].map((y) => (
         <mesh key={y} position={[0, y, 0]}>
           <cylinderGeometry args={[0.048, 0.048, 0.18, 24]} />
-          <meshStandardMaterial color="#7d838a" metalness={0.98} roughness={0.18} envMapIntensity={1.3} />
+          <meshStandardMaterial color={TONE_STAINLESS_DARK} metalness={0.98} roughness={0.18} envMapIntensity={1.3} />
         </mesh>
       ))}
     </group>

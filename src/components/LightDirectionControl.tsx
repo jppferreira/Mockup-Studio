@@ -326,7 +326,7 @@ export default function LightDirectionControl({
               min={MIN_DIST}
               max={MAX_DIST}
               step={0.1}
-              value={Number(spherical.distance.toFixed(1))}
+              value={spherical.distance.toFixed(1)}
               aria-label="Light distance"
               onChange={(e) => {
                 const next = Number(e.target.value);
