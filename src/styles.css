@@ -7590,7 +7590,7 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
   justify-content: space-between;
   gap: 6px;
 }
-.overlay-axis-num {
+.overlay-row input.overlay-axis-num {
   width: 54px;
   flex: 0 0 auto;
   padding: 2px 4px;
