@@ -3,6 +3,18 @@ import type { MockupProject } from '../types';
 export type OverlayKind = 'text' | 'image' | 'comment' | 'shape' | 'path';
 export type FlatShape = 'rect' | 'ellipse' | 'triangle';
 
+export interface AnchorPoint {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** Local-space mark parented to a device, so it moves and rotates with that model. */
+export interface ModelAnchor {
+  deviceId: string;
+  points: AnchorPoint[];
+}
+
 export interface SceneOverlay {
   id: string;
   kind: OverlayKind;
@@ -22,6 +34,8 @@ export interface SceneOverlay {
   /** 0 keeps type flat. Above 0 extrudes it into the 3D scene. */
   extrusion?: number;
   imageData?: string | null;
+  /** Set when the mark is glued to a device instead of the frame. */
+  anchor?: ModelAnchor;
 }
 
 export function createOverlay(partial?: Partial<SceneOverlay> & { kind?: OverlayKind }): SceneOverlay {
@@ -40,7 +54,26 @@ export function createOverlay(partial?: Partial<SceneOverlay> & { kind?: Overlay
     fontSize: partial?.fontSize ?? 0.055,
     extrusion: partial?.extrusion ?? 0,
     imageData: partial?.imageData ?? null,
+    anchor: sanitizeAnchor(partial?.anchor),
   };
+}
+
+export function sanitizeAnchor(raw: unknown): ModelAnchor | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const item = raw as { deviceId?: unknown; points?: unknown };
+  if (typeof item.deviceId !== 'string' || !item.deviceId.trim()) return undefined;
+  if (!Array.isArray(item.points)) return undefined;
+  const points = item.points.slice(0, 400).flatMap((entry) => {
+    const point = entry as { x?: unknown; y?: unknown; z?: unknown };
+    const x = Number(point?.x);
+    const y = Number(point?.y);
+    const z = Number(point?.z);
+    if (![x, y, z].every(Number.isFinite)) return [];
+    if (Math.abs(x) > 40 || Math.abs(y) > 40 || Math.abs(z) > 40) return [];
+    return [{ x, y, z }];
+  });
+  if (!points.length) return undefined;
+  return { deviceId: item.deviceId, points };
 }
 
 export function flatShapeOf(overlay: SceneOverlay): FlatShape {
@@ -95,6 +128,7 @@ export async function drawOverlays(
 
   for (const overlay of overlays) {
     if (!overlayVisibleAt(overlay, time)) continue;
+    if (overlay.anchor?.points.length && (overlay.kind === 'path' || overlay.kind === 'comment')) continue;
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, overlay.opacity));
     const cx = overlay.x * width;

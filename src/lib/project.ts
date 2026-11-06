@@ -342,6 +342,7 @@ function normalizeOverlays(input: Partial<MockupProject>): SceneOverlay[] {
       fontSize: number(item.fontSize, 0.055, 0.02, 0.2),
       extrusion: number(item.extrusion, 0, 0, 1),
       imageData,
+      anchor: item.anchor,
     })];
   });
 }

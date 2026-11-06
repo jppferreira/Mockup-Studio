@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
+import { accentPair, useAccentTheme } from '../lib/accentTheme';
 import type { SceneProp, Vec3 } from '../types';
 
 function asScale(scale: number | Vec3): [number, number, number] {
@@ -228,6 +229,7 @@ function makeClayMaps(color: string, seed = 1): MaterialMaps {
 }
 
 function ClayMaterial({ color, seed = 1, selected = false }: { color: string; seed?: number; selected?: boolean }) {
+  const [accentTheme, , accentColor] = useAccentTheme();
   const maps = useMemo(() => makeClayMaps(color, seed), [color, seed]);
   return (
     <meshPhysicalMaterial
@@ -238,7 +240,7 @@ function ClayMaterial({ color, seed = 1, selected = false }: { color: string; se
       normalScale={new THREE.Vector2(0.35, 0.35)}
       roughness={0.86}
       metalness={0}
-      emissive={selected ? '#c5f2b6' : '#000000'}
+      emissive={selected ? accentPair(accentTheme, accentColor).soft : '#000000'}
       emissiveIntensity={selected ? 0.22 : 0}
       sheen={0.85}
       sheenRoughness={0.62}

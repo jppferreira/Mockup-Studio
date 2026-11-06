@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
   cloudRead: (filePath) => ipcRenderer.invoke('cloud:read', filePath),
   cloudWrite: (payload) => ipcRenderer.invoke('cloud:write', payload),
   cloudRemove: (filePath) => ipcRenderer.invoke('cloud:remove', filePath),
+  cloudTemplatesRead: () => ipcRenderer.invoke('cloud:templatesRead'),
+  cloudTemplatesWrite: (contents) => ipcRenderer.invoke('cloud:templatesWrite', contents),
   onCloudChanged: (handler) => {
     const listener = () => handler();
     ipcRenderer.on('cloud:changed', listener);

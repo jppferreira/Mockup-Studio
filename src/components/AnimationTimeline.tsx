@@ -15,6 +15,7 @@ import {
 } from '../lib/animation';
 import { PROMPT_SUGGESTIONS } from '../lib/promptAnimate';
 import { promptToAnimationSmart } from '../lib/promptAnimateLocal';
+import { accentPair, useAccentTheme } from '../lib/accentTheme';
 import {
   ANIM_EASES,
   ANIM_PROPERTIES,
@@ -150,7 +151,6 @@ type MusicDrag =
 type KeyRef = { trackId: string; keyframeId: string };
 
 const KEYFRAME_IDLE = '#dce4ed';
-const KEYFRAME_ACTIVE = '#5cecb6';
 
 function clockLabel(seconds: number) {
   const safe = Math.max(0, seconds);
@@ -224,6 +224,8 @@ export default function AnimationTimeline({
   onSoundtrackChange,
   onSoundtrackPatch,
 }: Props) {
+  const [accentTheme, , accentColor] = useAccentTheme();
+  const keyframeActive = accentPair(accentTheme, accentColor).accent;
   const scrubRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -1552,7 +1554,7 @@ export default function AnimationTimeline({
                       style={{
                         left: `${leftPct}%`,
                         width: `${Math.max(widthPct, 0)}%`,
-                        color: KEYFRAME_ACTIVE,
+                        color: keyframeActive,
                       }}
                       title={`${easeLabel(ease)} → next key${ease === 'custom' ? ' · double-click to edit graph' : ''}`}
                       onPointerDown={(e) => e.stopPropagation()}
@@ -1601,7 +1603,7 @@ export default function AnimationTimeline({
                         isHovered ? 'is-hovered' : '',
                         isDragging ? 'is-dragging' : '',
                       ].filter(Boolean).join(' ')}
-                      style={{ left: `${(kf.time / clip.duration) * 100}%`, color: isSelected ? KEYFRAME_ACTIVE : KEYFRAME_IDLE }}
+                      style={{ left: `${(kf.time / clip.duration) * 100}%`, color: isSelected ? keyframeActive : KEYFRAME_IDLE }}
                       title={`${kf.value.toFixed(1)} @ ${kf.time.toFixed(2)}s · ${easeLabel(kf.ease)} — Drag empty lanes to multi-select · Delete to remove`}
                       aria-pressed={isSelected}
                       onMouseEnter={() => setHoveredKeyId(kf.id)}

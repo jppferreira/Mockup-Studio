@@ -215,8 +215,8 @@ function previewForCount(count: number, mode: MockupProject['compositionMode']):
   return 'trio';
 }
 
-export function loadSavedCompositions(): CompositionTemplate[] {
-  return readList(COMP_KEY).flatMap((item) => {
+export function normalizeCompositions(items: unknown[]): CompositionTemplate[] {
+  return items.flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
     const entry = item as Partial<CompositionTemplate>;
     if (typeof entry.id !== 'string' || !entry.id.startsWith('comp-')) return [];
@@ -254,7 +254,7 @@ export function loadSavedCompositions(): CompositionTemplate[] {
       description: typeof entry.description === 'string' && entry.description.trim()
         ? entry.description.trim().slice(0, 80)
         : `${devices.length} device${devices.length === 1 ? '' : 's'}`,
-      badge: 'Saved',
+      badge: 'Template',
       category: 'saved',
       preview: previewForCount(devices.length, mode),
       background: typeof entry.background === 'string' ? entry.background : 'midnight',
@@ -310,6 +310,69 @@ export function loadSavedCompositions(): CompositionTemplate[] {
   }).slice(0, MAX_ITEMS);
 }
 
+export function loadSavedCompositions(): CompositionTemplate[] {
+  return normalizeCompositions(readList(COMP_KEY));
+}
+
+export function replaceSavedCompositions(templates: CompositionTemplate[]): CompositionTemplate[] {
+  const next = normalizeCompositions(templates).slice(0, MAX_ITEMS);
+  writeList(COMP_KEY, next);
+  return next;
+}
+
+export function mergeSavedCompositions(
+  local: CompositionTemplate[],
+  remote: CompositionTemplate[],
+): CompositionTemplate[] {
+  const byId = new Map<string, CompositionTemplate>();
+  for (const item of remote) byId.set(item.id, item);
+  for (const item of local) byId.set(item.id, item);
+  const order: string[] = [];
+  const seen = new Set<string>();
+  for (const item of [...local, ...remote]) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    order.push(item.id);
+  }
+  return order.flatMap((id) => {
+    const item = byId.get(id);
+    return item ? [item] : [];
+  }).slice(0, MAX_ITEMS);
+}
+
+export interface TemplatesLibraryPayload {
+  kind: 'mockup-studio-templates';
+  version: 1;
+  updatedAt: number;
+  templates: CompositionTemplate[];
+}
+
+export function serializeTemplatesLibrary(templates: CompositionTemplate[]): string {
+  const payload: TemplatesLibraryPayload = {
+    kind: 'mockup-studio-templates',
+    version: 1,
+    updatedAt: Date.now(),
+    templates: normalizeCompositions(templates),
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+export function parseTemplatesLibrary(raw: string): CompositionTemplate[] {
+  try {
+    const parsed = JSON.parse(raw) as Partial<TemplatesLibraryPayload> | unknown[];
+    if (Array.isArray(parsed)) return normalizeCompositions(parsed);
+    if (!parsed || typeof parsed !== 'object') return [];
+    if (parsed.kind !== 'mockup-studio-templates') return [];
+    return normalizeCompositions(Array.isArray(parsed.templates) ? parsed.templates : []);
+  } catch {
+    return [];
+  }
+}
+
+export function canonicalTemplatesJson(templates: CompositionTemplate[]): string {
+  return JSON.stringify(normalizeCompositions(templates));
+}
+
 export function saveComposition(label: string, project: MockupProject): CompositionTemplate {
   const compositions = loadSavedCompositions();
   const devices = project.devices.slice(0, 6);
@@ -319,7 +382,7 @@ export function saveComposition(label: string, project: MockupProject): Composit
     id: newId('comp'),
     label: label.trim().slice(0, 40) || project.name.trim().slice(0, 40) || `Composition ${compositions.length + 1}`,
     description: `${devices.length} device${devices.length === 1 ? '' : 's'} · ${mode === 'split' ? 'Split' : 'Single'}`,
-    badge: 'Saved',
+    badge: 'Template',
     category: 'saved',
     preview: previewForCount(devices.length, mode),
     background: project.background,
