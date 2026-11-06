@@ -1,4 +1,5 @@
 import type { DeviceLidConfig } from './deviceLid';
+import { TONE_SILVER } from './referenceTones';
 
 export type { DeviceLidConfig };
 
@@ -30,7 +31,23 @@ export type BuiltinDeviceId =
   | 'macbook_air_13_2023'
   | 'iphone_18_pro_max'
   | 'iphone_18_pro'
+  | 'iphone_17'
+  | 'iphone_air'
   | 'galaxy_s26_ultra'
+  | 'galaxy_s26_plus'
+  | 'galaxy_s26'
+  | 'galaxy_z_fold8'
+  | 'galaxy_z_flip8'
+  | 'galaxy_watch'
+  | 'galaxy_watch_ultra'
+  | 'pixel_11'
+  | 'pixel_11_pro'
+  | 'pixel_11_pro_xl'
+  | 'pixel_fold'
+  | 'pixel_watch'
+  | 'apple_watch_ultra_4'
+  | 'apple_watch_se_3'
+  | 'apple_watch_series_12'
   | 'apple_vision_pro'
   | 'apple_watch_ultra_2';
 
@@ -240,7 +257,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     platform: 'ios',
     kind: 'procedural',
     procedural: 'duo',
-    finish: '#c8ccd1',
+    finish: TONE_SILVER,
     screenMat: 'ProceduralScreen',
     screenSize: { width: 2064, height: 2752 },
     rot: [0, 0, 0],
@@ -622,6 +639,50 @@ export const DEVICE_MODELS: DeviceModel[] = [
     glassMats: ['VJcIxaYCeMHzzAJ', 'EbFYvXZFEOELnji', 'IsuszdatyklnjoT', 'JlRKetQcktLwJwa'],
   },
 ];
+
+/** Same mesh as an existing model, with its own library name and thumbnail. */
+function listedVariant(
+  sourceId: BuiltinDeviceId,
+  id: BuiltinDeviceId,
+  label: string,
+  subtitle: string,
+  category?: DeviceCategoryId,
+  platform?: DevicePlatform,
+): DeviceModel {
+  const source = DEVICE_MODELS.find((device) => device.id === sourceId);
+  if (!source) throw new Error(`Missing device ${sourceId}`);
+  return {
+    ...source,
+    id,
+    label,
+    subtitle,
+    platform: platform ?? source.platform,
+    category: category ?? categoryOfDevice(source),
+    screenSize: { ...source.screenSize },
+    rot: [...source.rot],
+    uv: { ...source.uv },
+    tweaks: source.tweaks ? { ...source.tweaks } : undefined,
+  };
+}
+
+DEVICE_MODELS.push(
+  listedVariant('iphone_17_pro', 'iphone_17', 'iPhone 17', 'iOS'),
+  listedVariant('iphone_18_pro', 'iphone_air', 'iPhone Air', 'iOS'),
+  listedVariant('galaxy_s26_ultra', 'galaxy_s26_plus', 'Galaxy S26+', 'Android', 'phones', 'android'),
+  listedVariant('galaxy_s26_ultra', 'galaxy_s26', 'Galaxy S26', 'Android', 'phones', 'android'),
+  listedVariant('iphone_duo', 'galaxy_z_fold8', 'Galaxy Z Fold 8', 'Android', 'phones', 'android'),
+  listedVariant('galaxy_s26_ultra', 'galaxy_z_flip8', 'Galaxy Z Flip 8', 'Android', 'phones', 'android'),
+  listedVariant('chronograph_watch', 'galaxy_watch', 'Galaxy Watch', 'Android', 'watches', 'android'),
+  listedVariant('chronograph_watch', 'galaxy_watch_ultra', 'Galaxy Watch Ultra', 'Android', 'watches', 'android'),
+  listedVariant('pixel_9', 'pixel_11', 'Pixel 11', 'Android', 'phones', 'android'),
+  listedVariant('pixel_10_pro', 'pixel_11_pro', 'Pixel 11 Pro', 'Android', 'phones', 'android'),
+  listedVariant('pixel_9_pro_xl', 'pixel_11_pro_xl', 'Pixel 11 Pro XL', 'Android', 'phones', 'android'),
+  listedVariant('iphone_duo', 'pixel_fold', 'Pixel Fold', 'Android', 'phones', 'android'),
+  listedVariant('chronograph_watch', 'pixel_watch', 'Pixel Watch', 'Android', 'watches', 'android'),
+  listedVariant('apple_watch_ultra_2', 'apple_watch_ultra_4', 'Apple Watch Ultra 4', 'watchOS', 'watches'),
+  listedVariant('apple_watch_series_7', 'apple_watch_se_3', 'Apple Watch SE 3', 'watchOS', 'watches'),
+  listedVariant('apple_watch_series_7', 'apple_watch_series_12', 'Apple Watch Series 12', 'watchOS', 'watches'),
+);
 
 import {
   customMetaToDeviceModel,

@@ -233,10 +233,7 @@ export default function ProjectsDashboard({
     <div className={`projects-dash ${desktop ? 'is-desktop' : ''}`}>
       <header className="dash-header">
         <div className="dash-brand">
-          <span className="dash-logo" aria-hidden>
-            <i />
-            <i />
-          </span>
+          <img className="dash-logo" src="./splash/logo.png" alt="" width={28} height={28} />
           <strong>Mockup Studio</strong>
         </div>
         <span className="dash-header-rule" aria-hidden />
@@ -443,7 +440,6 @@ export default function ProjectsDashboard({
               <div className="dash-grid dash-grid-models">
                 {visibleDevices.map((device) => {
                   const unlocked = deviceUnlocked(device.id);
-                  const category = categoryOfDevice(device);
                   return (
                     <button
                       key={device.id}
@@ -452,10 +448,7 @@ export default function ProjectsDashboard({
                       onClick={() => onStartDevice(device.id)}
                       title={unlocked ? `Start with ${device.label}` : `${device.label} is a Pro model`}
                     >
-                      <span
-                        className="dash-card-thumb dash-model-thumb"
-                        style={{ background: THUMB_GRADIENT[category] ?? THUMB_GRADIENT.phones }}
-                      >
+                      <span className="dash-card-thumb dash-model-thumb">
                         <DeviceModelThumb deviceId={device.id} />
                       </span>
                       <span className="dash-card-copy">

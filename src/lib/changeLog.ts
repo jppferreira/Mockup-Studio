@@ -136,7 +136,11 @@ function layerSig(layers: CompositionLayer[] | undefined) {
 function describeScenes(before: MockupProject, after: MockupProject): string | null {
   const previous = before.scenes ?? [];
   const next = after.scenes ?? [];
-  if (previous.length < next.length) return 'Added a scene';
+  if (previous.length < next.length) {
+    const added = next.find((scene) => !previous.some((item) => item.id === scene.id));
+    if (added && /\scopy$/i.test(added.name)) return 'Duplicated a scene';
+    return 'Added a scene';
+  }
   if (previous.length > next.length) return 'Removed a scene';
   if (next.some((scene) => {
     const prior = previous.find((item) => item.id === scene.id);
@@ -162,9 +166,17 @@ export function describeProjectChange(before: MockupProject, after: MockupProjec
     if (note && !notes.includes(note)) notes.push(note);
   };
 
+  const sceneNote = describeScenes(before, after);
+  if (
+    sceneNote === 'Switched scene'
+    || sceneNote === 'Added a scene'
+    || sceneNote === 'Duplicated a scene'
+    || sceneNote === 'Removed a scene'
+  ) return sceneNote;
+
   if (before.name !== after.name) push(`Renamed to “${after.name.trim() || 'Untitled'}”`);
   notes.push(...describeDevices(before, after).filter((note) => !notes.includes(note)));
-  push(describeScenes(before, after));
+  push(sceneNote);
 
   const lighting = !numClose(before.lightIntensity, after.lightIntensity)
     || !numClose(before.fillIntensity, after.fillIntensity)

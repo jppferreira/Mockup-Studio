@@ -2,11 +2,13 @@ import { applyAnimationPreset, getAnimationPreset } from './animationPresets';
 import { placeholderForDevice } from './demo';
 import {
   ANDROID_DEVICE_ID, BUILTIN_GRADIENTS, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT, IOS_DEVICE_ID,
-  createCompositionScene, createDefaultAnimation, createDeviceInstance, createSceneProp,
+  commitActiveScene, createCompositionScene, createDefaultAnimation, createDeviceInstance, createSceneProp,
   type AnimationClip, type BackgroundPreset, type CameraLens, type CameraView, type DeviceColor,
-  type DeviceInstance, type GradientColors, type MockupProject, type SceneProp, type Vec3,
+  type DeviceInstance, type GradientColors, type MockupProject, type ReflectionMapId,
+  type SceneProp, type Vec3,
 } from '../types';
 import type { SceneOverlay } from './overlays';
+import { normalizeReflectionStyle, type ReflectionStyle } from './reflectionStyle';
 import { getDevice, type DeviceId } from './devices';
 
 export type TemplateCategory = 'devices' | 'scenes' | 'saved';
@@ -45,11 +47,14 @@ export interface CompositionTemplate {
   cameraLens?: CameraLens;
   lightPosition?: Vec3;
   lightColor?: string;
+  /** Glass environment. Omitted compositions keep the project default. */
+  reflectionMap?: ReflectionMapId;
   edgeBlurTop?: boolean;
   edgeBlurBottom?: boolean;
   edgeBlurAmount?: number;
   deviceExtras?: Array<{
     glassReflection?: number;
+    reflectionStyle?: ReflectionStyle;
     lidOpen?: number;
     deviceColor?: DeviceColor;
     clayMode?: boolean;
@@ -269,6 +274,231 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
   },
 
   // —— Scenic pre-compositions ——
+  // Original studio geometry (stone plinth, metal disc). Free to ship; no paid packs.
+  {
+    id: 'obsidian-plinth',
+    label: 'Obsidian Plinth',
+    description: 'Hero on honed stone, softbox glass',
+    badge: 'Turntable',
+    category: 'scenes',
+    preview: 'pedestal',
+    background: 'midnight',
+    gradient: { center: '#2c333c', mid: '#14181e', edge: '#07090c' },
+    compositionMode: 'single',
+    lightIntensity: 3.2,
+    fillIntensity: 0.38,
+    shadowOpacity: 0.52,
+    shadowSoftness: 2.4,
+    showGroundBase: false,
+    lightPosition: { x: -3.4, y: 6.2, z: 4.4 },
+    lightColor: '#f6f1e8',
+    reflectionMap: 'softbox',
+    motion: 'turntable',
+    devices: [{
+      deviceId: 'iphone_17_pro_max',
+      rotation: { x: -8, y: 24, z: 0 },
+      position: { x: 0, y: 0.32, z: 0.04 },
+      scale: 0.84,
+    }],
+    deviceExtras: [{ glassReflection: 0.78, deviceColor: 'titanium' }],
+    sceneProps: [
+      { id: 'plinth', kind: 'stone_plinth', position: { x: 0, y: -1.28, z: 0 }, rotation: { x: 0, y: 16, z: 0 }, scale: 1, color: '#6e6a62' },
+      { id: 'ring', kind: 'metal_disc', position: { x: 1.42, y: -1.22, z: 0.15 }, rotation: { x: 78, y: 24, z: 8 }, scale: 0.38, color: '#c5ccd4' },
+    ],
+  },
+  {
+    id: 'ivory-laptop',
+    label: 'Ivory Laptop',
+    description: 'Open MacBook on a white cyclorama',
+    badge: 'Float',
+    category: 'scenes',
+    preview: 'studio',
+    background: 'studio',
+    gradient: { center: '#ffffff', mid: '#f6f5f2', edge: '#e7e4de' },
+    compositionMode: 'single',
+    lightIntensity: 2.4,
+    fillIntensity: 1.05,
+    shadowOpacity: 0.28,
+    shadowSoftness: 4.4,
+    showGroundBase: false,
+    lightPosition: { x: 2.4, y: 5.6, z: 5.2 },
+    lightColor: '#fff8f0',
+    reflectionMap: 'studio',
+    motion: 'float',
+    devices: [{
+      deviceId: 'macbook_air_13_2023',
+      rotation: { x: -8, y: 32, z: 0 },
+      position: { x: 0.05, y: -0.05, z: 0.15 },
+      scale: 0.9,
+    }],
+    deviceExtras: [{ lidOpen: 0.72, deviceColor: 'silver', glassReflection: 0.42 }],
+    sceneProps: [
+      { id: 'cyclorama', kind: 'studio_backdrop', position: { x: 0, y: -1.55, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1, color: '#fbfaf7' },
+    ],
+  },
+  {
+    id: 'chrome-floor',
+    label: 'Chrome Floor',
+    description: 'Phone on a brushed disc, city reflections',
+    badge: 'Turntable',
+    category: 'scenes',
+    preview: 'stage',
+    background: 'midnight',
+    gradient: { center: '#3a342e', mid: '#1a1816', edge: '#0a0908' },
+    compositionMode: 'single',
+    lightIntensity: 2.8,
+    fillIntensity: 0.45,
+    shadowOpacity: 0.4,
+    shadowSoftness: 2.2,
+    showGroundBase: false,
+    lightPosition: { x: 4.2, y: 5.4, z: 3.2 },
+    lightColor: '#fff4e4',
+    reflectionMap: 'city',
+    motion: 'turntable',
+    devices: [{
+      deviceId: 'iphone_16_pro_max',
+      rotation: { x: -6, y: 18, z: 0 },
+      position: { x: 0, y: 0.12, z: 0.05 },
+      scale: 0.9,
+    }],
+    deviceExtras: [{ glassReflection: 0.9, deviceColor: 'silver' }],
+    sceneProps: [
+      { id: 'disc', kind: 'metal_disc', position: { x: 0, y: -1.5, z: 0.05 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1.15, y: 1, z: 1.15 }, color: '#d5d8de' },
+    ],
+  },
+  {
+    id: 'watch-still',
+    label: 'Watch Still',
+    description: 'Watch on pale honed stone',
+    badge: 'Still',
+    category: 'scenes',
+    preview: 'pedestal',
+    background: 'studio',
+    gradient: { center: '#f3efe8', mid: '#d9d2c6', edge: '#8f877c' },
+    compositionMode: 'single',
+    lightIntensity: 2.7,
+    fillIntensity: 0.7,
+    shadowOpacity: 0.36,
+    shadowSoftness: 3.2,
+    showGroundBase: false,
+    lightPosition: { x: -2.2, y: 5.8, z: 4.8 },
+    lightColor: '#fff6ea',
+    reflectionMap: 'softbox',
+    motion: 'clear',
+    devices: [{
+      deviceId: 'apple_watch_ultra_2',
+      rotation: { x: -18, y: 28, z: 6 },
+      position: { x: 0, y: 0.35, z: 0.08 },
+      scale: 1.05,
+    }],
+    deviceExtras: [{ deviceColor: 'titanium', glassReflection: 0.55 }],
+    sceneProps: [
+      { id: 'plinth', kind: 'stone_plinth', position: { x: 0, y: -1.22, z: 0 }, rotation: { x: 0, y: -12, z: 0 }, scale: 0.72, color: '#e4ddd2' },
+    ],
+  },
+  {
+    id: 'headphone-drift',
+    label: 'Headphone Drift',
+    description: 'Floating headphones on a dark stage',
+    badge: 'Orbit',
+    category: 'scenes',
+    preview: 'solo',
+    background: 'midnight',
+    gradient: { center: '#243044', mid: '#121820', edge: '#07090d' },
+    compositionMode: 'single',
+    lightIntensity: 2.6,
+    fillIntensity: 0.35,
+    shadowOpacity: 0.2,
+    shadowSoftness: 3.6,
+    showGroundBase: false,
+    cameraLens: 'standard',
+    lightPosition: { x: 3.6, y: 4.2, z: 5 },
+    lightColor: '#e7eef8',
+    reflectionMap: 'city',
+    edgeBlurTop: true,
+    edgeBlurBottom: true,
+    edgeBlurAmount: 16,
+    motion: 'orbit',
+    devices: [{
+      deviceId: 'jbl_tour_one_m3',
+      rotation: { x: -12, y: 36, z: -8 },
+      position: { x: 0.1, y: 0.15, z: 0 },
+      scale: 1.05,
+    }],
+    deviceExtras: [{ deviceColor: 'graphite', glassReflection: 0.35 }],
+  },
+  {
+    id: 'vision-bay',
+    label: 'Vision Bay',
+    description: 'Spatial headset on a dark stage',
+    badge: 'Present',
+    category: 'scenes',
+    preview: 'stage',
+    background: 'midnight',
+    gradient: { center: '#2a2e36', mid: '#14161c', edge: '#08090c' },
+    compositionMode: 'single',
+    lightIntensity: 2.9,
+    fillIntensity: 0.4,
+    shadowOpacity: 0.48,
+    shadowSoftness: 2.8,
+    showGroundBase: false,
+    lightPosition: { x: -2.8, y: 5.5, z: 4.6 },
+    lightColor: '#f3f0ea',
+    reflectionMap: 'studio',
+    motion: 'present',
+    devices: [{
+      deviceId: 'apple_vision_pro',
+      rotation: { x: -6, y: 22, z: 0 },
+      position: { x: 0, y: 0.22, z: 0.02 },
+      scale: 0.92,
+    }],
+    deviceExtras: [{ deviceColor: 'silver', glassReflection: 0.66 }],
+    sceneProps: [
+      { id: 'stage', kind: 'stage', position: { x: 0, y: -1.55, z: 0.02 }, rotation: { x: 0, y: 0, z: 0 }, scale: 0.92, color: '#1c1e22' },
+    ],
+  },
+  {
+    id: 'launch-pair',
+    label: 'Launch Pair',
+    description: 'Two phones on pale stone, shared orbit',
+    badge: 'Orbit',
+    category: 'scenes',
+    preview: 'desk',
+    background: 'studio',
+    gradient: { center: '#f7f3ec', mid: '#e4ddd2', edge: '#b7aea2' },
+    compositionMode: 'single',
+    lightIntensity: 2.5,
+    fillIntensity: 0.85,
+    shadowOpacity: 0.34,
+    shadowSoftness: 3.4,
+    showGroundBase: false,
+    cameraLens: 'standard',
+    lightPosition: { x: -1.5, y: 6.4, z: 5.5 },
+    lightColor: '#fff8f1',
+    reflectionMap: 'softbox',
+    motion: 'orbit',
+    devices: [
+      {
+        deviceId: 'iphone_17_pro',
+        rotation: { x: -8, y: -18, z: -2 },
+        position: { x: -0.72, y: 0.08, z: 0.12 },
+        scale: 0.78,
+      },
+      {
+        deviceId: 'iphone_16_pro_max',
+        rotation: { x: -10, y: 20, z: 2 },
+        position: { x: 0.72, y: 0.04, z: 0.02 },
+        scale: 0.78,
+      },
+    ],
+    deviceExtras: [
+      { deviceColor: 'titanium', glassReflection: 0.6 },
+      { deviceColor: 'silver', glassReflection: 0.6 },
+    ],
+    sceneProps: [
+      { id: 'plinth', kind: 'stone_plinth', position: { x: 0, y: -1.48, z: 0.05 }, rotation: { x: 0, y: 8, z: 0 }, scale: { x: 1.55, y: 0.42, z: 1.05 }, color: '#efe8de' },
+    ],
+  },
   {
     id: 'clay-desk',
     label: 'Clay Desk',
@@ -602,6 +832,7 @@ export function projectFromTemplate(
       scale: entry.scale,
       screenshot: shot ?? placeholderForDevice(entry.deviceId),
       glassReflection: extra?.glassReflection,
+      reflectionStyle: extra?.reflectionStyle,
       lidOpen: extra?.lidOpen,
       deviceColor: extra?.deviceColor,
       clayMode: extra?.clayMode,
@@ -636,9 +867,11 @@ export function projectFromTemplate(
 
   const primaryShot = primary.screenshot ?? placeholderForDevice(primary.deviceId);
 
-  return {
+  return commitActiveScene({
     ...DEFAULT_PROJECT,
     name: options?.name ?? template.label,
+    deviceColor: template.deviceExtras?.[0]?.deviceColor ?? DEFAULT_PROJECT.deviceColor,
+    clayMode: template.deviceExtras?.[0]?.clayMode ?? template.deviceExtras?.[0]?.deviceColor === 'clay',
     screenshot: primaryShot,
     deviceId: primary.deviceId,
     publishTarget: getDevice(primary.deviceId).platform,
@@ -674,6 +907,7 @@ export function projectFromTemplate(
     ...(template.cameraLens ? { cameraLens: template.cameraLens } : {}),
     ...(template.lightPosition ? { lightPosition: { ...template.lightPosition } } : {}),
     ...(template.lightColor ? { lightColor: template.lightColor } : {}),
+    ...(template.reflectionMap ? { reflectionMap: template.reflectionMap } : {}),
     ...(template.edgeBlurTop != null ? { edgeBlurTop: template.edgeBlurTop } : {}),
     ...(template.edgeBlurBottom != null ? { edgeBlurBottom: template.edgeBlurBottom } : {}),
     ...(template.edgeBlurAmount != null ? { edgeBlurAmount: template.edgeBlurAmount } : {}),
@@ -684,7 +918,7 @@ export function projectFromTemplate(
         imageData: null,
       })),
     } : {}),
-  };
+  });
 }
 
 /** Bake the template’s motion around each device’s studio angle. Frame 0 matches that angle. */

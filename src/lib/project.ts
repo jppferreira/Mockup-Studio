@@ -7,10 +7,10 @@ import {
   ANIM_PROPERTIES, BACKGROUNDS, BUILTIN_GRADIENTS, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT,
   DEVICE_COLORS, MAX_COMPOSITION_SCENES, SCENE_PROP_KINDS, createCompositionScene, createDefaultAnimation,
   createDeviceInstance, createSceneProp, ensureCompositionScenes, getSelectedDevice,
-  resolveSceneGradient, syncProjectFromActiveScene, syncProjectFromSelected,
+  applySceneStage, captureSceneStage, resolveSceneGradient, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimKeyframe, type AnimProperty, type AnimTrack, type AnimationClip,
   type CompositionScene, type DeviceColor, type DeviceInstance, type MockupProject,
-  type PublishTarget, type ReflectionMapSetting, type SceneProp, type ScenePropKind, type Vec3,
+  type PublishTarget, type ReflectionMapSetting, type SceneProp, type ScenePropKind, type SceneStage, type Vec3,
 } from '../types';
 import { loadCustomScenePresets } from './scenePresets';
 
@@ -92,6 +92,7 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
         scale: number(item.scale, 1, 0.6, 1.3),
         position: vec3(item.position, { x: 0, y: 0, z: 0 }),
         glassReflection: number(item.glassReflection, 0.55, 0, 1),
+        reflectionStyle: item.reflectionStyle,
         screenshot: shot,
         deviceColor: normalizeDeviceColor(item.deviceColor, projectColor),
         clayMode: typeof item.clayMode === 'boolean' ? item.clayMode : projectClay,
@@ -155,11 +156,9 @@ export function validateProject(value: unknown): MockupProject {
   const linkSplitTransform = input.linkSplitTransform !== false;
   const animation = normalizeAnimation(input.animation, devices);
   const sceneProps = normalizeSceneProps(input);
-  const scenes = normalizeCompositionScenes(input, bg, gradientColors);
-  const activeSceneId = scenes.some((scene) => scene.id === input.activeSceneId)
+  const activeSceneId = Array.isArray(input.scenes) && input.scenes.some((scene) => scene?.id === input.activeSceneId)
     ? String(input.activeSceneId)
-    : scenes[0].id;
-  const activeScene = scenes.find((scene) => scene.id === activeSceneId) ?? scenes[0];
+    : '';
   const publishDevice = devices.find((d) => getDevice(d.deviceId).platform === publishTarget) ?? selected;
   const publishShot = publishDevice.screenshot !== undefined ? publishDevice.screenshot : (input.screenshot || null);
   const publishColor = publishDevice.deviceColor ?? color;
@@ -206,14 +205,14 @@ export function validateProject(value: unknown): MockupProject {
     ? input.reflectionMapImage
     : null;
 
-  return syncProjectFromActiveScene(syncProjectFromSelected({
+  const draft = syncProjectFromSelected({
     version: 1,
     name: input.name.slice(0, 100) || DEFAULT_PROJECT.name,
     screenshot: publishShot,
-    scenes,
-    activeSceneId: activeScene.id,
-    background: activeScene.background,
-    gradientColors: { ...activeScene.gradientColors },
+    scenes: [],
+    activeSceneId: 'pending',
+    background: bg,
+    gradientColors: { ...gradientColors },
     reflectionMap: reflectionMapImage ? 'custom' : (reflectionMap === 'custom' ? 'match_background' : reflectionMap),
     reflectionMapImage,
     deviceId: selected.deviceId,
@@ -262,13 +261,94 @@ export function validateProject(value: unknown): MockupProject {
     soundtrackDuration,
     soundtrackFadeIn,
     soundtrackFadeOut,
-  }, selected));
+  }, selected);
+
+  const scenes = normalizeCompositionScenes(input, bg, gradientColors, draft);
+  const activeScene = scenes.find((scene) => scene.id === activeSceneId) ?? scenes[0];
+  return applySceneStage({
+    ...draft,
+    scenes,
+    activeSceneId: activeScene.id,
+    background: activeScene.background,
+    gradientColors: { ...activeScene.gradientColors },
+  }, activeScene);
+}
+
+function normalizeStoredStage(raw: unknown, fallback: MockupProject): SceneStage {
+  const source = (raw && typeof raw === 'object' ? raw : {}) as Partial<SceneStage>;
+  const hasDevices = Array.isArray(source.devices) && source.devices.length > 0;
+  if (!hasDevices) return captureSceneStage(fallback);
+  const devices = normalizeDevices({
+    devices: source.devices,
+    deviceId: source.devices?.[0]?.deviceId ?? fallback.deviceId,
+    deviceColor: source.devices?.[0]?.deviceColor ?? fallback.deviceColor,
+    clayMode: source.devices?.[0]?.clayMode ?? fallback.clayMode,
+    rotation: fallback.rotation,
+    scale: fallback.scale,
+    screenshot: null,
+  });
+  const selectedDeviceId = devices.some((device) => device.id === source.selectedDeviceId)
+    ? String(source.selectedDeviceId)
+    : devices[0].id;
+  const sceneProps = normalizeSceneProps({ sceneProps: source.sceneProps });
+  const overlays = normalizeOverlays({ overlays: source.overlays });
+  const animation = normalizeAnimation(source.animation, devices);
+  const cameraView = ['front', 'left', 'right', 'top'].includes(String(source.cameraView))
+    ? source.cameraView!
+    : fallback.cameraView;
+  const cameraLens = (['ultrawide', 'wide', 'standard', 'telephoto'] as const).includes(source.cameraLens as never)
+    ? source.cameraLens!
+    : fallback.cameraLens;
+  const reflectionRaw = typeof source.reflectionMap === 'string' ? source.reflectionMap : fallback.reflectionMap;
+  const reflectionMap = REFLECTION_IDS.has(reflectionRaw)
+    ? reflectionRaw as ReflectionMapSetting
+    : fallback.reflectionMap;
+  const reflectionMapImage = reflectionMap === 'custom'
+    && typeof source.reflectionMapImage === 'string'
+    && /^data:image\/(png|jpeg|webp);base64,/.test(source.reflectionMapImage)
+    ? source.reflectionMapImage
+    : null;
+  return {
+    devices,
+    selectedDeviceId,
+    sceneProps,
+    overlays,
+    layers: ensureCompositionLayers({
+      devices,
+      sceneProps,
+      overlays,
+      layers: Array.isArray(source.layers) ? source.layers : undefined,
+    }),
+    animation,
+    cameraView,
+    cameraLens,
+    compositionMode: source.compositionMode === 'split' ? 'split' : 'single',
+    linkSplitTransform: source.linkSplitTransform !== false,
+    publishTarget: source.publishTarget === 'ios' || source.publishTarget === 'android'
+      ? source.publishTarget
+      : fallback.publishTarget,
+    reflectionMap: reflectionMapImage ? 'custom' : (reflectionMap === 'custom' ? 'match_background' : reflectionMap),
+    reflectionMapImage,
+    lightIntensity: number(source.lightIntensity, fallback.lightIntensity, 0.5, 5),
+    lightPosition: vec3(source.lightPosition, fallback.lightPosition),
+    lightColor: typeof source.lightColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(source.lightColor)
+      ? source.lightColor
+      : fallback.lightColor,
+    fillIntensity: number(source.fillIntensity, fallback.fillIntensity, 0, 2.5),
+    shadowSoftness: number(source.shadowSoftness, fallback.shadowSoftness, 0.2, 8),
+    shadowOpacity: number(source.shadowOpacity, fallback.shadowOpacity, 0, 0.85),
+    showGroundBase: source.showGroundBase !== false,
+    edgeBlurTop: typeof source.edgeBlurTop === 'boolean' ? source.edgeBlurTop : fallback.edgeBlurTop,
+    edgeBlurBottom: typeof source.edgeBlurBottom === 'boolean' ? source.edgeBlurBottom : fallback.edgeBlurBottom,
+    edgeBlurAmount: number(source.edgeBlurAmount, fallback.edgeBlurAmount, 4, 64),
+  };
 }
 
 function normalizeCompositionScenes(
   input: Partial<MockupProject>,
   fallbackBackground: MockupProject['background'],
   fallbackGradient: MockupProject['gradientColors'],
+  fallbackProject: MockupProject,
 ): CompositionScene[] {
   const savedPresets = loadCustomScenePresets();
   const isKnownBackground = (id: string) => BACKGROUNDS.some((p) => p.id === id)
@@ -279,7 +359,7 @@ function normalizeCompositionScenes(
     return ensureCompositionScenes({
       background: fallbackBackground,
       gradientColors: fallbackGradient,
-    });
+    }).map((scene) => ({ ...scene, stage: captureSceneStage(fallbackProject) }));
   }
 
   return input.scenes.slice(0, MAX_COMPOSITION_SCENES).map((raw, index) => {
@@ -294,7 +374,7 @@ function normalizeCompositionScenes(
     const gradientFallback = backgroundId === 'transparent'
       ? DEFAULT_GRADIENT
       : (builtinGradient ?? savedGradient ?? fallbackGradient);
-    return createCompositionScene({
+    const scene = createCompositionScene({
       id: typeof item.id === 'string' && item.id ? item.id : `scene-${index + 1}`,
       name: typeof item.name === 'string' && item.name.trim() ? item.name : `Scene ${index + 1}`,
       background: backgroundId,
@@ -302,6 +382,11 @@ function normalizeCompositionScenes(
         ? { ...DEFAULT_GRADIENT }
         : resolveSceneGradient(backgroundId, item.gradientColors, gradientFallback),
     });
+    const stored = (raw as { stage?: unknown }).stage;
+    return {
+      ...scene,
+      stage: stored ? normalizeStoredStage(stored, fallbackProject) : captureSceneStage(fallbackProject),
+    };
   });
 }
 
@@ -339,6 +424,9 @@ function normalizeOverlays(input: Partial<MockupProject>): SceneOverlay[] {
       color: typeof item.color === 'string' && /^#([0-9a-fA-F]{6})$/.test(item.color.trim())
         ? item.color.trim().toLowerCase()
         : '#ffffff',
+      fill: typeof item.fill === 'string' && /^#([0-9a-fA-F]{6})$/.test(item.fill.trim())
+        ? item.fill.trim().toLowerCase()
+        : undefined,
       fontSize: number(item.fontSize, 0.055, 0.02, 0.2),
       extrusion: number(item.extrusion, 0, 0, 1),
       imageData,

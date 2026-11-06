@@ -17,7 +17,7 @@ type ThumbJob = {
   attempt: number;
 };
 
-const THUMB_REV = 'frame10';
+const THUMB_REV = 'frame11';
 const cache = new Map<string, string>();
 const listeners = new Set<() => void>();
 let queue: ThumbJob[] = [];

@@ -2,6 +2,17 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
 import { accentPair, useAccentTheme } from '../lib/accentTheme';
+import {
+  TONE_ALUMINUM,
+  TONE_CLAY,
+  TONE_CONCRETE,
+  TONE_CONCRETE_DARK,
+  TONE_CONCRETE_SHADE,
+  TONE_CONCRETE_SLAB,
+  TONE_GRANITE,
+  TONE_LIMESTONE,
+  TONE_STAGE,
+} from '../lib/referenceTones';
 import type { SceneProp, Vec3 } from '../types';
 
 function asScale(scale: number | Vec3): [number, number, number] {
@@ -412,8 +423,63 @@ function StoneMaterial({ maps, roughness }: { maps: MaterialMaps; roughness: num
       envMapIntensity={0.46}
       sheen={0.18}
       sheenRoughness={0.72}
-      sheenColor="#c7beb2"
+      sheenColor={TONE_LIMESTONE}
     />
+  );
+}
+
+function HonedStone({ maps }: { maps: MaterialMaps }) {
+  return (
+    <meshPhysicalMaterial
+      color="#ffffff"
+      map={maps.map}
+      roughnessMap={maps.roughnessMap}
+      normalMap={maps.normalMap}
+      normalScale={STONE_NORMAL_SCALE}
+      roughness={0.58}
+      metalness={0.02}
+      clearcoat={0.12}
+      clearcoatRoughness={0.4}
+      envMapIntensity={0.42}
+    />
+  );
+}
+
+/** Original honed-stone cylinder. No third-party mesh. */
+function StonePlinth({ seed, tint }: { seed: number; tint: string }) {
+  const maps = useMemo(() => makeStoneMaps(tint, seed), [tint, seed]);
+  return (
+    <group>
+      <mesh position={[0, 0.07, 0]} castShadow receiveShadow>
+        <cylinderGeometry args={[1.08, 1.16, 0.14, 72]} />
+        <HonedStone maps={maps} />
+      </mesh>
+      <mesh position={[0, 0.48, 0]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.76, 0.84, 0.66, 72]} />
+        <HonedStone maps={maps} />
+      </mesh>
+      <mesh position={[0, 0.84, 0]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.86, 0.86, 0.045, 72]} />
+        <HonedStone maps={maps} />
+      </mesh>
+    </group>
+  );
+}
+
+/** Thin brushed disc. Original geometry, coloured by the prop tint. */
+function MetalDisc({ tint }: { tint: string }) {
+  return (
+    <mesh castShadow receiveShadow>
+      <cylinderGeometry args={[1.2, 1.2, 0.035, 80]} />
+      <meshPhysicalMaterial
+        color={tint}
+        metalness={1}
+        roughness={0.16}
+        envMapIntensity={1.3}
+        clearcoat={0.2}
+        clearcoatRoughness={0.18}
+      />
+    </mesh>
   );
 }
 
@@ -474,11 +540,11 @@ function StageSet({ tint }: { tint: string }) {
   );
 }
 
-function ConcreteMaterial({ tint = '#9a958e', seed = 1 }: { tint?: string; seed?: number }) {
+function ConcreteMaterial({ tint = TONE_CONCRETE, seed = 1 }: { tint?: string; seed?: number }) {
   const maps = useMemo(() => makeConcreteMaps(tint, seed), [tint, seed]);
   return (
     <meshStandardMaterial
-      color="#e4e0d8"
+      color="#ffffff"
       map={maps.map}
       roughnessMap={maps.roughnessMap}
       normalMap={maps.normalMap}
@@ -640,7 +706,7 @@ function PropMesh({ prop, selected = false, onSelect }: { prop: SceneProp; selec
   const scale = asScale(prop.scale);
   const rot = prop.rotation;
   const pos = prop.position;
-  const clay = prop.color ?? '#d8cfc4';
+  const clay = prop.color ?? TONE_CLAY;
   const seed = prop.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
 
   return (
@@ -699,11 +765,11 @@ function PropMesh({ prop, selected = false, onSelect }: { prop: SceneProp; selec
         <group position={[0, 1.25, 0]}>
           <mesh castShadow receiveShadow>
             <boxGeometry args={[3.8, 2.7, 0.22]} />
-            <ConcreteMaterial tint="#8f8a80" seed={seed} />
+            <ConcreteMaterial tint={TONE_CONCRETE} seed={seed} />
           </mesh>
           <mesh position={[0, -1.32, 0.02]} castShadow receiveShadow>
             <boxGeometry args={[3.85, 0.06, 0.28]} />
-            <ConcreteMaterial tint="#7e796f" seed={seed + 3} />
+            <ConcreteMaterial tint={TONE_CONCRETE_DARK} seed={seed + 3} />
           </mesh>
         </group>
       )}
@@ -711,35 +777,41 @@ function PropMesh({ prop, selected = false, onSelect }: { prop: SceneProp; selec
         <group>
           <mesh receiveShadow castShadow>
             <boxGeometry args={[4.4, 0.14, 3.4]} />
-            <ConcreteMaterial tint="#a8a297" seed={seed} />
+            <ConcreteMaterial tint={TONE_CONCRETE_SLAB} seed={seed} />
           </mesh>
           <mesh position={[0, -0.09, 0]} receiveShadow>
             <boxGeometry args={[4.35, 0.04, 3.35]} />
-            <meshStandardMaterial color="#6e6962" roughness={1} metalness={0} />
+            <meshStandardMaterial color={TONE_CONCRETE_SHADE} roughness={1} metalness={0} />
           </mesh>
         </group>
       )}
       {prop.kind === 'pedestal' && (
         <group>
           <RoundedBox args={[1.28, 0.22, 1.28]} radius={0.02} smoothness={3} position={[0, 0.11, 0]} castShadow receiveShadow>
-            <ConcreteMaterial tint="#9b968c" seed={seed} />
+            <ConcreteMaterial tint={TONE_CONCRETE} seed={seed} />
           </RoundedBox>
           <RoundedBox args={[1.02, 0.55, 1.02]} radius={0.025} smoothness={3} position={[0, 0.5, 0]} castShadow receiveShadow>
-            <ConcreteMaterial tint="#8f8a80" seed={seed + 2} />
+            <ConcreteMaterial tint={TONE_CONCRETE_DARK} seed={seed + 2} />
           </RoundedBox>
           <RoundedBox args={[1.18, 0.1, 1.18]} radius={0.02} smoothness={2} position={[0, 0.82, 0]} castShadow receiveShadow>
-            <ConcreteMaterial tint="#a8a298" seed={seed + 4} />
+            <ConcreteMaterial tint={TONE_CONCRETE_SLAB} seed={seed + 4} />
           </RoundedBox>
         </group>
+      )}
+      {prop.kind === 'stone_plinth' && (
+        <StonePlinth seed={seed} tint={prop.color ?? TONE_LIMESTONE} />
+      )}
+      {prop.kind === 'metal_disc' && (
+        <MetalDisc tint={prop.color ?? TONE_ALUMINUM} />
       )}
       {prop.kind === 'studio_backdrop' && (
         <StudioBackdrop color={prop.color ?? '#f7f7f5'} />
       )}
       {prop.kind === 'rock' && (
-        <RockMesh seed={seed} tint={prop.color ?? '#8a8478'} />
+        <RockMesh seed={seed} tint={prop.color ?? TONE_GRANITE} />
       )}
       {prop.kind === 'stage' && (
-        <StageSet tint={prop.color ?? '#2c2926'} />
+        <StageSet tint={prop.color ?? TONE_STAGE} />
       )}
     </group>
   );

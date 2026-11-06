@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
-  Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Box, Camera, CaseSensitive, Check, ChevronDown, Circle,
+  Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Box, Camera, Check, ChevronDown, Circle,
   Cone, Cylinder, Dna, Film, Hand, MessageSquare, MoveHorizontal, MousePointer2, PenTool, Pyramid, Square, Torus, Triangle, Type, ZoomIn,
   ClipboardPaste, Columns2, Command, Copy, Download, FileImage, FlipHorizontal2, Gauge, Glasses, Headphones,
   ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, MessageSquarePlus, Minus,
@@ -16,8 +16,6 @@ import CloudSyncPanel, { type CloudTarget } from './components/CloudSyncPanel';
 import ProjectsDashboard from './components/ProjectsDashboard';
 import ChangeLogPanel from './components/ChangeLogPanel';
 import SceneHierarchy, { sameLayerSelection, type SceneLayerSelection } from './components/SceneHierarchy';
-import iconPlus from './assets/scene-hierarchy/icon-plus.svg';
-import { DeviceModelThumbHost } from './components/DeviceModelThumb';
 import TemplateThumb, { TemplateThumbHost } from './components/TemplateThumb';
 import CropFocusOverlay from './components/CropFocusOverlay';
 import CustomDevicePanel, { type CustomDevicePanelHandle } from './components/CustomDevicePanel';
@@ -38,6 +36,7 @@ import {
   type CustomDeviceMeta,
 } from './lib/customDevices';
 import { isPlaceholderScreenshot, placeholderForDevice } from './lib/demo';
+import { TONE_CLAY } from './lib/referenceTones';
 import { recordProjectChange, type ChangeLogEntry } from './lib/changeLog';
 import { bindScrollMore, pinToContainerTop, releasePinPadding } from './lib/scrollMore';
 import {
@@ -137,10 +136,16 @@ import {
   type RecentProjectEntry,
 } from './lib/recentProjects';
 import {
-  loadSessionWorkspace, sanitizeSessionFrameSize, saveSessionWorkspace,
+  isDocumentReload, loadSessionWorkspace, sanitizeSessionFrameSize, saveSessionWorkspace,
   type SessionFrameSize,
 } from './lib/sessionWorkspace';
 import { PROMPT_SUGGESTIONS } from './lib/promptAnimate';
+import {
+  REFLECTION_STYLES,
+  amountForReflectionStyle,
+  reflectionStyleForAmount,
+  type ReflectionStyle,
+} from './lib/reflectionStyle';
 import { promptToAnimationSmart } from './lib/promptAnimateLocal';
 import { deleteCustomScenePreset, loadCustomScenePresets, saveCustomScenePreset } from './lib/scenePresets';
 import {
@@ -155,10 +160,10 @@ import {
   type CompositionTemplate, type TemplateCategory,
 } from './lib/templates';
 import {
-  BACKGROUNDS, CAMERA_LENSES, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT, DEVICE_COLORS,
+  BACKGROUNDS, CAMERA_LENSES, CAMERA_TARGET_ID, DEFAULT_PROJECT, DEVICE_COLORS,
   EXPORT_ASPECTS, EXPORT_ASPECT_GROUPS, EXPORT_FPS_OPTIONS, EXPORT_RESOLUTIONS,
   EXPORT_SIZE_LIMITS, MAX_COMPOSITION_SCENES, MAX_DEVICES, exportAspectFixedSize, exportAspectHasFixed,
-  resolveExportDimensions, addCompositionScene, createDefaultAnimation,
+  resolveExportDimensions, addCompositionScene, commitActiveScene, createDefaultAnimation,
   createDeviceInstance, createSceneProp, ensureCompositionScenes, getSelectedDevice,
   patchActiveCompositionScene, removeCompositionScene, renameCompositionScene,
   switchCompositionScene, syncProjectFromActiveScene, syncProjectFromSelected,
@@ -234,23 +239,7 @@ const ALL_EXPORT_FORMATS: { id: ExportKind; label: string; group: 'still' | 'vid
   ...VIDEO_FORMATS.map((item) => ({ id: item.id as ExportKind, label: item.label, group: 'video' as const })),
 ];
 
-function createInitialWorkspace(): Workspace {
-  const shot = placeholderForDevice(DEFAULT_PROJECT.deviceId);
-  const tab = createProjectTab({
-    ...DEFAULT_PROJECT,
-    gradientColors: { ...DEFAULT_GRADIENT },
-    screenshot: shot,
-    publishTarget: 'ios',
-    linkSplitTransform: true,
-    devices: [{
-      ...DEFAULT_PROJECT.devices[0],
-      screenshot: shot,
-      deviceColor: DEFAULT_PROJECT.deviceColor,
-      clayMode: DEFAULT_PROJECT.clayMode,
-    }],
-  });
-  return { tabs: [tab], activeId: tab.id };
-}
+const EMPTY_WORKSPACE: Workspace = { tabs: [], activeId: null };
 
 function commentNumber(overlays: SceneOverlay[] | undefined, id: string) {
   const index = (overlays ?? []).filter((item) => item.kind === 'comment').findIndex((item) => item.id === id);
@@ -282,7 +271,7 @@ function SliderField({ label, value, min, max, step = 1, unit = '°', onChange }
           min={min}
           max={max}
           step={step}
-          value={Number(value.toFixed(digits))}
+          value={value.toFixed(digits)}
           aria-label={label}
           onChange={(e) => {
             const next = Number(e.target.value);
@@ -543,8 +532,43 @@ function exportRatioThumbStyle(ratio: number, max = 34): CSSProperties {
   return { width: Math.max(10, Math.round(max * ratio)), height: max };
 }
 
+type FloatingMenuBox = {
+  top: number | 'auto';
+  bottom: number | 'auto';
+  left: number;
+  width: number;
+  maxHeight: number;
+};
+
+/** Place a menu beside an anchor so panel overflow cannot clip it. */
+function measureFloatingMenu(anchor: HTMLElement): FloatingMenuBox {
+  const rect = anchor.getBoundingClientRect();
+  const gap = 6;
+  const margin = 12;
+  const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - gap - margin);
+  const spaceAbove = Math.max(0, rect.top - gap - margin);
+  const openBelow = spaceBelow >= 180 || spaceBelow >= spaceAbove;
+  const maxHeight = Math.max(140, Math.min(440, openBelow ? spaceBelow : spaceAbove));
+  if (openBelow) {
+    return {
+      top: rect.bottom + gap,
+      bottom: 'auto',
+      left: rect.left,
+      width: rect.width,
+      maxHeight,
+    };
+  }
+  return {
+    top: 'auto',
+    bottom: window.innerHeight - rect.top + gap,
+    left: rect.left,
+    width: rect.width,
+    maxHeight,
+  };
+}
+
 export default function App() {
-  const [workspace, setWorkspace] = useState<Workspace>(createInitialWorkspace);
+  const [workspace, setWorkspace] = useState<Workspace>(EMPTY_WORKSPACE);
   const [customPresets, setCustomPresets] = useState<ScenePreset[]>(() => loadCustomScenePresets());
   const [savedSizes, setSavedSizes] = useState<SavedAssetSize[]>(() => loadSavedSizes());
   const [savedAngles, setSavedAngles] = useState<SavedAngle[]>(() => loadSavedAngles());
@@ -640,7 +664,9 @@ export default function App() {
   /** Which platform's device menu is open in split mode (`null` = closed). */
   const [splitDeviceMenu, setSplitDeviceMenu] = useState<PublishTarget | null>(null);
   const [aspectDropdownOpen, setAspectDropdownOpen] = useState(false);
+  const [aspectMenuBox, setAspectMenuBox] = useState<FloatingMenuBox | null>(null);
   const aspectDropdownRef = useRef<HTMLDivElement>(null);
+  const aspectMenuRef = useRef<HTMLDivElement>(null);
   const [deviceChosen, setDeviceChosen] = useState(false);
   const [sidePanelsHidden, setSidePanelsHidden] = useState(false);
   const [leftPanelHidden, setLeftPanelHidden] = useState(false);
@@ -659,6 +685,13 @@ export default function App() {
   const flatShapeBtnRef = useRef<HTMLButtonElement>(null);
   const solidShapeBtnRef = useRef<HTMLButtonElement>(null);
   const [shapeMenuBox, setShapeMenuBox] = useState<{ top: number; left: number } | null>(null);
+  const [textMenu, setTextMenu] = useState(false);
+  const textToolRef = useRef<HTMLDivElement>(null);
+  const textMenuRef = useRef<HTMLDivElement>(null);
+  const textBtnRef = useRef<HTMLButtonElement>(null);
+  const [textMenuBox, setTextMenuBox] = useState<{ top: number; left: number } | null>(null);
+  const [markFill, setMarkFill] = useState('#f4e7c3');
+  const [markInk, setMarkInk] = useState('#2a2418');
   const [viewGesture, setViewGesture] = useState<ViewGesture>('rotate');
   const [stageSize, setStageSize] = useState({ w: 1, h: 1 });
   const canvasStageRef = useRef<HTMLDivElement>(null);
@@ -852,12 +885,32 @@ export default function App() {
   }, [splitDeviceMenu]);
 
   useEffect(() => {
+    if (openSectionId !== 'frame') setAspectDropdownOpen(false);
+  }, [openSectionId]);
+
+  useEffect(() => {
     if (!aspectDropdownOpen) return undefined;
     const root = aspectDropdownRef.current;
     if (!root) return undefined;
-    const menu = root.querySelector('.aspect-ratio-menu');
-    if (menu instanceof HTMLElement) menu.scrollTop = 0;
-    return pinToContainerTop(root);
+    const place = () => {
+      const trigger = root.querySelector('.aspect-ratio-trigger');
+      const anchor = trigger instanceof HTMLElement ? trigger : root;
+      setAspectMenuBox(measureFloatingMenu(anchor));
+    };
+    place();
+    const menu = aspectMenuRef.current;
+    if (menu) menu.scrollTop = 0;
+    const onScroll = () => place();
+    const scrollers = [inspectorScrollRef.current, rightPanelRef.current].filter((el): el is HTMLElement => el instanceof HTMLElement);
+    scrollers.forEach((el) => el.addEventListener('scroll', onScroll, { passive: true }));
+    window.addEventListener('resize', onScroll);
+    const observer = new ResizeObserver(onScroll);
+    observer.observe(root);
+    return () => {
+      scrollers.forEach((el) => el.removeEventListener('scroll', onScroll));
+      window.removeEventListener('resize', onScroll);
+      observer.disconnect();
+    };
   }, [aspectDropdownOpen]);
 
   const trackRecent = useCallback((nextProject: MockupProject) => {
@@ -873,7 +926,27 @@ export default function App() {
         hydrateRecentProjects().catch(() => loadRecentProjects()),
       ]);
       if (cancelled) return;
-      if (saved?.tabs.length && !skipSessionRestoreRef.current) setWorkspace(saved);
+      // A refresh keeps the open file. Opening the site or the app starts on
+      // the projects workspace, and that launch clears the saved tabs.
+      let resumed = projects;
+      if (saved?.tabs.length && !skipSessionRestoreRef.current && !workspaceRef.current.tabs.length) {
+        for (const tab of saved.tabs) resumed = rememberRecentProject(tab.project);
+        if (isDocumentReload()) {
+          const restored = { tabs: saved.tabs, activeId: saved.activeId };
+          workspaceRef.current = restored;
+          activeIdRef.current = restored.activeId;
+          setWorkspace(restored);
+        } else {
+          await saveSessionWorkspace(
+            { tabs: [], activeId: null },
+            saved.frameSize ?? frameSizeRef.current,
+          );
+          if (cancelled) return;
+          if (workspaceRef.current.tabs.length) {
+            await saveSessionWorkspace(workspaceRef.current, frameSizeRef.current);
+          }
+        }
+      }
       const frame = saved?.frameSize ? sanitizeSessionFrameSize(saved.frameSize) : null;
       if (frame && !skipSessionRestoreRef.current) {
         const knownSizes = new Set(loadSavedSizes().map((item) => item.id));
@@ -904,7 +977,7 @@ export default function App() {
         return [...byId.values()].sort((a, b) => b.addedAt - a.addedAt).slice(0, 4);
       });
       setRecentProjects((current) => {
-        const byId = new Map(projects.map((entry) => [entry.id, entry]));
+        const byId = new Map(resumed.map((entry) => [entry.id, entry]));
         for (const entry of current) {
           const previous = byId.get(entry.id);
           if (!previous || entry.updatedAt >= previous.updatedAt) byId.set(entry.id, entry);
@@ -954,7 +1027,8 @@ export default function App() {
     const tabId = activeIdRef.current;
     if (!tabId) return;
     const current = liveProjectRef.current;
-    const next = typeof updater === 'function' ? updater(current) : updater;
+    const nextRaw = typeof updater === 'function' ? updater(current) : updater;
+    const next = nextRaw === current ? current : commitActiveScene(nextRaw);
     if (next !== current) {
       liveProjectRef.current = next;
       const existing = changeLogsRef.current.get(tabId) ?? [];
@@ -1190,9 +1264,30 @@ export default function App() {
     }
     if (button) {
       const rect = button.getBoundingClientRect();
-      setShapeMenuBox({ top: rect.bottom + 8, left: rect.left + rect.width / 2 });
+      setShapeMenuBox({ top: rect.top - 8, left: rect.left + rect.width / 2 });
     }
+    setTextMenu(false);
     setShapeMenu(kind);
+  };
+
+  const openTextMenu = () => {
+    const button = textBtnRef.current;
+    if (button) {
+      const rect = button.getBoundingClientRect();
+      const width = 220;
+      const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
+      setTextMenuBox({ top: rect.top - 8, left });
+    }
+    setShapeMenu(null);
+    setTextMenu(true);
+  };
+
+  const toggleTextMenu = () => {
+    if (textMenu) {
+      setTextMenu(false);
+      return;
+    }
+    openTextMenu();
   };
 
   const pinLayer = (kind: 'device' | 'prop' | 'overlay', id: string) => {
@@ -1211,7 +1306,7 @@ export default function App() {
     const prop = createSceneProp({
       kind,
       position: { x: 1.15 + (slot % 3) * 0.15, y: 0.15, z: (slot % 2) * 0.2 },
-      color: '#d8cfc4',
+      color: TONE_CLAY,
     });
     updateProject({ sceneProps: [...existing, prop] });
     pinLayer('prop', prop.id);
@@ -1241,7 +1336,7 @@ export default function App() {
     if (mark.kind === 'path') {
       const next = createOverlay({
         kind: 'path',
-        color: '#e6b325',
+        color: markInk,
         x: mark.x,
         y: mark.y,
         anchor: { deviceId: mark.deviceId, points: mark.points },
@@ -1249,13 +1344,14 @@ export default function App() {
       });
       updateProject({ overlays: [...(project.overlays ?? []), next] });
       pinLayer('overlay', next.id);
-      setOpenSectionId('overlays');
+      openTextMenu();
       return;
     }
     const next = createOverlay({
       kind: 'comment',
       text: 'Comment',
-      color: '#2a2418',
+      color: markInk,
+      fill: markFill,
       x: mark.x,
       y: mark.y,
       fontSize: 0.032,
@@ -1265,7 +1361,23 @@ export default function App() {
     updateProject({ overlays: [...(project.overlays ?? []), next] });
     pinLayer('overlay', next.id);
     setCanvasTool('comments');
-    setOpenSectionId('overlays');
+    openTextMenu();
+  };
+
+  const selectCanvasOverlay = (id: string) => {
+    pinLayer('overlay', id);
+    const overlay = (project.overlays ?? []).find((item) => item.id === id);
+    if (!overlay) return;
+    if (overlay.kind === 'comment') {
+      if (overlay.fill) setMarkFill(overlay.fill);
+      if (overlay.color) setMarkInk(overlay.color);
+      openTextMenu();
+      return;
+    }
+    if (overlay.kind === 'path') {
+      if (overlay.color) setMarkInk(overlay.color);
+      openTextMenu();
+    }
   };
 
   const showComposition = () => {
@@ -1278,22 +1390,10 @@ export default function App() {
     if (!timelineOpen) toggleTimeline();
   };
 
-  const showType = () => {
-    setCanvasTool('type');
-    setOpenSectionId('overlays');
+  const chooseMarkup = (tool: 'comments' | 'pen') => {
+    setCanvasTool((current) => (current === tool ? 'composition' : tool));
     if (timelineOpen) toggleTimeline();
-    const existing = (project.overlays ?? []).filter((item) => item.kind === 'text');
-    if (existing.length) pinLayer('overlay', existing[existing.length - 1].id);
-  };
-
-  const showComments = () => {
-    setCanvasTool('comments');
-    setOpenSectionId('overlays');
-    if (timelineOpen) toggleTimeline();
-  };
-
-  const togglePen = () => {
-    setCanvasTool((tool) => (tool === 'pen' ? 'composition' : 'pen'));
+    openTextMenu();
   };
 
   const onViewSwipe = (direction: 'left' | 'right') => {
@@ -1321,28 +1421,6 @@ export default function App() {
     setOpenSectionId('overlays');
   };
 
-  const addInsertComment = () => {
-    const device = getSelectedDevice(project);
-    const index = (project.overlays ?? []).filter((item) => item.kind === 'comment').length;
-    const next = createOverlay({
-      kind: 'comment',
-      text: 'Comment',
-      color: '#2a2418',
-      x: 0.5,
-      y: 0.5,
-      fontSize: 0.032,
-      anchor: {
-        deviceId: device.id,
-        points: [{ x: (index % 3) * 0.18 - 0.18, y: 0.22 - Math.floor(index / 3) * 0.22, z: 0.1 }],
-      },
-      endTime: animation.duration,
-    });
-    updateProject({ overlays: [...(project.overlays ?? []), next] });
-    pinLayer('overlay', next.id);
-    setCanvasTool('comments');
-    setOpenSectionId('overlays');
-  };
-
   const patchOverlay = useCallback((id: string, patch: Partial<SceneOverlay>) => {
     setProject((current) => ({
       ...current,
@@ -1357,6 +1435,29 @@ export default function App() {
     const candidate = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
     if (!/^#[0-9a-fA-F]{6}$/.test(candidate)) return null;
     return candidate.toLowerCase();
+  };
+
+  const applyMarkColor = (which: 'fill' | 'ink', hex: string) => {
+    const color = normalizeOverlayColor(hex);
+    if (!color) return;
+    if (which === 'fill') setMarkFill(color);
+    else setMarkInk(color);
+    const overlay = (project.overlays ?? []).find((item) => item.id === selectedOverlayId);
+    if (!overlay) return;
+    if (overlay.kind === 'comment') {
+      patchOverlay(overlay.id, which === 'fill' ? { fill: color } : { color });
+    } else if (overlay.kind === 'path' && which === 'ink') {
+      patchOverlay(overlay.id, { color });
+    }
+  };
+
+  const removeSelectedMark = () => {
+    const overlay = (project.overlays ?? []).find((item) => item.id === selectedOverlayId);
+    if (!overlay || (overlay.kind !== 'comment' && overlay.kind !== 'path')) return;
+    updateProject({
+      overlays: (project.overlays ?? []).filter((item) => item.id !== overlay.id),
+    });
+    setSelectedOverlayId(null);
   };
 
   const onOverlayPointerDown = (e: ReactPointerEvent<HTMLDivElement>, overlayId: string) => {
@@ -2031,6 +2132,25 @@ export default function App() {
   }, [shapeMenu]);
 
   useEffect(() => {
+    if (!textMenu) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (textToolRef.current?.contains(target) || textMenuRef.current?.contains(target)) return;
+      if (canvasStageRef.current?.contains(target)) return;
+      setTextMenu(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setTextMenu(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [textMenu]);
+
+  useEffect(() => {
     if (!fileMenuOpen) return undefined;
     const onPointerDown = (event: PointerEvent) => {
       if (!fileMenuRef.current?.contains(event.target as Node)) setFileMenuOpen(false);
@@ -2490,9 +2610,11 @@ export default function App() {
   useEffect(() => {
     if (!aspectDropdownOpen) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (!aspectDropdownRef.current?.contains(event.target as Node)) {
-        setAspectDropdownOpen(false);
-      }
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const inAnchor = aspectDropdownRef.current?.contains(target);
+      const inMenu = target instanceof Element && target.closest('.aspect-ratio-menu');
+      if (!inAnchor && !inMenu) setAspectDropdownOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -3133,6 +3255,7 @@ export default function App() {
         scale: selected.scale,
         position: { x: 0, y: 0, z: 0 },
         glassReflection: selected.glassReflection,
+        reflectionStyle: selected.reflectionStyle,
         screenshot: deviceScreenMedia(selected, current.screenshot),
         deviceColor: selected.deviceColor ?? current.deviceColor,
         clayMode: selected.clayMode ?? current.clayMode,
@@ -3278,6 +3401,7 @@ export default function App() {
           z: selected.position.z - slot * 0.08,
         },
         glassReflection: selected.glassReflection,
+        reflectionStyle: selected.reflectionStyle,
         screenshot: deviceScreenMedia(selected, current.screenshot),
         deviceColor: selected.deviceColor ?? current.deviceColor,
         clayMode: selected.clayMode ?? current.clayMode,
@@ -3507,13 +3631,13 @@ export default function App() {
     setProject((current) => switchCompositionScene(current, sceneId));
   };
 
-  const onAddCompositionScene = () => {
+  const onCreateCompositionScene = (mode: 'duplicate' | 'blank') => {
     if (compositionScenes.length >= MAX_COMPOSITION_SCENES) {
       notify(`Up to ${MAX_COMPOSITION_SCENES} scenes per composition`);
       return;
     }
-    setProject((current) => addCompositionScene(current, true));
-    notify('Scene added');
+    setProject((current) => addCompositionScene(current, mode));
+    notify(mode === 'duplicate' ? 'Scene duplicated' : 'New scene');
   };
 
   const onRemoveCompositionScene = (sceneId: string) => {
@@ -3651,6 +3775,11 @@ export default function App() {
     notify('Camera and device position reset');
   };
 
+  const selectedMark = (project.overlays ?? []).find((item) => (
+    item.id === selectedOverlayId && (item.kind === 'comment' || item.kind === 'path')
+  )) ?? null;
+  const selectedComment = selectedMark?.kind === 'comment' ? selectedMark : null;
+
   return (
     <div className={`app-shell ${hasOpenProject ? 'has-project' : 'is-dashboard'}`}>
       {hasOpenProject && (
@@ -3686,7 +3815,19 @@ export default function App() {
                   onClick={() => {
                     setLeftWorkspaceTab('scenes');
                     setFileMenuOpen(false);
-                    onAddCompositionScene();
+                    onCreateCompositionScene('duplicate');
+                  }}
+                >
+                  Duplicate Scene
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={compositionScenes.length >= MAX_COMPOSITION_SCENES}
+                  onClick={() => {
+                    setLeftWorkspaceTab('scenes');
+                    setFileMenuOpen(false);
+                    onCreateCompositionScene('blank');
                   }}
                 >
                   New Scene
@@ -3868,17 +4009,6 @@ export default function App() {
                   Assets
                 </button>
               </div>
-              <button
-                type="button"
-                className="left-workspace-add"
-                title="Add scene"
-                aria-label="Add scene"
-                disabled={compositionScenes.length >= MAX_COMPOSITION_SCENES}
-                onClick={onAddCompositionScene}
-              >
-                <img src={iconPlus} alt="" />
-                <span>Add scene</span>
-              </button>
             </div>
             <button
               type="button"
@@ -3915,16 +4045,15 @@ export default function App() {
                   onDeleteLook={onDeletePreset}
                   onOpenSection={(sectionId) => setOpenSectionId(sectionId)}
                   onOpenAssets={() => setLeftWorkspaceTab('assets')}
-                  onSelectOverlay={(overlayId) => {
-                    pinLayer('overlay', overlayId);
-                    const overlay = (project.overlays ?? []).find((item) => item.id === overlayId);
-                    if (overlay?.kind === 'comment') setCanvasTool('comments');
-                  }}
+                  onSelectOverlay={selectCanvasOverlay}
                   onSelectProp={(propId) => pinLayer('prop', propId)}
                   onRemoveProp={removeSceneProp}
                   onFocusKeyLight={() => setLightGizmoActive(true)}
                   onSelectionChange={onLayerSelection}
                   layerPin={layerPin}
+                  onAddScene={() => onCreateCompositionScene('blank')}
+                  onDuplicateScene={() => onCreateCompositionScene('duplicate')}
+                  canAddScene={compositionScenes.length < MAX_COMPOSITION_SCENES}
                 />
               </section>
             ) : leftWorkspaceTab === 'log' ? (
@@ -4279,7 +4408,7 @@ export default function App() {
                         overlayTime={animTime}
                         selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
                         onSelectProp={(id) => pinLayer('prop', id)}
-                        onSelectOverlay={(id) => pinLayer('overlay', id)}
+                        onSelectOverlay={selectCanvasOverlay}
                         onClearSelection={() => setDeviceMenu(null)}
                         onRotateDevice={onRotateDevice}
                         onMoveDevice={onMoveDevice}
@@ -4290,6 +4419,7 @@ export default function App() {
                         onSwipe={onViewSwipe}
                         onLongPress={onViewLongPress}
                         annotate={canvasTool === 'pen' ? 'pen' : canvasTool === 'comments' ? 'comment' : null}
+                        annotateInk={markInk}
                         onAnnotation={commitAnnotation}
                         selectedOverlayId={selectedOverlayId}
                       />
@@ -4323,7 +4453,7 @@ export default function App() {
                         overlayTime={animTime}
                         selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
                         onSelectProp={(id) => pinLayer('prop', id)}
-                        onSelectOverlay={(id) => pinLayer('overlay', id)}
+                        onSelectOverlay={selectCanvasOverlay}
                         onClearSelection={() => setDeviceMenu(null)}
                         onRotateDevice={onRotateDevice}
                         onMoveDevice={onMoveDevice}
@@ -4334,6 +4464,7 @@ export default function App() {
                         onSwipe={onViewSwipe}
                         onLongPress={onViewLongPress}
                         annotate={canvasTool === 'pen' ? 'pen' : canvasTool === 'comments' ? 'comment' : null}
+                        annotateInk={markInk}
                         onAnnotation={commitAnnotation}
                         selectedOverlayId={selectedOverlayId}
                       />
@@ -4359,7 +4490,7 @@ export default function App() {
                         overlayTime={animTime}
                         selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
                         onSelectProp={(id) => pinLayer('prop', id)}
-                        onSelectOverlay={(id) => pinLayer('overlay', id)}
+                        onSelectOverlay={selectCanvasOverlay}
                   onClearSelection={() => setDeviceMenu(null)}
                   onRotateDevice={onRotateDevice}
                   onMoveDevice={onMoveDevice}
@@ -4370,6 +4501,7 @@ export default function App() {
                   onSwipe={onViewSwipe}
                   onLongPress={onViewLongPress}
                   annotate={canvasTool === 'pen' ? 'pen' : canvasTool === 'comments' ? 'comment' : null}
+                  annotateInk={markInk}
                   onAnnotation={commitAnnotation}
                   selectedOverlayId={selectedOverlayId}
                 />
@@ -4397,7 +4529,12 @@ export default function App() {
                       top: `${overlay.y * 100}%`,
                       opacity: overlay.opacity,
                       transform: `translate(-50%, -50%) scale(${overlay.scale})`,
-                      color: overlay.kind === 'text' && (overlay.extrusion ?? 0) > 0.001 ? 'transparent' : (overlay.color || '#fff'),
+                      color: overlay.kind === 'comment'
+                        ? (overlay.color || '#2a2418')
+                        : overlay.kind === 'text' && (overlay.extrusion ?? 0) > 0.001
+                          ? 'transparent'
+                          : (overlay.color || '#fff'),
+                      background: overlay.kind === 'comment' ? (overlay.fill || '#f4e7c3') : undefined,
                       fontSize: `${Math.max(14, (overlay.fontSize ?? 0.055) * 420)}px`,
                     }}
                     onPointerDown={(e) => onOverlayPointerDown(e, overlay.id)}
@@ -4406,14 +4543,22 @@ export default function App() {
                     onPointerCancel={onOverlayPointerUp}
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (overlay.kind === 'comment' || overlay.kind === 'path') {
+                        selectCanvasOverlay(overlay.id);
+                        return;
+                      }
                       pinLayer('overlay', overlay.id);
-                      if (overlay.kind === 'comment') setCanvasTool('comments');
                       setOpenSectionId('overlays');
                     }}
                   >
                     {overlay.kind === 'comment' ? (
                       <>
-                        <span className="canvas-comment-pin">{commentNumber(project.overlays, overlay.id)}</span>
+                        <span
+                          className="canvas-comment-pin"
+                          style={{ background: overlay.color || '#2a2418', color: overlay.fill || '#f4e7c3' }}
+                        >
+                          {commentNumber(project.overlays, overlay.id)}
+                        </span>
                         <span className="canvas-comment-text">{overlay.text}</span>
                       </>
                     ) : overlay.kind === 'text' ? overlay.text : null}
@@ -4513,151 +4658,8 @@ export default function App() {
               onSelectFormat={applyPlatformFrame}
             />
           )}
-          <div className="canvas-tool-bar">
-            <div className="canvas-tool-bar-row" role="toolbar" aria-label="Canvas tools">
-              <div className="canvas-tool-modes" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  title="Composition"
-                  aria-label="Composition"
-                  aria-selected={canvasTool === 'composition'}
-                  className={canvasTool === 'composition' ? 'is-active' : ''}
-                  onClick={showComposition}
-                >
-                  <Layers3 size={15} />
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  title="Animate"
-                  aria-label="Animate"
-                  aria-selected={canvasTool === 'animate'}
-                  className={canvasTool === 'animate' ? 'is-active' : ''}
-                  onClick={showAnimate}
-                >
-                  <Film size={15} />
-                </button>
-              </div>
-              <span className="canvas-tool-divider" />
-              <div className="canvas-tool-pops" ref={shapeMenuRef}>
-                <div className="canvas-tool-pop">
-                  <button
-                    ref={flatShapeBtnRef}
-                    type="button"
-                    title="2D shapes"
-                    aria-label="2D shapes"
-                    aria-expanded={shapeMenu === 'flat'}
-                    aria-haspopup="menu"
-                    className={shapeMenu === 'flat' ? 'is-active' : ''}
-                    onClick={() => openShapeMenu('flat', flatShapeBtnRef.current)}
-                  >
-                    <Square size={15} />
-                  </button>
-                </div>
-                <div className="canvas-tool-pop">
-                  <button
-                    ref={solidShapeBtnRef}
-                    type="button"
-                    title="3D shapes"
-                    aria-label="3D shapes"
-                    aria-expanded={shapeMenu === 'solid'}
-                    aria-haspopup="menu"
-                    className={shapeMenu === 'solid' ? 'is-active' : ''}
-                    onClick={() => openShapeMenu('solid', solidShapeBtnRef.current)}
-                  >
-                    <Box size={15} />
-                  </button>
-                </div>
-              </div>
-              {shapeMenu && shapeMenuBox && createPortal(
-                <div
-                  ref={floatingMenuRef}
-                  className="canvas-tool-menu"
-                  role="menu"
-                  aria-label={shapeMenu === 'flat' ? '2D shapes' : '3D shapes'}
-                  style={{ top: shapeMenuBox.top, left: shapeMenuBox.left }}
-                >
-                  {shapeMenu === 'flat'
-                    ? FLAT_SHAPES.map((shape) => {
-                      const Icon = shape.icon;
-                      return (
-                        <button
-                          key={shape.id}
-                          type="button"
-                          role="menuitem"
-                          title={shape.label}
-                          aria-label={`Add ${shape.label}`}
-                          onClick={() => {
-                            addFlatShape(shape.id);
-                            setShapeMenu(null);
-                          }}
-                        >
-                          <Icon size={15} />
-                        </button>
-                      );
-                    })
-                    : INSERT_SHAPES.map((shape) => {
-                      const Icon = shape.icon;
-                      return (
-                        <button
-                          key={shape.kind}
-                          type="button"
-                          role="menuitem"
-                          title={shape.label}
-                          aria-label={`Add ${shape.label}`}
-                          onClick={() => {
-                            addInsertShape(shape.kind);
-                            setShapeMenu(null);
-                          }}
-                        >
-                          <Icon size={15} />
-                        </button>
-                      );
-                    })}
-                </div>,
-                document.body,
-              )}
-              <span className="canvas-tool-divider" />
-              <button type="button" title="Text" aria-label="Text" onClick={addInsertText}>
-                <Type size={15} />
-              </button>
-              <button
-                type="button"
-                title="Annotate the model"
-                aria-label="Annotate the model"
-                aria-pressed={canvasTool === 'pen'}
-                className={canvasTool === 'pen' ? 'is-active' : ''}
-                onClick={togglePen}
-              >
-                <PenTool size={15} />
-              </button>
-              <button
-                type="button"
-                role="tab"
-                title="Type"
-                aria-label="Type"
-                aria-selected={canvasTool === 'type'}
-                className={canvasTool === 'type' ? 'is-active' : ''}
-                onClick={showType}
-              >
-                <CaseSensitive size={15} />
-              </button>
-              <button
-                type="button"
-                role="tab"
-                title="Notes on the model"
-                aria-label="Notes on the model"
-                aria-selected={canvasTool === 'comments'}
-                className={canvasTool === 'comments' ? 'is-active' : ''}
-                onClick={showComments}
-              >
-                <MessageSquare size={15} />
-              </button>
-            </div>
-          </div>
-          {!sidePanelsHidden && (
-            <div className={`workspace-bottom-chrome ${timelineOpen ? 'is-raised' : ''}`}>
+          <div className={`workspace-bottom-chrome ${timelineOpen && !sidePanelsHidden ? 'is-raised' : ''}`}>
+            {!sidePanelsHidden && (
               <div
                 ref={studioAiShellRef}
                 className={`studio-ai ${studioAiOpen ? 'is-open' : 'is-compact'}`}
@@ -4733,32 +4735,210 @@ export default function App() {
                   </form>
                 )}
               </div>
+            )}
               <div className="workspace-mode-cluster">
-              <nav className="workspace-mode-dock" aria-label="Workspace mode">
-                <div className="workspace-mode-dock-tabs" role="tablist">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={!timelineOpen}
-                    className={!timelineOpen ? 'is-active' : ''}
-                    onClick={showComposition}
-                  >
-                    Composition
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={timelineOpen}
-                    className={timelineOpen ? 'is-active' : ''}
-                    onClick={showAnimate}
-                  >
-                    Animate
-                  </button>
+                <div className="canvas-tool-bar-row" role="toolbar" aria-label="Canvas tools">
+                  <div className="canvas-tool-pops" ref={shapeMenuRef}>
+                    <div className="canvas-tool-pop">
+                      <button
+                        ref={flatShapeBtnRef}
+                        type="button"
+                        title="2D shapes"
+                        aria-label="2D shapes"
+                        aria-expanded={shapeMenu === 'flat'}
+                        aria-haspopup="menu"
+                        className={shapeMenu === 'flat' ? 'is-active has-caret' : 'has-caret'}
+                        onClick={() => openShapeMenu('flat', flatShapeBtnRef.current)}
+                      >
+                        <Square size={15} />
+                        <ChevronDown className="canvas-tool-caret" aria-hidden />
+                      </button>
+                    </div>
+                    <div className="canvas-tool-pop">
+                      <button
+                        ref={solidShapeBtnRef}
+                        type="button"
+                        title="3D shapes"
+                        aria-label="3D shapes"
+                        aria-expanded={shapeMenu === 'solid'}
+                        aria-haspopup="menu"
+                        className={shapeMenu === 'solid' ? 'is-active has-caret' : 'has-caret'}
+                        onClick={() => openShapeMenu('solid', solidShapeBtnRef.current)}
+                      >
+                        <Box size={15} />
+                        <ChevronDown className="canvas-tool-caret" aria-hidden />
+                      </button>
+                    </div>
+                  </div>
+                  {shapeMenu && shapeMenuBox && createPortal(
+                    <div
+                      ref={floatingMenuRef}
+                      className="canvas-tool-menu is-above"
+                      role="menu"
+                      aria-label={shapeMenu === 'flat' ? '2D shapes' : '3D shapes'}
+                      style={{ top: shapeMenuBox.top, left: shapeMenuBox.left }}
+                    >
+                      {shapeMenu === 'flat'
+                        ? FLAT_SHAPES.map((shape) => {
+                          const Icon = shape.icon;
+                          return (
+                            <button
+                              key={shape.id}
+                              type="button"
+                              role="menuitem"
+                              title={shape.label}
+                              aria-label={`Add ${shape.label}`}
+                              onClick={() => {
+                                addFlatShape(shape.id);
+                                setShapeMenu(null);
+                              }}
+                            >
+                              <Icon size={15} />
+                            </button>
+                          );
+                        })
+                        : INSERT_SHAPES.map((shape) => {
+                          const Icon = shape.icon;
+                          return (
+                            <button
+                              key={shape.kind}
+                              type="button"
+                              role="menuitem"
+                              title={shape.label}
+                              aria-label={`Add ${shape.label}`}
+                              onClick={() => {
+                                addInsertShape(shape.kind);
+                                setShapeMenu(null);
+                              }}
+                            >
+                              <Icon size={15} />
+                            </button>
+                          );
+                        })}
+                    </div>,
+                    document.body,
+                  )}
+                  <div className="canvas-tool-pop" ref={textToolRef}>
+                    <button
+                      ref={textBtnRef}
+                      type="button"
+                      title="Text, comments, and annotations"
+                      aria-label="Text, comments, and annotations"
+                      aria-expanded={textMenu}
+                      aria-haspopup="menu"
+                      className={textMenu || canvasTool === 'comments' || canvasTool === 'pen' ? 'is-active has-caret' : 'has-caret'}
+                      onClick={toggleTextMenu}
+                    >
+                      <Type size={15} />
+                      <ChevronDown className="canvas-tool-caret" aria-hidden />
+                    </button>
+                  </div>
+                  {textMenu && textMenuBox && createPortal(
+                    <div
+                      ref={textMenuRef}
+                      className="canvas-tool-menu is-text-menu is-above"
+                      role="menu"
+                      aria-label="Text tools"
+                      style={{ top: textMenuBox.top, left: textMenuBox.left }}
+                    >
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          addInsertText();
+                          setCanvasTool('composition');
+                          setTextMenu(false);
+                        }}
+                      >
+                        <Type size={15} /> Text
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={canvasTool === 'comments' ? 'is-active' : ''}
+                        onClick={() => chooseMarkup('comments')}
+                      >
+                        <MessageSquare size={15} /> Comment
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={canvasTool === 'pen' ? 'is-active' : ''}
+                        onClick={() => chooseMarkup('pen')}
+                      >
+                        <PenTool size={15} /> Annotation
+                      </button>
+                      <span className="canvas-tool-divider" />
+                      <label className="canvas-tool-color-row">
+                        Background
+                        <input
+                          type="color"
+                          value={markFill}
+                          aria-label="Annotation background colour"
+                          onChange={(event) => applyMarkColor('fill', event.target.value)}
+                        />
+                      </label>
+                      <label className="canvas-tool-color-row">
+                        Text
+                        <input
+                          type="color"
+                          value={markInk}
+                          aria-label="Annotation text colour"
+                          onChange={(event) => applyMarkColor('ink', event.target.value)}
+                        />
+                      </label>
+                      {selectedComment && (
+                        <textarea
+                          className="canvas-tool-note"
+                          value={selectedComment.text ?? ''}
+                          placeholder="Write a comment…"
+                          rows={2}
+                          aria-label="Comment text"
+                          onChange={(event) => patchOverlay(selectedComment.id, { text: event.target.value })}
+                        />
+                      )}
+                      {selectedMark && (
+                        <button type="button" className="is-danger" onClick={removeSelectedMark}>
+                          <Trash2 size={14} /> Remove
+                        </button>
+                      )}
+                      {canvasTool === 'comments' && !selectedComment && (
+                        <p className="canvas-tool-hint">Click the model to pin a comment. It stays on the device.</p>
+                      )}
+                      {canvasTool === 'pen' && !selectedMark && (
+                        <p className="canvas-tool-hint">Draw on the model. Text colour is the stroke.</p>
+                      )}
+                    </div>,
+                    document.body,
+                  )}
+                  <span className="canvas-tool-divider" />
+                  <div className="canvas-tool-nest" role="tablist" aria-label="Workspace mode">
+                    <button
+                      type="button"
+                      role="tab"
+                      title="Composition"
+                      aria-label="Composition"
+                      aria-selected={!timelineOpen}
+                      className={!timelineOpen ? 'is-active' : ''}
+                      onClick={showComposition}
+                    >
+                      <Layers3 size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      title="Animate"
+                      aria-label="Animate"
+                      aria-selected={timelineOpen}
+                      className={timelineOpen ? 'is-active' : ''}
+                      onClick={showAnimate}
+                    >
+                      <Film size={15} />
+                    </button>
+                  </div>
                 </div>
-              </nav>
               </div>
             </div>
-          )}
         </main>
 
         <aside className="right-panel" aria-hidden={sidePanelsHidden} ref={rightPanelRef}>
@@ -4786,7 +4966,7 @@ export default function App() {
                 ))}
               </div>
               <p className="field-caption" style={{ marginTop: 8 }}>
-                {CAMERA_LENSES.find((l) => l.id === (project.cameraLens ?? 'standard'))?.hint ?? '~35 mm'} · changes perspective FOV
+                {CAMERA_LENSES.find((l) => l.id === (project.cameraLens ?? 'standard'))?.hint ?? '~50 mm'} · changes perspective FOV
               </p>
               <button type="button" className="button full-outline compact" style={{ marginTop: 10 }} onClick={keyCameraAtPlayhead}>
                 <Aperture size={14} /> Key camera at playhead
@@ -4877,20 +5057,35 @@ export default function App() {
                   aria-haspopup="listbox"
                   title="Add or remove formats"
                   onClick={(event) => {
-                    const root = event.currentTarget.closest('.aspect-ratio-picker');
                     const willOpen = !aspectDropdownOpen;
-                    setAspectDropdownOpen(willOpen);
-                    if (willOpen && root instanceof HTMLElement) {
-                      pinToContainerTop(root);
+                    if (!willOpen) {
+                      setAspectDropdownOpen(false);
+                      return;
                     }
+                    const anchor = event.currentTarget;
+                    setAspectMenuBox(measureFloatingMenu(anchor));
+                    setAspectDropdownOpen(true);
                   }}
                 >
                   <Columns2 size={14} aria-hidden />
                   <span>Formats</span>
                   <ChevronDown size={13} className="aspect-ratio-trigger-chevron" aria-hidden />
                 </button>
-                {aspectDropdownOpen && (
-                  <div className="aspect-ratio-menu" role="listbox" aria-multiselectable aria-label="Aspect ratio formats">
+                {aspectDropdownOpen && aspectMenuBox && createPortal(
+                  <div
+                    ref={aspectMenuRef}
+                    className="aspect-ratio-menu is-floating"
+                    role="listbox"
+                    aria-multiselectable
+                    aria-label="Aspect ratio formats"
+                    style={{
+                      top: aspectMenuBox.top,
+                      bottom: aspectMenuBox.bottom,
+                      left: aspectMenuBox.left,
+                      width: aspectMenuBox.width,
+                      maxHeight: aspectMenuBox.maxHeight,
+                    }}
+                  >
                     <button
                       type="button"
                       role="option"
@@ -5011,7 +5206,8 @@ export default function App() {
                         </div>
                       );
                     })}
-                  </div>
+                  </div>,
+                  document.body,
                 )}
               </div>
             </section>
@@ -5405,72 +5601,22 @@ export default function App() {
                 step={0.05}
                 unit=""
                 value={displaySelected.glassReflection ?? 0.55}
-                onChange={(v) => patchSelectedDevice({ glassReflection: v })}
+                onChange={(v) => patchSelectedDevice({
+                  glassReflection: v,
+                  reflectionStyle: reflectionStyleForAmount(v),
+                })}
               />
               <button className="text-button" onClick={resetDevice}><RotateCcw size={13} /> Reset transform</button>
             </SettingsSection>
 
             <SettingsSection
               id="overlays"
-              title={canvasTool === 'comments' ? 'Comments' : 'Overlays'}
-              hint={canvasTool === 'comments' ? 'Notes stuck to the device' : 'Add titles on top of the shot'}
-              icon={canvasTool === 'comments' ? MessageSquare : Layers3}
-              trailing={canvasTool === 'comments' ? String((project.overlays ?? []).filter((item) => item.kind === 'comment').length) : undefined}
+              title="Overlays"
+              hint="Add titles on top of the shot"
+              icon={Layers3}
               open={openSectionId === 'overlays'}
               onToggle={toggleSection}
             >
-              {canvasTool === 'comments' ? (
-                <div className="comment-panel">
-                  <button type="button" className="button full-outline compact" onClick={addInsertComment}>
-                    <Plus size={14} /> New comment
-                  </button>
-                  {(project.overlays ?? []).filter((item) => item.kind === 'comment').length === 0 ? (
-                    <div className="comment-empty">
-                      <MessageSquare size={16} />
-                      <p>Click the model to pin a note. It stays on the device when you move or rotate it.</p>
-                    </div>
-                  ) : (
-                    <ol className="comment-list">
-                      {(project.overlays ?? []).filter((item) => item.kind === 'comment').map((overlay, index) => (
-                        <li key={overlay.id}>
-                          <article
-                            className={`comment-card ${selectedOverlayId === overlay.id ? 'is-selected' : ''}`}
-                            onClick={() => pinLayer('overlay', overlay.id)}
-                          >
-                            <div className="comment-card-row">
-                              <span className="comment-pin">{index + 1}</span>
-                              <textarea
-                                value={overlay.text ?? ''}
-                                placeholder="Write a comment…"
-                                rows={2}
-                                aria-label={`Comment ${index + 1}`}
-                                onChange={(event) => patchOverlay(overlay.id, { text: event.target.value })}
-                                onFocus={() => pinLayer('overlay', overlay.id)}
-                              />
-                              <button
-                                type="button"
-                                className="comment-delete"
-                                title="Remove comment"
-                                aria-label={`Remove comment ${index + 1}`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  updateProject({
-                                    overlays: (project.overlays ?? []).filter((item) => item.id !== overlay.id),
-                                  });
-                                  if (selectedOverlayId === overlay.id) setSelectedOverlayId(null);
-                                }}
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            </div>
-                          </article>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-              ) : (
-              <>
               <div className="overlay-actions">
                 <button
                   type="button"
@@ -5489,16 +5635,16 @@ export default function App() {
                   <Plus size={14} /> Add text
                 </button>
               </div>
-              {(project.overlays ?? []).filter((item) => item.kind !== 'comment').length === 0 && (
+              {(project.overlays ?? []).filter((item) => item.kind !== 'comment' && item.kind !== 'path').length === 0 && (
                 <p className="field-caption">Add titles, then drag them on the canvas. Colour, size, and timing edit below.</p>
               )}
-              {(project.overlays ?? []).filter((item) => item.kind !== 'comment').map((overlay) => (
+              {(project.overlays ?? []).filter((item) => item.kind !== 'comment' && item.kind !== 'path').map((overlay) => (
                 <div key={overlay.id} className="overlay-editor-slot">
                 <div
                   className={`overlay-editor ${selectedOverlayId === overlay.id ? 'is-selected' : ''}`}
                   onClick={() => pinLayer('overlay', overlay.id)}
                 >
-                  {(overlay.kind === 'text' || overlay.kind === 'comment') && (
+                  {overlay.kind === 'text' && (
                     <textarea
                       className="text-input overlay-text-area"
                       value={overlay.text ?? ''}
@@ -5507,7 +5653,7 @@ export default function App() {
                       onChange={(e) => patchOverlay(overlay.id, { text: e.target.value })}
                     />
                   )}
-                  {(overlay.kind === 'text' || overlay.kind === 'comment') && (
+                  {overlay.kind === 'text' && (
                     <div className="overlay-row overlay-row-color">
                       <label className="overlay-color-field">
                         Colour
@@ -5576,7 +5722,7 @@ export default function App() {
                           min={0}
                           max={1}
                           step={0.01}
-                          value={Number(overlay.x.toFixed(2))}
+                          value={overlay.x.toFixed(2)}
                           aria-label="Position X"
                           title="Drag left or right to adjust. Shift for finer steps."
                           onChange={(e) => {
@@ -5604,7 +5750,7 @@ export default function App() {
                           min={0}
                           max={1}
                           step={0.01}
-                          value={Number(overlay.y.toFixed(2))}
+                          value={overlay.y.toFixed(2)}
                           aria-label="Position Y"
                           title="Drag left or right to adjust. Shift for finer steps."
                           onChange={(e) => {
@@ -5693,11 +5839,32 @@ export default function App() {
                 </div>
                 </div>
               ))}
-              </>
-              )}
             </SettingsSection>
 
-            <SettingsSection id="reflection" title="Reflection" hint="Environment map on glass" icon={Aperture} open={openSectionId === 'reflection'} onToggle={toggleSection}>
+            <SettingsSection id="reflection" title="Reflection" hint="Finish and environment on glass and screens" icon={Aperture} open={openSectionId === 'reflection'} onToggle={toggleSection}>
+              <div className="field-caption">Type</div>
+              <div className="reflection-type-segment" role="tablist" aria-label="Reflection type">
+                {REFLECTION_STYLES.map((style) => {
+                  const active = (displaySelected.reflectionStyle
+                    ?? reflectionStyleForAmount(displaySelected.glassReflection ?? 0.55)) === style.id;
+                  return (
+                    <button
+                      key={style.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      className={active ? 'is-active' : ''}
+                      onClick={() => patchSelectedDevice({
+                        reflectionStyle: style.id as ReflectionStyle,
+                        glassReflection: amountForReflectionStyle(style.id),
+                      })}
+                    >
+                      {style.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="field-caption">Matte stays soft, glossy sheens, mirror sharpens. Applies to every screen and glass surface.</p>
               <ReflectionMapPicker
                 value={project.reflectionMap ?? 'match_background'}
                 customImage={project.reflectionMapImage ?? null}
@@ -6458,7 +6625,6 @@ export default function App() {
         appVersion="0.1.0"
       />
       <TemplateThumbHost />
-      <DeviceModelThumbHost />
       {templatePickerOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setTemplatePickerOpen(false); }}>
           <div className="export-modal template-modal" role="dialog" aria-modal="true" aria-labelledby="template-title">

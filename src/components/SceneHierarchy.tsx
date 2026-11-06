@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Trash2, X } from 'lucide-react';
+import { Plus, Search, Trash2, X } from 'lucide-react';
 import iconDown from '../assets/scene-hierarchy/icon-down.svg';
 import iconDownSelected from '../assets/scene-hierarchy/icon-down-selected.svg';
 import iconCube from '../assets/scene-hierarchy/icon-cube.svg';
@@ -27,8 +27,9 @@ function TreeCube() {
 }
 
 import { getDevice } from '../lib/devices';
-import { bindScrollMore, pinToContainerTop } from '../lib/scrollMore';
 import { ensureCompositionLayers } from '../lib/layers';
+import type { SceneOverlay } from '../lib/overlays';
+import { bindScrollMore, pinToContainerTop } from '../lib/scrollMore';
 import {
   BACKGROUNDS,
   gradientCss,
@@ -77,6 +78,9 @@ type SceneHierarchyProps = {
   onFocusKeyLight: () => void;
   onSelectionChange: (selection: SceneLayerSelection) => void;
   layerPin?: { kind: 'device' | 'prop' | 'overlay'; id: string; token: number } | null;
+  onAddScene: () => void;
+  onDuplicateScene: () => void;
+  canAddScene: boolean;
 };
 
 function sceneRowLabel(scene: CompositionScene, count: number) {
@@ -93,6 +97,25 @@ function lookThumbStyle(look: ScenePreset) {
   if (BACKGROUNDS.some((item) => item.id === look.id)) return undefined;
   return { background: gradientCss(look.gradient) };
 }
+
+function textHit(label: string, needle: string) {
+  return needle.length === 0 || label.toLowerCase().includes(needle);
+}
+
+function overlayTreeLabel(overlay: SceneOverlay) {
+  const text = overlay.kind === 'comment'
+    ? (overlay.text || 'Comment').trim()
+    : overlay.kind === 'shape'
+      ? (overlay.text === 'ellipse' ? 'Ellipse' : overlay.text === 'triangle' ? 'Triangle' : 'Rectangle')
+      : overlay.kind === 'path'
+        ? 'Pen stroke'
+        : overlay.kind === 'text'
+          ? (overlay.text || 'Text').trim()
+          : 'Image overlay';
+  return text.length > 22 ? `${text.slice(0, 20)}…` : text;
+}
+
+const STUDIO_LABELS = ['Camera', 'Reflection', 'Key Light', 'Rim Light', 'Shadow'] as const;
 
 export default function SceneHierarchy({
   project,
@@ -113,18 +136,52 @@ export default function SceneHierarchy({
   onFocusKeyLight,
   onSelectionChange,
   layerPin = null,
+  onAddScene,
+  onDuplicateScene,
+  canAddScene,
 }: SceneHierarchyProps) {
   const selectedDeviceId = project.selectedDeviceId;
   const [openSceneIds, setOpenSceneIds] = useState<string[]>(() => [activeSceneId]);
   const [openDeviceIds, setOpenDeviceIds] = useState<string[]>(() => [selectedDeviceId]);
   const [selection, setSelection] = useState<SceneLayerSelection>({ kind: 'device', id: selectedDeviceId });
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [query, setQuery] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const addRef = useRef<HTMLDivElement>(null);
+  const needle = query.trim().toLowerCase();
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     return bindScrollMore(el);
   }, []);
+
+  useEffect(() => {
+    if (searchOpen) searchRef.current?.focus();
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (!addOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!addRef.current?.contains(event.target as Node)) setAddOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAddOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointer);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onPointer);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [addOpen]);
+
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setQuery('');
+  };
 
   useEffect(() => {
     setOpenSceneIds((current) => (current.includes(activeSceneId) ? current : [...current, activeSceneId]));
@@ -224,8 +281,104 @@ export default function SceneHierarchy({
     onRenameScene(scene.id, next);
   };
 
+  const sceneVisible = (scene: CompositionScene) => {
+    if (!needle) return true;
+    if (textHit(scene.name, needle) || textHit(sceneRowLabel(scene, scenes.length), needle)) return true;
+    if (scene.id !== activeSceneId) return false;
+    if (project.devices.some((device) => (
+      textHit(getDevice(device.deviceId).label, needle)
+      || textHit('Screen', needle)
+      || textHit('Backdrop', needle)
+    ))) return true;
+    if ((project.sceneProps ?? []).some((prop) => textHit(propLabel(prop.kind), needle))) return true;
+    if ((project.overlays ?? []).some((overlay) => textHit(overlayTreeLabel(overlay), needle))) return true;
+    return STUDIO_LABELS.some((label) => textHit(label, needle));
+  };
+
   return (
     <div className="scene-hierarchy">
+      <div className="scenes-head">
+        <span className="scenes-head-label">Scenes</span>
+        <button
+          type="button"
+          className={`scenes-head-btn ${searchOpen ? 'is-active' : ''}`}
+          title="Search scenes"
+          aria-label="Search scenes"
+          aria-pressed={searchOpen}
+          onClick={() => {
+            if (searchOpen) closeSearch();
+            else setSearchOpen(true);
+          }}
+        >
+          <Search size={15} strokeWidth={1.8} />
+        </button>
+        <div className="scenes-add" ref={addRef}>
+          <button
+            type="button"
+            className={`scenes-head-btn ${addOpen ? 'is-active' : ''}`}
+            title="Add scene"
+            aria-label="Add scene"
+            aria-haspopup="menu"
+            aria-expanded={addOpen}
+            disabled={!canAddScene}
+            onClick={() => setAddOpen((open) => !open)}
+          >
+            <Plus size={15} strokeWidth={1.8} />
+          </button>
+          {addOpen && (
+            <div className="scenes-add-menu" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setAddOpen(false);
+                  onDuplicateScene();
+                }}
+              >
+                Duplicate scene
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setAddOpen(false);
+                  onAddScene();
+                }}
+              >
+                New scene
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      {searchOpen && (
+        <label className="scenes-search">
+          <Search size={14} strokeWidth={1.8} />
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') closeSearch();
+            }}
+            placeholder="Search scenes"
+            aria-label="Search scenes"
+          />
+          {query && (
+            <button
+              type="button"
+              className="scenes-search-clear"
+              aria-label="Clear search"
+              onClick={() => {
+                setQuery('');
+                searchRef.current?.focus();
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </label>
+      )}
       <div
         className="scene-hierarchy-scroll"
         role="tree"
@@ -238,8 +391,14 @@ export default function SceneHierarchy({
           window.setTimeout(() => row.classList.remove('is-tapped'), 420);
         }}
       >
+        {needle && !scenes.some(sceneVisible) && (
+          <p className="scenes-search-empty">No matches</p>
+        )}
         {scenes.map((scene) => {
-          const open = openSceneIds.includes(scene.id);
+          if (!sceneVisible(scene)) return null;
+          const sceneLabel = sceneRowLabel(scene, scenes.length);
+          const revealAll = textHit(scene.name, needle) || textHit(sceneLabel, needle);
+          const open = openSceneIds.includes(scene.id) || needle.length > 0;
           const active = scene.id === activeSceneId;
           const sceneSelected = selection.kind === 'scene' && selection.id === scene.id;
           return (
@@ -261,7 +420,7 @@ export default function SceneHierarchy({
                   title={`${scene.name} · double-click to rename`}
                 >
                   <img src={sceneSelected ? iconCubeSelected : iconCube} alt="" />
-                  <span>{sceneRowLabel(scene, scenes.length)}</span>
+                  <span>{sceneLabel}</span>
                 </button>
                 {scenes.length > 1 && (
                   <button
@@ -279,10 +438,13 @@ export default function SceneHierarchy({
               {open && active && (
                 <>
                   {project.devices.map((device) => {
-                    const deviceOpen = openDeviceIds.includes(device.id);
+                    const deviceOpen = openDeviceIds.includes(device.id) || needle.length > 0;
                     const deviceSelected = selection.kind === 'device' && selection.id === device.id;
                     const label = getDevice(device.deviceId).label;
                     const hidden = !isVisible('device', device.id);
+                    const showScreen = revealAll || textHit(label, needle) || textHit('Screen', needle);
+                    const showBackdrop = revealAll || textHit(label, needle) || textHit('Backdrop', needle);
+                    if (!showScreen && !showBackdrop && !textHit(label, needle)) return null;
                     return (
                       <div key={device.id} className={`scene-tree-branch ${hidden ? 'is-hidden' : ''}`} role="group" data-device-branch={device.id}>
                         <div className={`scene-tree-row is-device ${deviceSelected ? 'is-selected' : ''}`} role="treeitem" aria-expanded={deviceOpen}>
@@ -301,6 +463,7 @@ export default function SceneHierarchy({
                         </div>
                         {deviceOpen && (
                           <>
+                            {showScreen && (
                             <button
                               type="button"
                               className={`scene-tree-row is-nested ${selection.kind === 'screen' && selection.deviceId === device.id ? 'is-selected' : ''}`}
@@ -313,6 +476,9 @@ export default function SceneHierarchy({
                               <img src={iconPhone} alt="" />
                               <span>Screen</span>
                             </button>
+                            )}
+                            {showBackdrop && (
+                            <>
                             <button
                               type="button"
                               className={`scene-tree-row is-nested ${selection.kind === 'backdrop' && selection.deviceId === device.id ? 'is-selected' : ''}`}
@@ -365,13 +531,18 @@ export default function SceneHierarchy({
                                 </div>
                               </div>
                             )}
+                            </>
+                            )}
                           </>
                         )}
                       </div>
                     );
                   })}
 
-                  {(project.sceneProps ?? []).map((prop) => (
+                  {(project.sceneProps ?? []).map((prop) => {
+                    const label = propLabel(prop.kind);
+                    if (!revealAll && !textHit(label, needle)) return null;
+                    return (
                     <div
                       key={prop.id}
                       className={`scene-tree-row is-studio ${!isVisible('prop', prop.id) ? 'is-hidden' : ''} ${selection.kind === 'prop' && selection.id === prop.id ? 'is-selected' : ''}`}
@@ -387,31 +558,24 @@ export default function SceneHierarchy({
                         }}
                       >
                         <img src={iconCube} alt="" />
-                        <span>{propLabel(prop.kind)}</span>
+                        <span>{label}</span>
                       </button>
                       <button
                         type="button"
                         className="scene-tree-remove"
-                        title={`Remove ${propLabel(prop.kind)}`}
-                        aria-label={`Remove ${propLabel(prop.kind)}`}
+                        title={`Remove ${label}`}
+                        aria-label={`Remove ${label}`}
                         onClick={() => onRemoveProp(prop.id)}
                       >
                         <X size={11} />
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
 
                   {(project.overlays ?? []).map((overlay) => {
-                    const text = overlay.kind === 'comment'
-                      ? (overlay.text || 'Comment').trim()
-                      : overlay.kind === 'shape'
-                        ? (overlay.text === 'ellipse' ? 'Ellipse' : overlay.text === 'triangle' ? 'Triangle' : 'Rectangle')
-                        : overlay.kind === 'path'
-                          ? 'Pen stroke'
-                          : overlay.kind === 'text'
-                            ? (overlay.text || 'Text').trim()
-                            : 'Image overlay';
-                    const label = text.length > 22 ? `${text.slice(0, 20)}…` : text;
+                    const label = overlayTreeLabel(overlay);
+                    if (!revealAll && !textHit(label, needle)) return null;
                     return (
                       <button
                         key={overlay.id}
@@ -421,7 +585,7 @@ export default function SceneHierarchy({
                         onClick={() => {
                           setSelection({ kind: 'overlay', id: overlay.id });
                           onSelectOverlay(overlay.id);
-                          onOpenSection('overlays');
+                          if (overlay.kind !== 'comment' && overlay.kind !== 'path') onOpenSection('overlays');
                         }}
                       >
                         <img src={overlay.kind === 'text' ? iconLayers : iconImage} alt="" />
@@ -430,8 +594,11 @@ export default function SceneHierarchy({
                     );
                   })}
 
+                  {(revealAll || STUDIO_LABELS.some((label) => textHit(label, needle))) && (
                   <div className="scene-tree-rule" />
+                  )}
 
+                  {(revealAll || textHit('Camera', needle)) && (
                   <button
                     type="button"
                     className={`scene-tree-row is-studio ${selection.kind === 'camera' ? 'is-selected' : ''}`}
@@ -443,6 +610,8 @@ export default function SceneHierarchy({
                     <img src={iconCamera} alt="" />
                     <span>Camera</span>
                   </button>
+                  )}
+                  {(revealAll || textHit('Reflection', needle)) && (
                   <button
                     type="button"
                     className={`scene-tree-row is-studio ${selection.kind === 'reflection' ? 'is-selected' : ''}`}
@@ -454,6 +623,8 @@ export default function SceneHierarchy({
                     <img src={iconImage} alt="" />
                     <span>Reflection</span>
                   </button>
+                  )}
+                  {(revealAll || textHit('Key Light', needle)) && (
                   <button
                     type="button"
                     className={`scene-tree-row is-studio ${selection.kind === 'key-light' ? 'is-selected' : ''}`}
@@ -466,6 +637,8 @@ export default function SceneHierarchy({
                     <img src={iconSun} alt="" />
                     <span>Key Light</span>
                   </button>
+                  )}
+                  {(revealAll || textHit('Rim Light', needle)) && (
                   <button
                     type="button"
                     className={`scene-tree-row is-studio ${selection.kind === 'rim-light' ? 'is-selected' : ''}`}
@@ -477,6 +650,8 @@ export default function SceneHierarchy({
                     <img src={iconSun} alt="" />
                     <span>Rim Light</span>
                   </button>
+                  )}
+                  {(revealAll || textHit('Shadow', needle)) && (
                   <button
                     type="button"
                     className={`scene-tree-row is-studio ${selection.kind === 'shadow' ? 'is-selected' : ''}`}
@@ -488,6 +663,7 @@ export default function SceneHierarchy({
                     <img src={iconLayers} alt="" />
                     <span>Shadow</span>
                   </button>
+                  )}
                 </>
               )}
             </div>

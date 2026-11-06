@@ -9,14 +9,14 @@ import type {
   EaseBezier,
   Vec3,
 } from '../types';
-import { CAMERA_TARGET_ID, DEFAULT_CUSTOM_BEZIER, PRESET_BEZIERS } from '../types';
+import { CAMERA_TARGET_ID, DEFAULT_CUSTOM_BEZIER, EYE_CAMERA_DISTANCE, EYE_SPLIT_CAMERA_DISTANCE, PRESET_BEZIERS } from '../types';
 
 export function isCameraProperty(property: AnimProperty) {
   return property === 'camera.x' || property === 'camera.y' || property === 'camera.z';
 }
 
 export function defaultCameraPosition(view: CameraView, split: boolean): Vec3 {
-  const dist = split ? 7.4 : 5.7;
+  const dist = split ? EYE_SPLIT_CAMERA_DISTANCE : EYE_CAMERA_DISTANCE;
   const positions: Record<CameraView, Vec3> = {
     front: { x: 0, y: 0, z: dist },
     left: { x: -dist, y: 0, z: 0 },

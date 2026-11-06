@@ -6,6 +6,7 @@ import {
   type GradientColors, type MockupProject, type Vec3,
 } from '../types';
 import type { DeviceId } from './devices';
+import { normalizeReflectionStyle } from './reflectionStyle';
 
 const SIZE_KEY = 'mockup-studio.saved-sizes';
 const ANGLE_KEY = 'mockup-studio.saved-angles';
@@ -277,6 +278,7 @@ export function normalizeCompositions(items: unknown[]): CompositionTemplate[] {
           glassReflection: extra && typeof extra.glassReflection === 'number'
             ? clamp(extra.glassReflection, 0, 1)
             : undefined,
+          reflectionStyle: normalizeReflectionStyle(extra?.reflectionStyle) ?? undefined,
           lidOpen: extra && typeof extra.lidOpen === 'number' ? clamp(extra.lidOpen, 0, 1) : undefined,
           deviceColor: extra && DEVICE_COLOR_IDS.has(extra.deviceColor as DeviceColor)
             ? extra.deviceColor
@@ -397,6 +399,7 @@ export function saveComposition(label: string, project: MockupProject): Composit
     })),
     deviceExtras: devices.map((device) => ({
       glassReflection: device.glassReflection,
+      reflectionStyle: device.reflectionStyle,
       lidOpen: device.lidOpen,
       deviceColor: device.deviceColor,
       clayMode: device.clayMode,
