@@ -321,7 +321,7 @@ function easeGimbalRotation(controls: RotateRig | null) {
     object.quaternion.copy(quatStart);
     object.quaternion.multiply(easedQuat.setFromAxisAngle(unit, angle)).normalize();
     controls.rotationAngle = angle;
-    controls.dispatchEvent({ type: 'objectChange' });
+    (controls.dispatchEvent as (event: { type: 'objectChange' }) => void)({ type: 'objectChange' });
   };
 }
 
