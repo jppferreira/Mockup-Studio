@@ -364,13 +364,13 @@ export function normalizeCompositions(items: unknown[]): CompositionTemplate[] {
       sceneProps,
       lightIntensity: finite(entry.lightIntensity, 1),
       fillIntensity: finite(entry.fillIntensity, 0.5),
-      shadowOpacity: finite(entry.shadowOpacity, 0.35),
-      shadowSoftness: finite(entry.shadowSoftness, 2),
+      shadowOpacity: clamp(finite(entry.shadowOpacity, 1), 0, 2),
+      shadowSoftness: clamp(finite(entry.shadowSoftness, 6.1), 0.2, 8),
       shadowType: (['contact', 'soft', 'sharp', 'off'] as const).includes(entry.shadowType as never)
         ? entry.shadowType
         : undefined,
       shadowContact: typeof entry.shadowContact === 'number'
-        ? clamp(finite(entry.shadowContact, 0.45), 0, 1)
+        ? clamp(finite(entry.shadowContact, 0), 0, 1)
         : undefined,
       shadowQuality: (['auto', 'high', 'ultra'] as const).includes(entry.shadowQuality as never)
         ? entry.shadowQuality

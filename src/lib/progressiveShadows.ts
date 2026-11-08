@@ -16,7 +16,7 @@ import cleanShadowmapParsFragment from 'three/src/renderers/shaders/ShaderChunk/
  *
  * Standard PCF stays in place if the installed Three.js shader changes.
  */
-const MARKER = '/* MOCKUP_STUDIO_PCSS_V1 */';
+const MARKER = '/* MOCKUP_STUDIO_PCSS_V2 */';
 
 // Packed RGBA depth is the format used by PCF / PCFSoft shadow maps in r170.
 // This is a two-pass approximation: blocker search followed by a filter
@@ -91,10 +91,12 @@ function buildProgressiveShadowChunk(): string | null {
   const at = shader.indexOf(frustumStart, shader.indexOf(functionStart));
   // Replace both PCF paths (the renderer uses PCFSoftShadowMap). VSM and the
   // point-light shadow implementation continue using the original shader.
+  // Intensity may exceed 1 so soft penumbras can still crush toward black.
+  // mix() extrapolates negative above 1 — use a clamped darken instead.
   const replacement = `${frustumStart}
 #if defined( SHADOWMAP_TYPE_PCF ) || defined( SHADOWMAP_TYPE_PCF_SOFT )
   shadow = studioProgressiveShadow(shadowMap, shadowMapSize, shadowCoord.xyz, shadowRadius);
-  return mix(1.0, shadow, shadowIntensity);
+  return clamp(1.0 - (1.0 - shadow) * shadowIntensity, 0.0, 1.0);
 #endif`;
   shader = shader.slice(0, at) + replacement + shader.slice(at + frustumStart.length);
   cached = shader;

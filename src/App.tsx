@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
-  Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Box, Camera, Check, ChevronDown, Circle,
-  Cone, Cylinder, Dna, Film, Hand, MessageSquare, MoveHorizontal, MousePointer2, PenTool, Pyramid, Square, Torus, Triangle, Type, ZoomIn,
+  Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Box, Camera, Check, ChevronDown, Circle, CircleOff, Cuboid,
+  Cone, Cylinder, Disc, Disc3, Dna, Film, Frame, Hand, Landmark, MessageSquare, Mountain, MoveHorizontal, MousePointer2, PenTool, Pyramid,
+  RectangleHorizontal, Square, Theater, Torus, Triangle, Type, ZoomIn,
   ClipboardPaste, Columns2, Command, Copy, Download, FileImage, FlipHorizontal2, Gauge, Glasses, Headphones,
   ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, MessageSquarePlus, Minus,
   Menu, Monitor, MonitorSmartphone, MoreHorizontal, Orbit, PanelLeftClose, PanelLeftOpen,
@@ -31,6 +32,12 @@ import SvgExplodeModal from './components/SvgExplodeModal';
 import ProgressiveBlurOverlay from './components/ProgressiveBlurOverlay';
 import LightDirectionControl from './components/LightDirectionControl';
 import ModelingModePanel, { type PickedMaterial, type StudioSetFocus } from './components/ModelingModePanel';
+import {
+  propExtrusion,
+  propFootprintScale,
+  withPropExtrusion,
+  withPropFootprintScale,
+} from './lib/propTransform';
 import ReflectionMapPicker from './components/ReflectionMapPicker';
 import {
   hydrateCustomDeviceUrls,
@@ -235,6 +242,62 @@ const INSERT_SHAPES: { kind: ScenePropKind; label: string; icon: LucideIcon }[] 
   { kind: 'clay_cone', label: 'Cone', icon: Cone },
   { kind: 'clay_pyramid', label: 'Pyramid', icon: Pyramid },
 ];
+
+/**
+ * Stage tool: what sits under the device. One stage at a time — picking another
+ * swaps the floor piece. `none` is a bare canvas, `floor` is the built-in soft disc,
+ * the rest are scene props placed at floor level.
+ */
+type StageType = 'none' | 'floor' | 'stage' | 'backdrop' | 'pedestal' | 'plinth' | 'slab' | 'disc' | 'rock';
+type StageTypeOption = {
+  id: StageType;
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+  prop?: Partial<SceneProp> & { kind: ScenePropKind };
+};
+
+const STAGE_TYPES: StageTypeOption[] = [
+  { id: 'none', label: 'Empty', hint: 'Nothing under the device', icon: CircleOff },
+  { id: 'floor', label: 'Floor plate', hint: 'Soft disc under the device', icon: Disc },
+  {
+    id: 'stage', label: 'Stage', hint: 'Round show stage', icon: Theater,
+    prop: { kind: 'stage', position: { x: 0, y: -1.55, z: 0.02 }, scale: 1, color: '#2c2926' },
+  },
+  {
+    id: 'backdrop', label: 'Cyclorama', hint: 'Seamless studio sweep', icon: Frame,
+    prop: { kind: 'studio_backdrop', position: { x: 0, y: -1.55, z: 0 }, scale: 1, color: '#ffffff' },
+  },
+  {
+    id: 'pedestal', label: 'Pedestal', hint: 'Tall display column', icon: Landmark,
+    prop: { kind: 'pedestal', position: { x: 0, y: -1.45, z: 0 }, rotation: { x: 0, y: 12, z: 0 }, scale: 1 },
+  },
+  {
+    id: 'plinth', label: 'Stone plinth', hint: 'Low stone block', icon: Cuboid,
+    prop: { kind: 'stone_plinth', position: { x: 0, y: -1.28, z: 0 }, rotation: { x: 0, y: 16, z: 0 }, scale: 1, color: '#6e6a62' },
+  },
+  {
+    id: 'slab', label: 'Concrete slab', hint: 'Flat concrete floor', icon: RectangleHorizontal,
+    prop: { kind: 'concrete_slab', position: { x: 0, y: -1.58, z: 0 }, scale: 0.95 },
+  },
+  {
+    id: 'disc', label: 'Metal disc', hint: 'Brushed metal plate', icon: Disc3,
+    prop: { kind: 'metal_disc', position: { x: 0, y: -1.5, z: 0.05 }, scale: { x: 1.15, y: 1, z: 1.15 }, color: '#d5d8de' },
+  },
+  {
+    id: 'rock', label: 'Rock', hint: 'Natural stone base', icon: Mountain,
+    prop: { kind: 'rock', position: { x: 0, y: -1.55, z: 0 }, scale: 1.1, color: '#7d776e' },
+  },
+];
+/** Prop kinds the Stage tool owns; switching stage type replaces these and leaves other shapes alone. */
+const STAGE_PROP_KINDS = new Set<ScenePropKind>(STAGE_TYPES.flatMap((type) => (type.prop ? [type.prop.kind] : [])));
+
+/** Which stage type a composition is currently showing. */
+function stageTypeOf(project: MockupProject): StageType {
+  const stageProp = (project.sceneProps ?? []).find((prop) => STAGE_PROP_KINDS.has(prop.kind));
+  if (stageProp) return STAGE_TYPES.find((type) => type.prop?.kind === stageProp.kind)?.id ?? 'none';
+  return project.showGroundBase !== false ? 'floor' : 'none';
+}
 const CANVAS_HINT_KEY = 'mockup-studio.canvas-usage-hint-seen';
 
 function canvasHintAlreadySeen() {
@@ -764,11 +827,12 @@ export default function App() {
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [canvasTool, setCanvasTool] = useState<CanvasTool>('composition');
-  const [shapeMenu, setShapeMenu] = useState<'flat' | 'solid' | null>(null);
+  const [shapeMenu, setShapeMenu] = useState<'flat' | 'solid' | 'stage' | null>(null);
   const shapeMenuRef = useRef<HTMLDivElement>(null);
   const floatingMenuRef = useRef<HTMLDivElement>(null);
   const flatShapeBtnRef = useRef<HTMLButtonElement>(null);
   const solidShapeBtnRef = useRef<HTMLButtonElement>(null);
+  const stageBtnRef = useRef<HTMLButtonElement>(null);
   const [shapeMenuBox, setShapeMenuBox] = useState<{ top: number; left: number } | null>(null);
   const [textMenu, setTextMenu] = useState(false);
   const textToolRef = useRef<HTMLDivElement>(null);
@@ -972,6 +1036,37 @@ export default function App() {
   useEffect(() => {
     if (openSectionId !== 'frame') setAspectDropdownOpen(false);
   }, [openSectionId]);
+
+  // Canvas taps on sky / floor / backdrop — keep the colour dock / Look stop in view.
+  useEffect(() => {
+    if (!studioSetFocus || sidePanelsHidden) return undefined;
+    let cancelled = false;
+    const pin = () => {
+      if (cancelled) return;
+      const dock = document.querySelector('.right-panel .surround-colour-dock');
+      if (dock instanceof HTMLElement) {
+        pinToContainerTop(dock);
+        return;
+      }
+      const highlighted = document.querySelector(
+        '.right-panel .gradient-color-field.is-highlighted, .modeling-mode-studio-stops .modeling-mode-color-field.is-highlighted',
+      );
+      if (highlighted instanceof HTMLElement) {
+        pinToContainerTop(highlighted);
+        return;
+      }
+      const section = document.getElementById('settings-look')?.closest('section');
+      if (section instanceof HTMLElement) pinToContainerTop(section);
+    };
+    const frame = requestAnimationFrame(() => {
+      pin();
+      window.setTimeout(pin, 48);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
+  }, [studioSetFocus, sidePanelsHidden, openSectionId]);
 
   useEffect(() => {
     if (!aspectDropdownOpen) return undefined;
@@ -1345,14 +1440,21 @@ export default function App() {
     });
   }, [setProject]);
 
-  const openShapeMenu = (kind: 'flat' | 'solid', button: HTMLButtonElement | null) => {
+  const openShapeMenu = (kind: 'flat' | 'solid' | 'stage', button: HTMLButtonElement | null) => {
     if (shapeMenu === kind) {
       setShapeMenu(null);
       return;
     }
     if (button) {
       const rect = button.getBoundingClientRect();
-      setShapeMenuBox({ top: rect.top - 8, left: rect.left + rect.width / 2 });
+      if (kind === 'stage') {
+        // Labelled list, left-anchored like the text menu so it stays on screen.
+        const width = 200;
+        const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
+        setShapeMenuBox({ top: rect.top - 8, left });
+      } else {
+        setShapeMenuBox({ top: rect.top - 8, left: rect.left + rect.width / 2 });
+      }
     }
     setTextMenu(false);
     setShapeMenu(kind);
@@ -1403,6 +1505,34 @@ export default function App() {
     updateProject({ sceneProps: [...existing, prop] });
     pinLayer('prop', prop.id);
     setShapeMenu(null);
+  };
+
+  const currentStageType = stageTypeOf(project);
+
+  /** Swap what sits under the device. Replaces the current stage piece, keeps other shapes. */
+  const setStageType = (id: StageType) => {
+    const type = STAGE_TYPES.find((item) => item.id === id);
+    if (!type) return;
+    setShapeMenu(null);
+    if (id === currentStageType) return;
+    const existing = project.sceneProps ?? [];
+    const kept = existing.filter((prop) => !STAGE_PROP_KINDS.has(prop.kind));
+    const removedSelected = layerSelection.kind === 'prop' && !kept.some((prop) => prop.id === layerSelection.id);
+    if (!type.prop) {
+      updateProject({ sceneProps: kept, showGroundBase: id === 'floor' });
+      if (removedSelected) onLayerSelection({ kind: 'device', id: project.selectedDeviceId });
+      notify(id === 'floor' ? 'Stage: floor plate' : 'Stage cleared');
+      return;
+    }
+    const prop = createSceneProp({
+      ...type.prop,
+      position: { ...type.prop.position! },
+      rotation: type.prop.rotation ? { ...type.prop.rotation } : undefined,
+      scale: typeof type.prop.scale === 'object' ? { ...type.prop.scale } : type.prop.scale,
+    });
+    updateProject({ sceneProps: [...kept, prop] });
+    pinLayer('prop', prop.id);
+    notify(`Stage: ${type.label}`);
   };
 
   const addFlatShape = (shape: FlatShape) => {
@@ -1807,6 +1937,8 @@ export default function App() {
       animation: createDefaultAnimation(instance.id),
       sceneProps: [],
       sceneLights: [],
+      // Blank means blank: no stage under the device until one is picked from the Stage tool.
+      showGroundBase: false,
     }, `Opened blank file “${name}”`);
   };
 
@@ -3600,6 +3732,7 @@ export default function App() {
   const onSelectDevice = (payload: DeviceSelectPayload) => {
     pinLayer('device', payload.id);
     setLightGizmoActive(false);
+    setStudioSetFocus(null);
     setDeviceChosen(true);
     setProject((current) => {
       const selected = current.devices.find((d) => d.id === payload.id);
@@ -3724,9 +3857,24 @@ export default function App() {
     }));
   };
 
+  const onRotateProp = (id: string, rotation: Vec3) => {
+    const nextRotation = {
+      x: Math.max(-180, Math.min(180, rotation.x)),
+      y: Math.max(-180, Math.min(180, rotation.y)),
+      z: Math.max(-180, Math.min(180, rotation.z)),
+    };
+    setProject((current) => ({
+      ...current,
+      sceneProps: (current.sceneProps ?? []).map((prop) => (
+        prop.id === id ? { ...prop, rotation: { ...nextRotation } } : prop
+      )),
+    }));
+  };
+
   const selectSceneProp = (id: string) => {
     pinLayer('prop', id);
     setLightGizmoActive(false);
+    setSidePanelsHidden(false);
     setOpenSectionId('look');
     setDeviceMenu(null);
     setPickedMaterial(null);
@@ -3734,14 +3882,36 @@ export default function App() {
     setStudioSetFocus(prop?.kind === 'studio_backdrop' ? 'backdrop' : null);
   };
 
-  const selectBackdrop = () => {
+  const focusStudioColour = (stop: Exclude<StudioSetFocus, null>) => {
+    // Transparent looks still open the dock so the user can restore colours.
     const deviceId = project.selectedDeviceId || project.devices[0]?.id || 'backdrop';
+    // Pin the studio set so the Backdrop looks panel can expand with the dock.
     pinLayer('backdrop', deviceId);
     setLightGizmoActive(false);
-    setOpenSectionId('look');
+    setSidePanelsHidden(false);
+    setModelingPanelOpen(true);
+    // Keep Look collapsed — the colour dock / Backdrop looks open only from this tap.
     setDeviceMenu(null);
     setPickedMaterial(null);
-    setStudioSetFocus('backdrop');
+    setStudioSetFocus(stop);
+  };
+
+  const selectBackdrop = () => {
+    focusStudioColour('backdrop');
+  };
+
+  /** Empty surround sky (not device / stage / backdrop wall) → Look panel Sky colour. */
+  const selectSky = () => {
+    focusStudioColour('sky');
+  };
+
+  /** Empty floor / ground plane → Look panel Floor colour. */
+  const selectFloor = () => {
+    focusStudioColour('floor');
+  };
+
+  const selectEmptyCanvas = (target: 'sky' | 'floor' | 'backdrop') => {
+    focusStudioColour(target);
   };
 
   const onPickMaterial = useCallback((payload: MaterialPickPayload) => {
@@ -3889,7 +4059,31 @@ export default function App() {
     addDeviceToScene();
   };
 
+  /** Delete the studio backdrop: look goes transparent, any cyclorama prop goes too. */
+  const removeBackdrop = () => {
+    const props = project.sceneProps ?? [];
+    const kept = props.filter((prop) => prop.kind !== 'studio_backdrop');
+    const hadProp = kept.length !== props.length;
+    const alreadyOff = project.background === 'transparent' && !hadProp;
+    if (alreadyOff) return;
+    if (layerSelection.kind === 'prop' && props.some((prop) => prop.id === layerSelection.id && prop.kind === 'studio_backdrop')) {
+      onLayerSelection({ kind: 'device', id: project.selectedDeviceId });
+    }
+    updateProject({
+      background: 'transparent',
+      sceneProps: hadProp ? kept : props,
+    });
+    setStudioSetFocus(null);
+    notify('Backdrop removed · pick a look under Backdrop to bring it back');
+  };
+
   const removeSceneProp = (id: string) => {
+    const prop = (project.sceneProps ?? []).find((item) => item.id === id);
+    // Treating cyclorama as the backdrop: ✕ should clear the studio set, not leave Soft Studio behind.
+    if (prop?.kind === 'studio_backdrop') {
+      removeBackdrop();
+      return;
+    }
     updateProject({
       sceneProps: (project.sceneProps ?? []).filter((item) => item.id !== id),
     });
@@ -3976,8 +4170,19 @@ export default function App() {
 
       if ((event.key === 'Backspace' || event.key === 'Delete') && !event.metaKey && !event.ctrlKey && !event.altKey) {
         if (typing || !hasOpenProject || event.defaultPrevented || event.repeat) return;
+        if (layerSelection.kind === 'backdrop') {
+          event.preventDefault();
+          removeBackdrop();
+          return;
+        }
         if (layerSelection.kind === 'prop' && layerSelection.id) {
           event.preventDefault();
+          const prop = (project.sceneProps ?? []).find((item) => item.id === layerSelection.id);
+          // Cyclorama prop = the backdrop; clear the whole studio set, not just the mesh.
+          if (prop?.kind === 'studio_backdrop') {
+            removeBackdrop();
+            return;
+          }
           removeSceneProp(layerSelection.id);
           return;
         }
@@ -3990,7 +4195,7 @@ export default function App() {
           if (selectedOverlayId === id) setSelectedOverlayId(null);
           return;
         }
-        // Device row or nested Screen — remove that device. Backdrop is scene-level.
+        // Device row or nested Screen — remove that device.
         if (layerSelection.kind === 'device') {
           event.preventDefault();
           deleteDeviceById(layerSelection.id || project.selectedDeviceId);
@@ -4233,7 +4438,7 @@ export default function App() {
     const candidate = trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
     if (!/^#[0-9a-fA-F]{6}$/.test(candidate)) return;
     const hex = candidate.toLowerCase();
-    if (hex === project.gradientColors[key]) return;
+    if (hex === project.gradientColors[key] && project.background !== 'transparent') return;
     const next = { ...project.gradientColors, [key]: hex };
     const keepsBuiltin = BACKGROUNDS.some((item) => item.id === project.background && item.gradient
       && item.gradient.center === next.center && item.gradient.mid === next.mid && item.gradient.edge === next.edge);
@@ -4245,15 +4450,33 @@ export default function App() {
       ? props.map((prop) => (prop.kind === 'studio_backdrop' ? { ...prop, color: hex } : prop))
       : null;
     const allWhite = [next.center, next.mid, next.edge].every((stop) => stop === '#ffffff');
+    // Editing a stop while transparent must leave the clear look so the colour shows.
+    const background = project.background === 'transparent'
+      ? (allWhite ? 'studio' : 'custom')
+      : allWhite
+        ? 'studio'
+        : keepsBuiltin || keepsCustom
+          ? project.background
+          : 'custom';
     updateProject({
       gradientColors: next,
-      background: allWhite
-        ? 'studio'
-        : keepsBuiltin || keepsCustom || project.background === 'transparent'
-          ? project.background
-          : 'custom',
+      background,
       ...(nextProps ? { sceneProps: nextProps } : {}),
     });
+    if (project.background === 'transparent') {
+      setStudioSetFocus(key === 'center' ? 'backdrop' : key === 'mid' ? 'sky' : 'floor');
+    }
+  };
+
+  const restoreColouredBackground = () => {
+    const studio = BACKGROUNDS.find((item) => item.id === 'studio');
+    updateProject({
+      background: 'studio',
+      gradientColors: studio?.gradient ? { ...studio.gradient } : { ...project.gradientColors },
+    });
+    setStudioSetFocus('sky');
+    setSidePanelsHidden(false);
+    notify('Coloured background restored');
   };
 
   const onSavePreset = () => {
@@ -4795,6 +5018,9 @@ export default function App() {
                     setOpenSectionId('look');
                   }}
                   onRemoveProp={removeSceneProp}
+                  onRemoveBackdrop={removeBackdrop}
+                  backdropLooksOpen={studioSetFocus != null}
+                  onSelectBackdrop={selectBackdrop}
                   onFocusKeyLight={focusKeyLight}
                   onFocusSceneLight={focusSceneLight}
                   onSelectionChange={onLayerSelection}
@@ -5224,7 +5450,11 @@ export default function App() {
                         onSelectProp={selectSceneProp}
                         backdropSelected={layerSelection.kind === 'backdrop'}
                         onSelectBackdrop={selectBackdrop}
+                        onSelectSky={selectSky}
+                        onSelectFloor={selectFloor}
                         onMoveProp={onMoveProp}
+                        onRotateProp={onRotateProp}
+                        onSelectEmpty={selectEmptyCanvas}
                         onSelectOverlay={selectCanvasOverlay}
                         onClearSelection={() => { setDeviceMenu(null); setPickedMaterial(null); }}
                         onRotateDevice={onRotateDevice}
@@ -5286,7 +5516,11 @@ export default function App() {
                         onSelectProp={selectSceneProp}
                         backdropSelected={layerSelection.kind === 'backdrop'}
                         onSelectBackdrop={selectBackdrop}
+                        onSelectSky={selectSky}
+                        onSelectFloor={selectFloor}
                         onMoveProp={onMoveProp}
+                        onRotateProp={onRotateProp}
+                        onSelectEmpty={selectEmptyCanvas}
                         onSelectOverlay={selectCanvasOverlay}
                         onClearSelection={() => { setDeviceMenu(null); setPickedMaterial(null); }}
                         onRotateDevice={onRotateDevice}
@@ -5336,7 +5570,11 @@ export default function App() {
                   onSelectProp={selectSceneProp}
                   backdropSelected={layerSelection.kind === 'backdrop'}
                   onSelectBackdrop={selectBackdrop}
+                  onSelectSky={selectSky}
+                  onSelectFloor={selectFloor}
                   onMoveProp={onMoveProp}
+                  onRotateProp={onRotateProp}
+                  onSelectEmpty={selectEmptyCanvas}
                   onSelectOverlay={selectCanvasOverlay}
                   onClearSelection={() => { setDeviceMenu(null); setPickedMaterial(null); }}
                   onRotateDevice={onRotateDevice}
@@ -5375,7 +5613,7 @@ export default function App() {
                 return overlayVisibleAt(overlay, animTime) ? (
                   <div
                     key={overlay.id}
-                    className={`canvas-overlay-layer ${selectedOverlayId === overlay.id ? 'is-selected' : ''} ${overlay.kind === 'text' ? 'is-text' : ''} ${(overlay.kind === 'text' && (overlay.extrusion ?? 0) > 0.001) ? 'is-extruded' : ''} ${overlay.kind === 'comment' ? 'is-comment' : ''} ${overlay.kind === 'shape' ? `is-shape is-${flatShapeOf(overlay)}` : ''} ${overlay.kind === 'path' ? 'is-path' : ''}`}
+                    className={`canvas-overlay-layer ${selectedOverlayId === overlay.id ? 'is-selected' : ''} ${overlay.kind === 'text' ? 'is-text' : ''} ${((overlay.kind === 'text' || overlay.kind === 'shape') && (overlay.extrusion ?? 0) > 0.001) ? 'is-extruded' : ''} ${overlay.kind === 'comment' ? 'is-comment' : ''} ${overlay.kind === 'shape' ? `is-shape is-${flatShapeOf(overlay)}` : ''} ${overlay.kind === 'path' ? 'is-path' : ''}`}
                     style={{
                       left: `${overlay.x * 100}%`,
                       top: `${overlay.y * 100}%`,
@@ -5383,7 +5621,7 @@ export default function App() {
                       transform: `translate(-50%, -50%) scale(${overlay.scale})`,
                       color: overlay.kind === 'comment'
                         ? (overlay.color || '#2a2418')
-                        : overlay.kind === 'text' && (overlay.extrusion ?? 0) > 0.001
+                        : ((overlay.kind === 'text' || overlay.kind === 'shape') && (overlay.extrusion ?? 0) > 0.001)
                           ? 'transparent'
                           : (overlay.color || '#fff'),
                       background: overlay.kind === 'comment' ? (overlay.fill || '#f4e7c3') : undefined,
@@ -5621,8 +5859,53 @@ export default function App() {
                         <ChevronDown className="canvas-tool-caret" aria-hidden />
                       </button>
                     </div>
+                    <div className="canvas-tool-pop">
+                      <button
+                        ref={stageBtnRef}
+                        type="button"
+                        title="Stage — what sits under the device"
+                        aria-label="Stage type"
+                        aria-expanded={shapeMenu === 'stage'}
+                        aria-haspopup="menu"
+                        className={shapeMenu === 'stage' ? 'is-active has-caret' : 'has-caret'}
+                        onClick={() => openShapeMenu('stage', stageBtnRef.current)}
+                      >
+                        <Theater size={15} />
+                        <ChevronDown className="canvas-tool-caret" aria-hidden />
+                      </button>
+                    </div>
                   </div>
-                  {shapeMenu && shapeMenuBox && createPortal(
+                  {shapeMenu === 'stage' && shapeMenuBox && createPortal(
+                    <div
+                      ref={floatingMenuRef}
+                      className="canvas-tool-menu is-text-menu is-stage-menu is-above"
+                      role="menu"
+                      aria-label="Stage type"
+                      style={{ top: shapeMenuBox.top, left: shapeMenuBox.left }}
+                    >
+                      {STAGE_TYPES.map((type) => {
+                        const Icon = type.icon;
+                        const active = type.id === currentStageType;
+                        return (
+                          <button
+                            key={type.id}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={active}
+                            title={type.hint}
+                            className={active ? 'is-active' : ''}
+                            onClick={() => setStageType(type.id)}
+                          >
+                            <Icon size={15} />
+                            <span className="canvas-tool-menu-label">{type.label}</span>
+                            {active && <Check size={13} className="canvas-tool-menu-check" aria-hidden />}
+                          </button>
+                        );
+                      })}
+                    </div>,
+                    document.body,
+                  )}
+                  {shapeMenu && shapeMenu !== 'stage' && shapeMenuBox && createPortal(
                     <div
                       ref={floatingMenuRef}
                       className="canvas-tool-menu is-above"
@@ -5836,6 +6119,70 @@ export default function App() {
             </div>
           )}
           <div className="inspector-scroll" ref={inspectorScrollRef}>
+            {studioSetFocus && (
+              <div className="surround-colour-dock is-active" data-stop={studioSetFocus}>
+                <div className="surround-colour-dock-head">
+                  <strong>
+                    {studioSetFocus === 'sky'
+                      ? 'Surround colour'
+                      : studioSetFocus === 'floor'
+                        ? 'Floor colour'
+                        : 'Backdrop colour'}
+                  </strong>
+                  <span>
+                    {isTransparent
+                      ? 'Transparent look is on — restore colours to edit'
+                      : 'Opened from background tap · drag canvas still orbits'}
+                  </span>
+                </div>
+                {isTransparent ? (
+                  <button
+                    type="button"
+                    className="button primary-button surround-colour-restore"
+                    onClick={restoreColouredBackground}
+                  >
+                    Restore coloured background
+                  </button>
+                ) : (
+                  <div className="gradient-color-grid is-separate-stops">
+                    {([
+                      ['mid', 'Sky · surround', 'sky'],
+                      ['edge', 'Floor', 'floor'],
+                      ['center', 'Backdrop', 'backdrop'],
+                    ] as const).map(([key, label, stop]) => (
+                      <label
+                        key={key}
+                        className={`gradient-color-field${studioSetFocus === stop ? ' is-highlighted' : ''}`}
+                        onPointerDown={() => setStudioSetFocus(stop)}
+                      >
+                        <span className="gradient-color-label">{label}</span>
+                        <span className="gradient-color-input">
+                          <input
+                            type="color"
+                            value={project.gradientColors[key]}
+                            aria-label={`${label} colour`}
+                            onFocus={() => setStudioSetFocus(stop)}
+                            onChange={(e) => updateGradient(key, e.target.value)}
+                          />
+                          <input
+                            type="text"
+                            defaultValue={project.gradientColors[key]}
+                            key={`dock-${key}-${project.gradientColors[key]}`}
+                            maxLength={7}
+                            aria-label={`${label} hex`}
+                            onFocus={() => setStudioSetFocus(stop)}
+                            onBlur={(e) => updateGradient(key, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') e.currentTarget.blur();
+                            }}
+                          />
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <SettingsSection id="camera" title="Camera" hint="Control the camera view, lens, and focus" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection}>
               <div className="field-caption">Angle</div>
               <div className="camera-preset-grid">
@@ -6675,6 +7022,69 @@ export default function App() {
                       </label>
                     </div>
                   )}
+                  {overlay.kind === 'shape' && (
+                    <>
+                      <div className="overlay-row overlay-row-color">
+                        <label className="overlay-color-field">
+                          Colour
+                          <span className="gradient-color-input">
+                            <input
+                              type="color"
+                              value={overlay.color || '#d7dde4'}
+                              aria-label="Shape colour"
+                              onChange={(e) => {
+                                const hex = normalizeOverlayColor(e.target.value);
+                                if (hex) patchOverlay(overlay.id, { color: hex });
+                              }}
+                            />
+                            <input
+                              type="text"
+                              defaultValue={overlay.color || '#d7dde4'}
+                              key={`shape-color-${overlay.id}-${overlay.color || '#d7dde4'}`}
+                              maxLength={7}
+                              aria-label="Shape colour hex"
+                              onBlur={(e) => {
+                                const hex = normalizeOverlayColor(e.target.value);
+                                if (hex) patchOverlay(overlay.id, { color: hex });
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') e.currentTarget.blur();
+                              }}
+                            />
+                          </span>
+                        </label>
+                        <label>
+                          Shape
+                          <select
+                            value={flatShapeOf(overlay)}
+                            aria-label="Flat shape"
+                            onChange={(e) => patchOverlay(overlay.id, { text: e.target.value })}
+                          >
+                            <option value="rect">Rectangle</option>
+                            <option value="ellipse">Ellipse</option>
+                            <option value="triangle">Triangle</option>
+                          </select>
+                        </label>
+                      </div>
+                      <div className="overlay-row">
+                        <label>
+                          Extrusion
+                          <input
+                            type="range"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            value={overlay.extrusion ?? 0}
+                            aria-label="Shape extrusion"
+                            onChange={(e) => patchOverlay(overlay.id, { extrusion: Number(e.target.value) })}
+                          />
+                        </label>
+                      </div>
+                      <p className="field-caption" style={{ marginTop: 0 }}>
+                        Extruded shapes stay front-facing with the camera.
+                      </p>
+                    </>
+                  )}
                   <div className="overlay-row">
                     <label>
                       <span className="overlay-axis-head">
@@ -7230,12 +7640,15 @@ export default function App() {
                     <SliderField
                       label="Intensity"
                       min={0}
-                      max={0.85}
+                      max={2}
                       step={0.01}
                       unit=""
                       value={project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity}
                       onChange={(v) => updateProject({ shadowOpacity: v })}
                     />
+                    <p className="field-caption" style={{ marginTop: -4 }}>
+                      Progressive floor shadow — 1 is the soft default, above 1 crushes the core darker, low fades to a whisper.
+                    </p>
                     <SliderField
                       label="Contact"
                       min={0}
@@ -7332,11 +7745,88 @@ export default function App() {
                         />
                       </span>
                     </label>
+                    {selectedSceneProp.kind !== 'studio_backdrop' && (
+                      <>
+                        <div className="field-caption scene-look-sub" style={{ marginTop: 10 }}>
+                          Shape transform
+                        </div>
+                        <p className="field-caption" style={{ marginTop: 2 }}>
+                          Drag to spin · Shift-drag to move · rings and arrows for precise edits
+                        </p>
+                        <SliderField
+                          label="Rotate X"
+                          min={-180}
+                          max={180}
+                          value={selectedSceneProp.rotation.x}
+                          onChange={(v) => patchSceneProp(selectedSceneProp.id, {
+                            rotation: { ...selectedSceneProp.rotation, x: v },
+                          })}
+                        />
+                        <SliderField
+                          label="Rotate Y"
+                          min={-180}
+                          max={180}
+                          value={selectedSceneProp.rotation.y}
+                          onChange={(v) => patchSceneProp(selectedSceneProp.id, {
+                            rotation: { ...selectedSceneProp.rotation, y: v },
+                          })}
+                        />
+                        <SliderField
+                          label="Rotate Z"
+                          min={-180}
+                          max={180}
+                          value={selectedSceneProp.rotation.z}
+                          onChange={(v) => patchSceneProp(selectedSceneProp.id, {
+                            rotation: { ...selectedSceneProp.rotation, z: v },
+                          })}
+                        />
+                        <SliderField
+                          label="Scale"
+                          min={0.15}
+                          max={4}
+                          step={0.05}
+                          unit="×"
+                          value={propFootprintScale(selectedSceneProp.scale)}
+                          onChange={(v) => patchSceneProp(selectedSceneProp.id, {
+                            scale: withPropFootprintScale(selectedSceneProp.scale, v),
+                          })}
+                        />
+                        <SliderField
+                          label="Extrude"
+                          min={0.15}
+                          max={4}
+                          step={0.05}
+                          unit="×"
+                          value={propExtrusion(selectedSceneProp.scale)}
+                          onChange={(v) => patchSceneProp(selectedSceneProp.id, {
+                            scale: withPropExtrusion(selectedSceneProp.scale, v),
+                          })}
+                        />
+                      </>
+                    )}
                   </div>
                 )}
-                {!isTransparent && (
+                {!isTransparent && studioSetFocus && (
                   <div className="scene-look-group">
-                    <div className="field-caption scene-look-sub">Backdrop · Sky · Floor</div>
+                    <div className="field-caption scene-look-sub" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span>
+                        {studioSetFocus === 'sky'
+                          ? 'Surround colour'
+                          : studioSetFocus === 'floor'
+                            ? 'Floor colour'
+                            : 'Backdrop colour'}
+                      </span>
+                      {(layerSelection.kind === 'backdrop' || selectedSceneProp?.kind === 'studio_backdrop') && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          title="Remove backdrop"
+                          onClick={removeBackdrop}
+                        >
+                          <Trash2 size={12} /> Remove
+                        </button>
+                      )}
+                    </div>
                     <div className="gradient-color-grid is-separate-stops">
                       {([
                         ['center', 'Backdrop'],
@@ -7344,16 +7834,15 @@ export default function App() {
                         ['edge', 'Floor'],
                       ] as const).map(([key, label]) => {
                         const stopFocus = key === 'center' ? 'backdrop' : key === 'mid' ? 'sky' : 'floor';
-                        const highlighted = studioSetFocus === stopFocus
-                          || (layerSelection.kind === 'backdrop' && stopFocus === 'backdrop')
-                          || (selectedSceneProp?.kind === 'studio_backdrop' && stopFocus === 'backdrop');
                         return (
                         <label
                           key={key}
-                          className={`gradient-color-field${highlighted ? ' is-highlighted' : ''}`}
+                          className={`gradient-color-field${studioSetFocus === stopFocus ? ' is-highlighted' : ''}`}
                           onPointerDown={() => setStudioSetFocus(stopFocus)}
                         >
-                          <span className="gradient-color-label">{label}</span>
+                          <span className="gradient-color-label">
+                            {key === 'mid' ? 'Sky · surround' : label}
+                          </span>
                           <span className="gradient-color-input">
                             <input type="color" value={project.gradientColors[key]} aria-label={`${label} colour`}
                               onFocus={() => setStudioSetFocus(stopFocus)}
@@ -8014,7 +8503,7 @@ export default function App() {
               <AccentThemePicker />
             </div>
             <div className="help-rows">
-              <div><MousePointer2 size={17} /><span>Drag empty canvas to orbit the camera. Drag a device to spin it freely; Shift+drag slides it. Right-drag or Space+drag pans the view. Scroll zooms. Rings and arrows still work for precise moves.</span></div>
+              <div><MousePointer2 size={17} /><span>Drag empty canvas to orbit the camera. Tap empty sky to set the surround colour in Look. Drag a device to spin it freely; Shift+drag slides it. Right-drag or Space+drag pans the view. Scroll zooms. Rings and arrows still work for precise moves.</span></div>
               <div><ImagePlus size={17} /><span>Drop a screenshot onto the preview, or drop an FBX, DAE, OBJ, glTF, Blend, or C4D file to extract it as a device. Blend uses your local Blender install.</span></div>
               <div><MonitorSmartphone size={17} /><span>Plug in an iPhone or Android over USB and use Phone Mirror — it auto-detects the device. Snapshot freezes the live screen onto the mockup.</span></div>
               <div><SlidersHorizontal size={17} /><span>Rings rotate on one axis; coloured arrows slide on X / Y / Z. Drag the device body to tumble freely, Shift+drag to reposition. Add more devices from Device → Add device, then Save as template (⇧⌘S) under Templates → Yours.</span></div>

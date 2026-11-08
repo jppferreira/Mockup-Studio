@@ -147,6 +147,7 @@ export interface SceneStage {
    */
   toneMappingExposure: number | null;
   shadowSoftness: number;
+  /** Floor / key shadow strength, 0–2. 1 is the soft default; above 1 darkens further. */
   shadowOpacity: number;
   /** Floor shadows on (`soft`) or off. Legacy contact/sharp still accepted. */
   shadowType: ShadowType;
@@ -552,7 +553,7 @@ export interface MockupProject {
   toneMappingExposure: number | null;
   /** Apparent key-light size — higher = softer penumbra */
   shadowSoftness: number;
-  /** Floor shadow darkness */
+  /** Floor / key shadow strength, 0–2. 1 is the soft default; above 1 darkens further. */
   shadowOpacity: number;
   /** Floor shadows on (`soft`) or off. Legacy contact/sharp still accepted. */
   shadowType: ShadowType;
@@ -732,10 +733,10 @@ export const DEFAULT_PROJECT: MockupProject = {
   sceneLights: [],
   environmentIntensity: null,
   toneMappingExposure: null,
-  shadowSoftness: 1.8,
-  shadowOpacity: 0.55,
+  shadowSoftness: 6.1,
+  shadowOpacity: 1,
   shadowType: 'soft',
-  shadowContact: 0.7,
+  shadowContact: 0,
   shadowQuality: 'auto',
   showGroundBase: true,
   edgeBlurTop: false,
@@ -1032,7 +1033,8 @@ function blankSceneStage(): SceneStage {
     shadowType: DEFAULT_PROJECT.shadowType,
     shadowContact: DEFAULT_PROJECT.shadowContact,
     shadowQuality: DEFAULT_PROJECT.shadowQuality,
-    showGroundBase: DEFAULT_PROJECT.showGroundBase,
+    // A blank scene starts with an empty stage; the Stage tool adds a floor piece.
+    showGroundBase: false,
     edgeBlurTop: false,
     edgeBlurBottom: false,
     edgeBlurAmount: DEFAULT_PROJECT.edgeBlurAmount,

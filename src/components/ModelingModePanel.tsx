@@ -13,6 +13,12 @@ import {
   MAX_SCENE_LIGHTS, createSceneLight, createSceneProp,
   type GradientColors, type MaterialTweak, type MockupProject, type SceneProp, type ScenePropKind,
 } from '../types';
+import {
+  propExtrusion,
+  propFootprintScale,
+  withPropExtrusion,
+  withPropFootprintScale,
+} from '../lib/propTransform';
 
 const QUICK_PROPS: { kind: ScenePropKind; label: string }[] = [
   { kind: 'stage', label: 'Stage' },
@@ -25,7 +31,7 @@ const QUICK_PROPS: { kind: ScenePropKind; label: string }[] = [
 
 const STUDIO_SET_STOPS: { key: keyof GradientColors; label: string; hint: string }[] = [
   { key: 'center', label: 'Backdrop', hint: 'Cyclorama wall' },
-  { key: 'mid', label: 'Sky', hint: 'Ambient wash' },
+  { key: 'mid', label: 'Sky', hint: 'Surround wash · tap empty sky' },
   { key: 'edge', label: 'Floor', hint: 'Ground sweep' },
 ];
 
@@ -425,12 +431,58 @@ export default function ModelingModePanel({
                 />
               </span>
             </label>
+            <p className="modeling-mode-hint">Drag to spin · Shift-drag to move · use Extrude to stretch height.</p>
+            {(['x', 'y', 'z'] as const).map((axis) => (
+              <label key={axis} className="modeling-mode-slider">
+                <span>Rotate {axis.toUpperCase()} <em>{Math.round(selectedProp.rotation[axis])}°</em></span>
+                <input
+                  type="range"
+                  min={-180}
+                  max={180}
+                  step={1}
+                  value={selectedProp.rotation[axis]}
+                  onChange={(e) => onPatchProp(selectedProp.id, {
+                    rotation: { ...selectedProp.rotation, [axis]: Number(e.target.value) },
+                  })}
+                />
+              </label>
+            ))}
+            <label className="modeling-mode-slider">
+              <span>Scale <em>{propFootprintScale(selectedProp.scale).toFixed(2)}×</em></span>
+              <input
+                type="range"
+                min={0.15}
+                max={4}
+                step={0.05}
+                value={propFootprintScale(selectedProp.scale)}
+                onChange={(e) => onPatchProp(selectedProp.id, {
+                  scale: withPropFootprintScale(selectedProp.scale, Number(e.target.value)),
+                })}
+              />
+            </label>
+            <label className="modeling-mode-slider">
+              <span>Extrude <em>{propExtrusion(selectedProp.scale).toFixed(2)}×</em></span>
+              <input
+                type="range"
+                min={0.15}
+                max={4}
+                step={0.05}
+                value={propExtrusion(selectedProp.scale)}
+                onChange={(e) => onPatchProp(selectedProp.id, {
+                  scale: withPropExtrusion(selectedProp.scale, Number(e.target.value)),
+                })}
+              />
+            </label>
           </>
         ) : (
           <p className="modeling-mode-hint">
-            {backdropSelected || backdropPropSelected
-              ? 'Backdrop selected — edit Backdrop / Sky / Floor below.'
-              : 'Click any mesh material — or a quick prop — to edit it here.'}
+            {activeStudioStop === 'sky'
+              ? 'Surround sky selected — change the Sky colour below.'
+              : activeStudioStop === 'floor'
+                ? 'Floor selected — change the Floor colour below.'
+                : backdropSelected || backdropPropSelected
+                  ? 'Backdrop selected — edit Backdrop / Sky / Floor below.'
+                  : 'Click any mesh material — or a quick prop — to edit it here. Tap empty background to set its colour.'}
           </p>
         )}
       </section>
@@ -438,12 +490,20 @@ export default function ModelingModePanel({
       {showStudioSet && (
         <section className="modeling-mode-section modeling-mode-studio-set">
           <h4><Sparkles size={14} /> Studio set</h4>
-          <p>Backdrop, sky, and floor are separate colours — tap a stop to highlight it.</p>
+          <p>
+            {activeStudioStop === 'sky'
+              ? 'Surround sky is active — edit the Sky colour below.'
+              : activeStudioStop === 'floor'
+                ? 'Floor is active — edit the Floor colour below.'
+                : activeStudioStop === 'backdrop'
+                  ? 'Backdrop is active — edit the Backdrop colour below.'
+                  : 'Backdrop, sky, and floor are separate colours — tap empty background or a stop to highlight it.'}
+          </p>
           <div className="modeling-mode-studio-stops">
             {STUDIO_SET_STOPS.map(({ key, label, hint }) => {
               const stopFocus = key === 'center' ? 'backdrop' : key === 'mid' ? 'sky' : 'floor';
               const highlighted = activeStudioStop === stopFocus
-                || (backdropPropSelected && stopFocus === 'backdrop');
+                || (activeStudioStop == null && backdropPropSelected && stopFocus === 'backdrop');
               return (
                 <label
                   key={key}

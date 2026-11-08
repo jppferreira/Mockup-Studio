@@ -260,7 +260,7 @@ export function validateProject(value: unknown): MockupProject {
       0.2,
       8,
     ),
-    shadowOpacity: number(input.shadowOpacity, DEFAULT_PROJECT.shadowOpacity, 0, 0.85),
+    shadowOpacity: number(input.shadowOpacity, DEFAULT_PROJECT.shadowOpacity, 0, 2),
     shadowType: (['contact', 'soft', 'sharp', 'off'] as const).includes(input.shadowType as never)
       ? (input.shadowType as MockupProject['shadowType'])
       : DEFAULT_PROJECT.shadowType,
@@ -389,7 +389,7 @@ function normalizeStoredStage(raw: unknown, fallback: MockupProject): SceneStage
       ? (fallback.toneMappingExposure ?? null)
       : number(source.toneMappingExposure, 1.45, 0.2, 4),
     shadowSoftness: number(source.shadowSoftness, fallback.shadowSoftness, 0.2, 8),
-    shadowOpacity: number(source.shadowOpacity, fallback.shadowOpacity, 0, 0.85),
+    shadowOpacity: number(source.shadowOpacity, fallback.shadowOpacity, 0, 2),
     shadowType: (['contact', 'soft', 'sharp', 'off'] as const).includes(source.shadowType as never)
       ? (source.shadowType as MockupProject['shadowType'])
       : (fallback.shadowType ?? DEFAULT_PROJECT.shadowType),

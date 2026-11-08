@@ -760,6 +760,7 @@ function applyCycloramaVertexColors(
   floorHex: string,
   contactPoints: CycloramaContactPoint[] = [],
   contactStrength = 0,
+  selectTintHex: string | null = null,
 ) {
   const shade = geometry.getAttribute('shade') as THREE.BufferAttribute | undefined;
   const color = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
@@ -769,6 +770,9 @@ function applyCycloramaVertexColors(
   const floor = new THREE.Color(floorHex);
   const mixed = new THREE.Color();
   const strength = THREE.MathUtils.clamp(contactStrength, 0, 1);
+  // Selected backdrop: wash the sweep toward the accent so a tap reads on the canvas,
+  // matching the emissive tint props get when picked.
+  const selectTint = selectTintHex ? new THREE.Color(selectTintHex) : null;
   for (let i = 0; i < shade.count; i += 1) {
     const shadeV = shade.getX(i);
     const t = THREE.MathUtils.smoothstep(shadeV, 0.02, 0.92);
@@ -803,6 +807,8 @@ function applyCycloramaVertexColors(
       }
     }
 
+    if (selectTint) mixed.lerp(selectTint, 0.16);
+
     color.setXYZ(i, mixed.r, mixed.g, mixed.b);
   }
   color.needsUpdate = true;
@@ -834,17 +840,21 @@ export function CycloramaBackdrop({
   shadowColor?: string;
 }) {
   const geometry = useMemo(() => createCycloramaGeometry(), []);
+  const [accentTheme, , accentColor] = useAccentTheme();
+  const selectTint = selected ? accentPair(accentTheme, accentColor).soft : null;
   const floorColor = floor ?? color;
   const contactKey = contactPoints
     .map((point) => {
-      const n = (value: number | undefined) => (Number.isFinite(value) ? value : 0).toFixed(2);
+      const n = (value: number | undefined) => (
+        typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '0.00'
+      );
       return [n(point.x), n(point.z), n(point.radiusX), n(point.radiusZ), n(point.blur), n(point.yaw), n(point.weight)].join(':');
     })
     .join('|');
 
   useEffect(() => {
-    applyCycloramaVertexColors(geometry, color, floorColor, contactPoints, contactStrength);
-  }, [geometry, color, floorColor, contactKey, contactPoints, contactStrength]);
+    applyCycloramaVertexColors(geometry, color, floorColor, contactPoints, contactStrength, selectTint);
+  }, [geometry, color, floorColor, contactKey, contactPoints, contactStrength, selectTint]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
 
@@ -897,6 +907,8 @@ function PropMesh({
   selected = false,
   onSelect,
   grabRegistry,
+  onGizmoTargets,
+  gizmoDraggingRef,
   backdropFloor,
   backdropShadowOpacity = 0.45,
   backdropShadowSoftness = 4.2,
@@ -908,6 +920,8 @@ function PropMesh({
   selected?: boolean;
   onSelect?: (id: string) => void;
   grabRegistry?: MutableRefObject<Map<string, THREE.Object3D>>;
+  onGizmoTargets?: (propId: string, targets: { position: THREE.Object3D; rotation: THREE.Object3D } | null) => void;
+  gizmoDraggingRef?: MutableRefObject<boolean>;
   /** Floor stop for studio cyclorama props — matches the sky gradient edge. */
   backdropFloor?: string;
   backdropShadowOpacity?: number;
@@ -921,34 +935,61 @@ function PropMesh({
   const pos = prop.position;
   const clay = prop.color ?? TONE_CLAY;
   const seed = prop.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  const groupRef = useRef<THREE.Group>(null);
+  const positionRef = useRef<THREE.Group>(null);
+  const rotationRef = useRef<THREE.Group>(null);
+  const scaleRef = useRef<THREE.Group>(null);
+  const movable = MOVABLE_PROP_KINDS.has(prop.kind);
 
   useLayoutEffect(() => {
-    const group = groupRef.current;
+    const group = positionRef.current;
+    const pivot = rotationRef.current;
     const registry = grabRegistry?.current;
-    if (!group || !registry || !MOVABLE_PROP_KINDS.has(prop.kind)) return undefined;
+    if (!group || !registry || !movable) return undefined;
     group.userData.propGrabId = prop.id;
+    group.userData.rotationPivot = pivot ?? null;
     registry.set(prop.id, group);
     return () => {
       if (registry.get(prop.id) === group) registry.delete(prop.id);
+      if (group.userData.rotationPivot === pivot) group.userData.rotationPivot = null;
     };
-  }, [grabRegistry, prop.id, prop.kind]);
+  }, [grabRegistry, prop.id, movable]);
+
+  useLayoutEffect(() => {
+    const position = positionRef.current;
+    const rotation = rotationRef.current;
+    const scaleGroup = scaleRef.current;
+    if (!position || !rotation) return;
+    if (scaleGroup) scaleGroup.scale.set(scale[0], scale[1], scale[2]);
+    // While the gizmo is dragging, TransformControls owns the pose — don't fight it.
+    if (gizmoDraggingRef?.current) return;
+    position.position.set(pos.x, pos.y, pos.z);
+    rotation.position.set(0, 0, 0);
+    rotation.scale.setScalar(1);
+    rotation.rotation.set(
+      THREE.MathUtils.degToRad(rot.x),
+      THREE.MathUtils.degToRad(rot.y),
+      THREE.MathUtils.degToRad(rot.z),
+    );
+  }, [pos.x, pos.y, pos.z, rot.x, rot.y, rot.z, scale[0], scale[1], scale[2], gizmoDraggingRef]);
+
+  useLayoutEffect(() => {
+    if (!selected || !movable || !onGizmoTargets) return undefined;
+    const position = positionRef.current;
+    const rotation = rotationRef.current;
+    if (position && rotation) onGizmoTargets(prop.id, { position, rotation });
+    return () => onGizmoTargets(prop.id, null);
+  }, [selected, movable, onGizmoTargets, prop.id]);
 
   return (
     <group
-      ref={groupRef}
-      position={[pos.x, pos.y, pos.z]}
-      rotation={[
-        THREE.MathUtils.degToRad(rot.x),
-        THREE.MathUtils.degToRad(rot.y),
-        THREE.MathUtils.degToRad(rot.z),
-      ]}
-      scale={scale}
+      ref={positionRef}
       onClick={(event) => {
         event.stopPropagation();
         onSelect?.(prop.id);
       }}
     >
+      <group ref={rotationRef}>
+        <group ref={scaleRef}>
       {prop.kind === 'clay_sphere' && (
         <mesh castShadow receiveShadow>
           <sphereGeometry args={[0.55, 64, 64]} />
@@ -1049,6 +1090,8 @@ function PropMesh({
       {prop.kind === 'stage' && (
         <StageSet tint={prop.color ?? TONE_STAGE} selected={selected} />
       )}
+        </group>
+      </group>
     </group>
   );
 }
@@ -1095,6 +1138,8 @@ export default function SceneProps({
   selectedId = null,
   onSelect,
   grabRegistry,
+  onGizmoTargets,
+  gizmoDraggingRef,
   backdropFloor,
   backdropShadowOpacity = 0.45,
   backdropShadowSoftness = 4.2,
@@ -1106,6 +1151,8 @@ export default function SceneProps({
   selectedId?: string | null;
   onSelect?: (id: string) => void;
   grabRegistry?: MutableRefObject<Map<string, THREE.Object3D>>;
+  onGizmoTargets?: (propId: string, targets: { position: THREE.Object3D; rotation: THREE.Object3D } | null) => void;
+  gizmoDraggingRef?: MutableRefObject<boolean>;
   backdropFloor?: string;
   backdropShadowOpacity?: number;
   backdropShadowSoftness?: number;
@@ -1123,6 +1170,8 @@ export default function SceneProps({
           selected={prop.id === selectedId}
           onSelect={onSelect}
           grabRegistry={grabRegistry}
+          onGizmoTargets={onGizmoTargets}
+          gizmoDraggingRef={gizmoDraggingRef}
           backdropFloor={backdropFloor}
           backdropShadowOpacity={backdropShadowOpacity}
           backdropShadowSoftness={backdropShadowSoftness}

@@ -29,6 +29,7 @@ import ProceduralDevice from './ProceduralDevice';
 import RotationBall, { type GizmoControl, type GizmoMode, type GizmoTargets } from './RotationBall';
 import SceneProps from './SceneProps';
 import ExtrudedText from './ExtrudedText';
+import ExtrudedShape from './ExtrudedShape';
 import { AnnotationDrawController, ModelAnnotationLayer, type AnnotationMark } from './ModelAnnotations';
 import {
   StudioDepthOfField,
@@ -46,6 +47,7 @@ import {
   collectCasterBounds,
   fitDirectionalShadowCamera,
   resolveKeyShadowMapSize,
+  shadowIntensityCurve,
   softnessToPenumbra,
 } from '../lib/studioShadows';
 import { physicalFromAuthored, stripSceneHelpers } from '../lib/materialFidelity';
@@ -126,6 +128,10 @@ interface Props {
   /** Built-in studio cyclorama selected in the hierarchy / canvas. */
   backdropSelected?: boolean;
   onSelectBackdrop?: () => void;
+  /** Tap empty surrounding sky (not devices / stage / backdrop wall). */
+  onSelectSky?: () => void;
+  /** Tap empty floor / ground plane (not devices / stage / backdrop wall). */
+  onSelectFloor?: () => void;
   onSelectOverlay?: (id: string) => void;
   selectedOverlayId?: string | null;
   /** Device under the pointer, or null when the pointer leaves the canvas. */
@@ -138,6 +144,9 @@ interface Props {
   onRotateDevice?: (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
   onMoveDevice?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
   onMoveProp?: (id: string, position: Vec3) => void;
+  onRotateProp?: (id: string, rotation: Vec3) => void;
+  /** Clean tap on empty canvas → sky / floor / backdrop colour in the sidebar. */
+  onSelectEmpty?: (target: 'sky' | 'floor' | 'backdrop') => void;
   onGizmoDraggingChange?: (dragging: boolean) => void;
   /** True while the gimbal / body-drag is active — freezes camera framing chase. */
   gizmoDragging?: boolean;
@@ -1174,6 +1183,20 @@ function pickGrabTarget(
   return { object, gizmoWins: true };
 }
 
+/** Prefer floor / backdrop wall / sky from an empty-canvas ray. */
+function emptyCanvasColourTarget(hits: THREE.Intersection[]): 'sky' | 'floor' | 'backdrop' {
+  for (const hit of hits) {
+    let node: THREE.Object3D | null = hit.object;
+    while (node) {
+      if (node.userData?.isStudioBackdrop) return 'backdrop';
+      if (node.userData?.orbitPickFloor) return 'floor';
+      if (node.userData?.isStudioSky) return 'sky';
+      node = node.parent;
+    }
+  }
+  return 'sky';
+}
+
 function classifyPointerHit(object: THREE.Object3D): 'skip' | 'gizmo' | 'solid' {
   if ((object as THREE.Object3D & { isTransformControlsPlane?: boolean }).isTransformControlsPlane) return 'skip';
   // Walk ancestors — translate arrow pickers are Meshes inside a marked handle
@@ -1367,6 +1390,8 @@ function DeviceGrabController({
   onRotate,
   onSelectProp,
   onMoveProp,
+  onRotateProp,
+  onSelectEmpty,
   onDraggingChange,
   materialEditEnabled = false,
   onPickMaterial,
@@ -1382,6 +1407,9 @@ function DeviceGrabController({
   onRotate?: (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => void;
   onSelectProp?: (id: string) => void;
   onMoveProp?: (id: string, position: Vec3) => void;
+  onRotateProp?: (id: string, rotation: Vec3) => void;
+  /** Clean tap on empty surround / floor / cyclorama (no device or shape). */
+  onSelectEmpty?: (target: 'sky' | 'floor' | 'backdrop') => void;
   onDraggingChange?: (dragging: boolean) => void;
   materialEditEnabled?: boolean;
   onPickMaterial?: (payload: MaterialPickPayload) => void;
@@ -1397,12 +1425,16 @@ function DeviceGrabController({
   onPickMaterialRef.current = onPickMaterial;
   materialEditRef.current = materialEditEnabled;
   const onMovePropRef = useRef(onMoveProp);
+  const onRotatePropRef = useRef(onRotateProp);
+  const onSelectEmptyRef = useRef(onSelectEmpty);
   const onDraggingChangeRef = useRef(onDraggingChange);
   onSelectRef.current = onSelect;
   onMoveRef.current = onMove;
   onRotateRef.current = onRotate;
   onSelectPropRef.current = onSelectProp;
   onMovePropRef.current = onMoveProp;
+  onRotatePropRef.current = onRotateProp;
+  onSelectEmptyRef.current = onSelectEmpty;
   onDraggingChangeRef.current = onDraggingChange;
 
   useEffect(() => {
@@ -1501,19 +1533,38 @@ function DeviceGrabController({
         }
         return;
       }
-      // Empty canvas (no device/prop under the cursor): leave the event alone
-      // so OrbitControls can swing around the model focus.
-      if (!picked.object) return;
+      // Empty canvas / surround / floor (no device/prop): orbit on drag; clean tap opens colour dock.
+      if (!picked.object) {
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const pointerId = event.pointerId;
+        const emptyTarget = emptyCanvasColourTarget(hits);
+        let moved = false;
+        const onMoveEmpty = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointerId) return;
+          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 8) moved = true;
+        };
+        const onUpEmpty = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointerId) return;
+          window.removeEventListener('pointermove', onMoveEmpty, true);
+          window.removeEventListener('pointerup', onUpEmpty, true);
+          window.removeEventListener('pointercancel', onUpEmpty, true);
+          if (moved || gizmoDraggingRef.current || draggingRef.current) return;
+          onSelectEmptyRef.current?.(emptyTarget);
+        };
+        window.addEventListener('pointermove', onMoveEmpty, true);
+        window.addEventListener('pointerup', onUpEmpty, true);
+        window.addEventListener('pointercancel', onUpEmpty, true);
+        return;
+      }
 
       const target = picked.object;
       const group = (target.kind === 'device' ? registry : propRegistry).current.get(target.id);
       if (!group) return;
 
-      // Mouse on a device: free-rotate by default, Shift-drag to slide it.
+      // Mouse on a device or shape: free-rotate by default, Shift-drag to slide it.
       // Touch/pen keeps the older slide-to-reposition gesture.
-      const rotatePivot = target.kind === 'device'
-        ? (group.userData.rotationPivot as THREE.Object3D | undefined)
-        : undefined;
+      const rotatePivot = group.userData.rotationPivot as THREE.Object3D | undefined;
       const wantTranslate = touchLike || event.shiftKey || !rotatePivot;
 
       event.stopImmediatePropagation();
@@ -1603,8 +1654,10 @@ function DeviceGrabController({
           }
           return;
         }
-        if (mode === 'rotate' && rotatePivot && target.kind === 'device') {
-          onRotateRef.current?.(target.id, readObjectRotation(rotatePivot), { recordKeys: true });
+        if (mode === 'rotate' && rotatePivot) {
+          const next = readObjectRotation(rotatePivot);
+          if (target.kind === 'prop') onRotatePropRef.current?.(target.id, next);
+          else onRotateRef.current?.(target.id, next, { recordKeys: true });
         } else {
           const position = group.position;
           if (target.kind === 'prop') {
@@ -1653,13 +1706,15 @@ function DeviceGrabController({
           lastY = ev.clientY;
         }
 
-        if (mode === 'rotate' && rotatePivot && target.kind === 'device') {
+        if (mode === 'rotate' && rotatePivot) {
           const stepX = ev.clientX - lastX;
           const stepY = ev.clientY - lastY;
           lastX = ev.clientX;
           lastY = ev.clientY;
           applyTrackballDelta(rotatePivot, camera, stepX, stepY);
-          onRotateRef.current?.(target.id, readObjectRotation(rotatePivot), { recordKeys: false });
+          const next = readObjectRotation(rotatePivot);
+          if (target.kind === 'prop') onRotatePropRef.current?.(target.id, next);
+          else onRotateRef.current?.(target.id, next, { recordKeys: false });
           return;
         }
 
@@ -1897,7 +1952,13 @@ void main() {
 }
 `;
 
-function StudioSky({ colors }: { colors: GradientColors }) {
+function StudioSky({
+  colors,
+  onSelect,
+}: {
+  colors: GradientColors;
+  onSelect?: () => void;
+}) {
   const mesh = useRef<THREE.Mesh>(null);
   const material = useMemo(() => new THREE.ShaderMaterial({
     uniforms: {
@@ -1927,7 +1988,21 @@ function StudioSky({ colors }: { colors: GradientColors }) {
   });
 
   return (
-    <mesh ref={mesh} layers={1} frustumCulled={false} renderOrder={-1} raycast={() => null}>
+    <mesh
+      ref={mesh}
+      layers={1}
+      frustumCulled={false}
+      renderOrder={-1}
+      userData={{ isStudioSky: true }}
+      onClick={(event) => {
+        // Devices, props, and the cyclorama wall sit closer and win the ray first.
+        // A clean tap on empty surround opens the background colour dock.
+        // Do not stop pointerdown — empty-canvas drag still orbits.
+        if (event.delta > 8) return;
+        event.stopPropagation();
+        onSelect?.();
+      }}
+    >
       <sphereGeometry args={[40, 48, 32]} />
       <primitive object={material} attach="material" />
     </mesh>
@@ -1947,9 +2022,11 @@ function EnableBackdropPicking() {
 function Background({
   preset,
   colors,
+  onSelectSky,
 }: {
   preset: BackgroundPreset;
   colors?: GradientColors | null;
+  onSelectSky?: () => void;
 }) {
   const { scene, gl } = useThree();
   useEffect(() => {
@@ -1966,7 +2043,7 @@ function Background({
     return undefined;
   }, [scene, gl, preset, colors?.edge]);
   if (preset === 'transparent' || !colors) return null;
-  return <StudioSky colors={colors} />;
+  return <StudioSky colors={colors} onSelect={onSelectSky} />;
 }
 
 function SceneEnvironment({
@@ -2134,7 +2211,9 @@ function KeyLightRig({
     light.shadow.bias = -0.0002;
     light.shadow.normalBias = 0.025;
     light.shadow.blurSamples = size >= 2048 ? 12 : 8;
-    light.shadow.intensity = THREE.MathUtils.clamp(0.55 + shadowOpacity * 0.55, 0.4, 1);
+    // 0 fades the cast out; 1 is the soft default core; above 1 crushes soft
+    // penumbras that never fully occlude (shader clamps the darkened result).
+    light.shadow.intensity = Math.max(0, shadowIntensityCurve(shadowOpacity, 1, 2.6));
     light.shadow.needsUpdate = true;
     // Dispose stale map when resolution changes so GPU memory stays bounded.
     if (light.shadow.map && (light.shadow.map.width !== size || light.shadow.map.height !== size)) {
@@ -3060,7 +3139,12 @@ function SceneDevices({
   onMoveDevice,
   onSelectProp,
   onMoveProp,
+  onRotateProp,
+  onSelectEmpty,
+  selectedPropId = null,
+  propGizmoTargets = null,
   propGrabRegistry,
+  gizmoDraggingRef: sharedGizmoDraggingRef,
   onGizmoDraggingChange,
   screenDropDeviceId = null,
   annotate = null,
@@ -3088,7 +3172,12 @@ function SceneDevices({
   onMoveDevice?: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => void;
   onSelectProp?: (id: string) => void;
   onMoveProp?: (id: string, position: Vec3) => void;
+  onRotateProp?: (id: string, rotation: Vec3) => void;
+  onSelectEmpty?: (target: 'sky' | 'floor' | 'backdrop') => void;
+  selectedPropId?: string | null;
+  propGizmoTargets?: GizmoTargets | null;
   propGrabRegistry: MutableRefObject<Map<string, THREE.Object3D>>;
+  gizmoDraggingRef?: MutableRefObject<boolean>;
   onGizmoDraggingChange?: (dragging: boolean) => void;
   screenDropDeviceId?: string | null;
   annotate?: 'pen' | 'comment' | null;
@@ -3102,23 +3191,28 @@ function SceneDevices({
   selectedMaterialDeviceId?: string | null;
   onPickMaterial?: (payload: MaterialPickPayload) => void;
 }) {
-  const [gizmoTargets, setGizmoTargets] = useState<GizmoTargets | null>(null);
-  const gizmoDraggingRef = useRef(false);
+  const [deviceGizmoTargets, setDeviceGizmoTargets] = useState<GizmoTargets | null>(null);
+  const localGizmoDraggingRef = useRef(false);
+  const gizmoDraggingRef = sharedGizmoDraggingRef ?? localGizmoDraggingRef;
   const grabRegistry = useRef(new Map<string, THREE.Object3D>());
   const anchorRegistry = useRef(new Map<string, THREE.Object3D>());
   const annotateRef = useRef(false);
   annotateRef.current = annotate != null;
   const gizmoControlRef = useRef<GizmoControl | null>(null);
+  const propSelected = Boolean(selectedPropId);
   const selectedId = project.selectedDeviceId;
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
+  const gizmoTargets = propSelected ? propGizmoTargets : deviceGizmoTargets;
+  const gizmoSubjectId = propSelected ? selectedPropId : selectedId;
 
   // Stable callback — only the selected device may publish/clear the gizmo targets.
   // (Inline per-device callbacks were clearing the gizmo when sibling devices updated.)
   const bindGizmoTargets = useCallback((deviceId: string, targets: GizmoTargets | null) => {
+    if (propSelected) return;
     if (deviceId !== selectedIdRef.current) return;
-    setGizmoTargets(targets);
-  }, []);
+    setDeviceGizmoTargets(targets);
+  }, [propSelected]);
 
   return (
     <>
@@ -3176,6 +3270,8 @@ function SceneDevices({
         onRotate={onRotateDevice}
         onSelectProp={onSelectProp}
         onMoveProp={onMoveProp}
+        onRotateProp={onRotateProp}
+        onSelectEmpty={onSelectEmpty}
         onDraggingChange={onGizmoDraggingChange}
         materialEditEnabled={materialEditEnabled}
         onPickMaterial={onPickMaterial}
@@ -3188,9 +3284,9 @@ function SceneDevices({
         onSelect={onSelectOverlay}
       />
       <RotationBall
-        key={`gizmo-v3-${selectedId}-${gizmoActive ? 'on' : 'off'}`}
+        key={`gizmo-v3-${gizmoSubjectId ?? 'none'}-${propSelected ? 'prop' : 'device'}-${gizmoActive ? 'on' : 'off'}`}
         targets={gizmoTargets}
-        active={Boolean(gizmoActive && selectedId && gizmoTargets)}
+        active={Boolean(gizmoActive && gizmoSubjectId && gizmoTargets)}
         mode={gizmoMode}
         controlRef={gizmoControlRef}
         onDraggingChange={(dragging) => {
@@ -3198,10 +3294,20 @@ function SceneDevices({
           onGizmoDraggingChange?.(dragging);
         }}
         onRotate={(rotation, opts) => {
+          if (propSelected) {
+            if (!selectedPropId) return;
+            onRotateProp?.(selectedPropId, rotation);
+            return;
+          }
           if (!selectedId) return;
           onRotateDevice?.(selectedId, rotation, opts);
         }}
         onMove={(position, opts) => {
+          if (propSelected) {
+            if (!selectedPropId) return;
+            onMoveProp?.(selectedPropId, position);
+            return;
+          }
           if (!selectedId) return;
           onMoveDevice?.(selectedId, position, opts);
         }}
@@ -3232,6 +3338,8 @@ export default function DeviceCanvas({
   onSelectProp,
   backdropSelected = false,
   onSelectBackdrop,
+  onSelectSky,
+  onSelectFloor,
   onSelectOverlay,
   selectedOverlayId = null,
   onHoverDevice,
@@ -3241,6 +3349,8 @@ export default function DeviceCanvas({
   onRotateDevice,
   onMoveDevice,
   onMoveProp,
+  onRotateProp,
+  onSelectEmpty,
   onGizmoDraggingChange,
   gizmoDragging = false,
   screenDropDeviceId = null,
@@ -3267,6 +3377,26 @@ export default function DeviceCanvas({
   onPickMaterial,
 }: Props) {
   const propGrabRegistry = useRef(new Map<string, THREE.Object3D>());
+  const sharedGizmoDraggingRef = useRef(false);
+  const [propGizmoTargets, setPropGizmoTargets] = useState<GizmoTargets | null>(null);
+  const selectedPropIdRef = useRef(selectedPropId);
+  selectedPropIdRef.current = selectedPropId;
+  const bindPropGizmoTargets = useCallback((propId: string, targets: GizmoTargets | null) => {
+    if (propId !== selectedPropIdRef.current) {
+      if (targets == null) return;
+      return;
+    }
+    setPropGizmoTargets((prev) => {
+      if (targets == null) return prev == null ? prev : null;
+      if (prev && prev.position === targets.position && prev.rotation === targets.rotation) return prev;
+      return targets;
+    });
+  }, []);
+  useEffect(() => {
+    if (!selectedPropId) {
+      setPropGizmoTargets((prev) => (prev == null ? prev : null));
+    }
+  }, [selectedPropId]);
   const selected = project.devices.find((d) => d.id === project.selectedDeviceId) ?? project.devices[0];
   const resolvedFocus = focusPoint ?? selected?.position ?? { x: 0, y: 0, z: 0 };
   const studioPreset = useStudioPreset(
@@ -3317,6 +3447,7 @@ export default function DeviceCanvas({
         <Background
           preset={project.background}
           colors={project.background === 'transparent' ? null : project.gradientColors}
+          onSelectSky={onSelectSky}
         />
         <StudioHdri
           intensity={project.environmentIntensity ?? studioPreset.environmentIntensity}
@@ -3349,6 +3480,7 @@ export default function DeviceCanvas({
           canvasId={canvasId ?? 'main'}
           backdropSelected={backdropSelected}
           onSelectBackdrop={onSelectBackdrop}
+          onSelectFloor={onSelectFloor}
         >
           <KeyLightRig
             position={lightPosition}
@@ -3390,6 +3522,8 @@ export default function DeviceCanvas({
               selectedId={selectedPropId}
               onSelect={onSelectProp}
               grabRegistry={propGrabRegistry}
+              onGizmoTargets={bindPropGizmoTargets}
+              gizmoDraggingRef={sharedGizmoDraggingRef}
               backdropFloor={project.gradientColors.edge}
               backdropShadowOpacity={Math.min(
                 0.68,
@@ -3403,6 +3537,11 @@ export default function DeviceCanvas({
               backdropShadowColor={studioPreset.shadow.color}
             />
             <ExtrudedText
+              overlays={project.overlays}
+              time={overlayTime}
+              onSelect={onSelectOverlay}
+            />
+            <ExtrudedShape
               overlays={project.overlays}
               time={overlayTime}
               onSelect={onSelectOverlay}
@@ -3422,7 +3561,12 @@ export default function DeviceCanvas({
               onMoveDevice={onMoveDevice}
               onSelectProp={onSelectProp}
               onMoveProp={onMoveProp}
+              onRotateProp={onRotateProp}
+              onSelectEmpty={onSelectEmpty}
+              selectedPropId={selectedPropId}
+              propGizmoTargets={propGizmoTargets}
               propGrabRegistry={propGrabRegistry}
+              gizmoDraggingRef={sharedGizmoDraggingRef}
               onGizmoDraggingChange={onGizmoDraggingChange}
               screenDropDeviceId={screenDropDeviceId}
               annotate={annotate}

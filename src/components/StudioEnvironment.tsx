@@ -28,6 +28,7 @@ import {
   fitDirectionalShadowCamera,
   opacityToShadowStrength,
   resolveFloorShadowResolution,
+  shadowIntensityCurve,
   softnessToPenumbra,
   STUDIO_SHADOW_IDLE_MS,
   type StudioShadowApi,
@@ -149,13 +150,32 @@ const FLOOR_HELPER_LAYER = 2;
  * When soft floor shadows are active this disc is skipped — it was reading as
  * a dark circular blob under the product.
  */
-function SoftGroundDisc({ y, color }: { y: number; color: string }) {
+function SoftGroundDisc({
+  y,
+  color,
+  onSelect,
+}: {
+  y: number;
+  color: string;
+  onSelect?: () => void;
+}) {
   const mesh = useRef<THREE.Mesh>(null);
   useLayoutEffect(() => {
     mesh.current?.layers.set(FLOOR_HELPER_LAYER);
   }, []);
   return (
-    <mesh ref={mesh} rotation={[-Math.PI / 2, 0, 0]} position={[0, y, 0]} receiveShadow={false}>
+    <mesh
+      ref={mesh}
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[0, y, 0]}
+      receiveShadow={false}
+      userData={{ orbitPickFloor: true }}
+      onClick={(event) => {
+        if (event.delta > 8) return;
+        event.stopPropagation();
+        onSelect?.();
+      }}
+    >
       <circleGeometry args={[3.2, 64]} />
       <meshStandardMaterial
         color={color}
@@ -173,8 +193,15 @@ function SoftGroundDisc({ y, color }: { y: number; color: string }) {
 /**
  * Large invisible floor used only for pointer hit tests. Empty-canvas drags
  * need something closer than the far side of the gimbal rings, or orbit dies.
+ * A clean tap (no drag) opens Floor colour in the Look side panel.
  */
-function OrbitPickFloor({ y }: { y: number }) {
+function OrbitPickFloor({
+  y,
+  onSelect,
+}: {
+  y: number;
+  onSelect?: () => void;
+}) {
   const mesh = useRef<THREE.Mesh>(null);
   useLayoutEffect(() => {
     mesh.current?.layers.set(FLOOR_HELPER_LAYER);
@@ -186,6 +213,13 @@ function OrbitPickFloor({ y }: { y: number }) {
       position={[0, y, 0]}
       userData={{ orbitPickFloor: true }}
       renderOrder={-2}
+      onClick={(event) => {
+        // Devices / props / backdrop wall sit closer and win first.
+        // Do not stop pointerdown — empty-canvas drag still orbits.
+        if (event.delta > 8) return;
+        event.stopPropagation();
+        onSelect?.();
+      }}
     >
       <planeGeometry args={[80, 80]} />
       <meshBasicMaterial
@@ -194,6 +228,51 @@ function OrbitPickFloor({ y }: { y: number }) {
         depthWrite={false}
         colorWrite={false}
         fog={false}
+        toneMapped={false}
+      />
+    </mesh>
+  );
+}
+
+/**
+ * Floor receiver for the key light's progressive (PCSS) cast. Invisible except
+ * where shadowed, so the contact-hardening silhouette lands on every look —
+ * empty stage, gradient, cyclorama, or transparent export — without a visible plate.
+ */
+function StudioShadowCatcher({
+  y,
+  size,
+  opacity,
+  color,
+}: {
+  y: number;
+  size: number;
+  opacity: number;
+  color: string;
+}) {
+  const mesh = useRef<THREE.Mesh>(null);
+  useLayoutEffect(() => {
+    const target = mesh.current;
+    if (!target) return;
+    // Never a pointer target: orbit, grab, and selection keep using OrbitPickFloor.
+    target.raycast = () => null;
+  }, []);
+  if (opacity < 0.004) return null;
+  return (
+    <mesh
+      ref={mesh}
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[0, y + 0.0008, 0]}
+      receiveShadow
+      renderOrder={1}
+      userData={{ studioShadowCatcher: true }}
+    >
+      <planeGeometry args={[size, size]} />
+      <shadowMaterial
+        transparent
+        opacity={opacity}
+        color={color}
+        depthWrite={false}
         toneMapped={false}
       />
     </mesh>
@@ -404,17 +483,16 @@ function StudioSoftFloorShadows({
   const [refreshToken, setRefreshToken] = useState(0);
 
   const lightFade = THREE.MathUtils.clamp(0.7 + lightStrength * 0.2, 0.65, 1);
-  // The key light's PCSS cast now carries the shadow shape; the contact plate is
-  // only a light grounding kiss, so keep it well below the old plate strength
-  // to avoid a uniformly fuzzy / double-dark base.
+  // PCSS catcher carries the cast silhouette. Keep the contact plate as a light
+  // foot kiss — a strong soft plate washed the floor lighter as Intensity rose.
   const primaryOpacity = Math.min(
-    0.4,
-    (mode === 'studio' ? strength.accumulative : strength.contactPrimary) * lightFade * 0.55,
+    0.32,
+    (mode === 'studio' ? strength.accumulative : strength.contactPrimary) * lightFade * 0.35,
   );
   const accentOpacity = mode === 'studio'
     ? Math.min(
       0.28,
-      strength.contactAccent * lightFade * (0.4 + THREE.MathUtils.clamp(contact, 0, 1) * 0.75),
+      strength.contactAccent * lightFade * (0.35 + THREE.MathUtils.clamp(contact, 0, 1) * 0.7),
     )
     : 0;
   const contactFar = THREE.MathUtils.clamp(
@@ -546,6 +624,8 @@ export interface StudioLightingProps {
   /** Built-in cyclorama is selected — colour controls + paper highlight. */
   backdropSelected?: boolean;
   onSelectBackdrop?: () => void;
+  /** Tap empty floor plane → Floor colour in the Look side panel. */
+  onSelectFloor?: () => void;
   /** Device footprints for soft contact that climbs the cyclorama cove. */
   contactPoints?: CycloramaContactPoint[];
   /** When true, show the key-light directional gizmo path via children / parent. */
@@ -578,6 +658,7 @@ export function StudioLighting({
   canvasId: _canvasId,
   backdropSelected = false,
   onSelectBackdrop,
+  onSelectFloor,
   contactPoints = [],
   children,
 }: StudioLightingProps) {
@@ -592,15 +673,10 @@ export function StudioLighting({
     && background !== 'transparent'
     && !studioSet;
 
-  const hasReceiver = studioSet
-    || groundAllowed
-    || background === 'transparent'
-    || hasShadowReceiverProp;
-
-  /** Floor soft shadow only when a receiving surface (or transparent plate) exists. */
-  const showFloorShadow = shadowType !== 'off'
-    && shadowOpacity > 0.01
-    && hasReceiver;
+  // Shadows no longer wait for a visible receiver: the PCSS catcher below draws
+  // the progressive cast on any look, so an empty stage still grounds the device.
+  void hasShadowReceiverProp;
+  const showFloorShadow = shadowType !== 'off' && shadowOpacity > 0.01;
 
   // Photographic balance: ambient / hemi wrap carry exposure; softboxes shape
   // speculars; KeyLightRig (children) is the gentle directional key + mesh shadows.
@@ -612,16 +688,20 @@ export function StudioLighting({
   const ambient = Math.max(0, fillIntensity) * preset.ambientScale;
   const hemi = Math.max(0, fillIntensity) * preset.hemisphere.intensityScale;
 
-  const shadowOpacityResolved = Math.min(
-    studioSet ? 0.8 : 0.68,
-    Math.max(0, shadowOpacity) * preset.shadow.opacityScale * (studioSet ? 1.12 : 1.0),
-  );
+  // Intensity spans 0–2: 1 is the soft default, above 1 crushes soft cores darker.
+  const shadowOpacityResolved = Math.max(0, shadowOpacity) * preset.shadow.opacityScale * (studioSet ? 1.12 : 1.0);
   const shadowBlur = Math.max(
     0.35,
     shadowSoftness * preset.shadow.blurScale,
   );
   const coveContactStrength = showCyclorama
-    ? Math.min(0.7, Math.max(0.15, shadowOpacity) * preset.shadow.opacityScale * (0.5 + shadowContact * 0.5))
+    ? Math.min(1.4, shadowIntensityCurve(shadowOpacity, 0.7, 1.8) * preset.shadow.opacityScale * (0.5 + shadowContact * 0.5))
+    : 0;
+  // Soft penumbras average toward lit — boost catcher opacity with Softness so
+  // raising Intensity always reads darker, never washed-out.
+  const softComp = THREE.MathUtils.smoothstep(1.5, 8, shadowSoftness);
+  const catcherOpacity = showFloorShadow
+    ? shadowIntensityCurve(shadowOpacity, 0.72, 2.4) * preset.shadow.opacityScale * (1 + softComp * 0.75)
     : 0;
 
   const ambientRef = useRef<THREE.AmbientLight>(null);
@@ -695,15 +775,28 @@ export function StudioLighting({
       )}
       {/* Always present so dragging beside the device orbits instead of
           locking onto a farther gimbal ring through empty space. */}
-      <OrbitPickFloor y={floorY} />
+      <OrbitPickFloor y={floorY} onSelect={onSelectFloor} />
       {/* Atmosphere disc only when soft shadows are off — avoids dark circular blobs. */}
       {groundAllowed && !showFloorShadow && (
-        <SoftGroundDisc y={floorY} color={gradientColors?.edge ?? '#090b0e'} />
+        <SoftGroundDisc
+          y={floorY}
+          color={gradientColors?.edge ?? '#090b0e'}
+          onSelect={onSelectFloor}
+        />
+      )}
+      {/* Progressive key-light cast always lands on the floor, whatever the set. */}
+      {showFloorShadow && (
+        <StudioShadowCatcher
+          y={floorY}
+          size={60}
+          opacity={catcherOpacity}
+          color={preset.shadow.color}
+        />
       )}
       {showFloorShadow && shadowOpacityResolved > 0.01 && (
         <StudioSoftFloorShadows
           y={floorY}
-          opacity={Math.min(0.85, shadowOpacityResolved)}
+          opacity={shadowOpacityResolved}
           softness={shadowBlur}
           contact={shadowContact}
           quality={shadowQuality}

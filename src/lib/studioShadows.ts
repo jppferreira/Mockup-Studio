@@ -33,11 +33,11 @@ export function isShadowCasterMesh(mesh: THREE.Mesh): boolean {
   if (mesh.userData?.contactShadowPlane || mesh.userData?.exportHide || mesh.userData?.isGizmoHandle) {
     return false;
   }
-  if (mesh.userData?.orbitPickFloor || mesh.userData?.isStudioBackdrop) return false;
+  if (mesh.userData?.orbitPickFloor || mesh.userData?.isStudioBackdrop || mesh.userData?.isStudioSky) return false;
   let current: THREE.Object3D | null = mesh;
   while (current) {
     if (!current.visible) return false;
-    if (current.userData?.isGizmoHandle || current.userData?.isStudioBackdrop) return false;
+    if (current.userData?.isGizmoHandle || current.userData?.isStudioBackdrop || current.userData?.isStudioSky) return false;
     if (current.userData?.contactShadowPlane || current.userData?.orbitPickFloor) return false;
     if ((current as THREE.Object3D & { isTransformControls?: boolean }).isTransformControls) return false;
     if ((current as THREE.Object3D & { isTransformControlsGizmo?: boolean }).isTransformControlsGizmo) {
@@ -260,8 +260,33 @@ export function softnessToPenumbra(softness: number): {
 }
 
 /**
- * Opacity (0–0.85) → plane strengths without crushing falloff.
- * When both accumulative + contact are active, contact stays a light foot kiss.
+ * Default Shadow → Intensity slider value (0–2 range).
+ * Soft penumbras average toward lit, so values above 1 remain available to crush
+ * the core darker without forcing Softness down.
+ */
+export const SHADOW_INTENSITY_PIVOT = 1;
+/** Slider / project ceiling for Intensity. */
+export const SHADOW_INTENSITY_MAX = 2;
+
+/**
+ * Map Intensity (0–2) onto an output strength.
+ * 0 → 0, pivot (1) → `anchor`, max (2) → `max`.
+ * `max` may exceed 1 — callers that feed ShadowMaterial / shadow.intensity use
+ * that headroom to darken soft cores that never fully occlude.
+ */
+export function shadowIntensityCurve(opacity: number, anchor: number, max: number): number {
+  const o = THREE.MathUtils.clamp(opacity, 0, SHADOW_INTENSITY_MAX);
+  if (o <= SHADOW_INTENSITY_PIVOT) {
+    return SHADOW_INTENSITY_PIVOT <= 1e-6 ? 0 : (o / SHADOW_INTENSITY_PIVOT) * anchor;
+  }
+  const span = SHADOW_INTENSITY_MAX - SHADOW_INTENSITY_PIVOT;
+  return anchor + ((o - SHADOW_INTENSITY_PIVOT) / Math.max(span, 1e-6)) * (max - anchor);
+}
+
+/**
+ * Opacity (0–2) → contact-plate strengths without crushing falloff.
+ * PCSS carries the cast; contact stays a light foot kiss so raising Intensity
+ * darkens the silhouette instead of washing the floor with a soft gray blob.
  */
 export function opacityToShadowStrength(
   opacity: number,
@@ -271,11 +296,12 @@ export function opacityToShadowStrength(
   contactPrimary: number;
   contactAccent: number;
 } {
-  const o = THREE.MathUtils.clamp(opacity, 0, 0.85) * opacityScale;
+  const o = shadowIntensityCurve(opacity, 0.55, 1.15) * opacityScale;
+  const t = THREE.MathUtils.clamp(opacity, 0, SHADOW_INTENSITY_MAX) / SHADOW_INTENSITY_MAX;
   return {
-    accumulative: THREE.MathUtils.clamp(o * 0.95, 0, 0.78),
-    contactPrimary: THREE.MathUtils.clamp(o * 0.72, 0, 0.62),
-    contactAccent: THREE.MathUtils.clamp(o * 0.22 * (0.4 + opacity), 0, 0.28),
+    accumulative: THREE.MathUtils.clamp(o * 0.55, 0, 0.55),
+    contactPrimary: THREE.MathUtils.clamp(o * 0.4, 0, 0.4),
+    contactAccent: THREE.MathUtils.clamp(o * 0.18 * (0.35 + t), 0, 0.32),
   };
 }
 

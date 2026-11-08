@@ -37,6 +37,8 @@ export function createBlankProject(name?: string): MockupProject {
     linkSplitTransform: true,
     devices: [primary],
     animation: createDefaultAnimation(),
+    // Blank files open with an empty stage; the Stage tool adds a floor piece.
+    showGroundBase: false,
   };
 }
 

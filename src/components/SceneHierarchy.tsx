@@ -79,6 +79,12 @@ type SceneHierarchyProps = {
   onSelectOverlay: (overlayId: string) => void;
   onSelectProp: (propId: string) => void;
   onRemoveProp: (propId: string) => void;
+  /** Clear the studio backdrop (switches the look to Transparent). */
+  onRemoveBackdrop?: () => void;
+  /** True after a background / Backdrop tap — expands looks + colour controls. */
+  backdropLooksOpen?: boolean;
+  /** Select Backdrop and open colour controls (same as tapping the canvas surround). */
+  onSelectBackdrop?: () => void;
   onFocusKeyLight: () => void;
   onFocusSceneLight?: (lightId: string) => void;
   onSelectionChange: (selection: SceneLayerSelection) => void;
@@ -140,6 +146,9 @@ export default function SceneHierarchy({
   onSelectOverlay,
   onSelectProp,
   onRemoveProp,
+  onRemoveBackdrop,
+  backdropLooksOpen = false,
+  onSelectBackdrop,
   onFocusKeyLight,
   onFocusSceneLight,
   onSelectionChange,
@@ -516,18 +525,43 @@ export default function SceneHierarchy({
 
                   {(revealAll || textHit('Backdrop', needle)) && (
                     <div className="scene-tree-branch" role="group" data-backdrop-branch="">
-                      <button
-                        type="button"
+                      <div
                         className={`scene-tree-row is-studio ${selection.kind === 'backdrop' ? 'is-selected' : ''}`}
-                        onClick={() => {
-                          setSelection({ kind: 'backdrop' });
-                          onOpenSection('look');
-                        }}
+                        role="treeitem"
+                        aria-selected={selection.kind === 'backdrop'}
                       >
-                        <img src={iconImage} alt="" />
-                        <span>Backdrop</span>
-                      </button>
-                      {selection.kind === 'backdrop' && (
+                        <button
+                          type="button"
+                          className="scene-tree-main"
+                          title={project.background === 'transparent'
+                            ? 'Backdrop is off · tap to restore looks'
+                            : 'Tap to edit background colours · Backspace or ✕ removes'}
+                          onClick={() => {
+                            setSelection({ kind: 'backdrop' });
+                            if (onSelectBackdrop) onSelectBackdrop();
+                            else onOpenSection('look');
+                          }}
+                        >
+                          <img src={iconImage} alt="" />
+                          <span>{project.background === 'transparent' ? 'Backdrop · off' : 'Backdrop'}</span>
+                        </button>
+                        {onRemoveBackdrop && project.background !== 'transparent' && (
+                          <button
+                            type="button"
+                            className="scene-tree-remove is-always-on"
+                            title="Remove backdrop"
+                            aria-label="Remove backdrop"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelection({ kind: 'backdrop' });
+                              onRemoveBackdrop();
+                            }}
+                          >
+                            <X size={11} />
+                          </button>
+                        )}
+                      </div>
+                      {backdropLooksOpen && (
                         <div className="scene-tree-looks">
                           <div className="scene-grid scene-grid-compact">
                             {looks.map((item) => (
@@ -571,7 +605,7 @@ export default function SceneHierarchy({
                               <div className="gradient-color-grid is-separate-stops">
                                 {([
                                   ['center', 'Backdrop'],
-                                  ['mid', 'Sky'],
+                                  ['mid', 'Sky · surround'],
                                   ['edge', 'Floor'],
                                 ] as const).map(([key, label]) => (
                                   <label key={key} className="gradient-color-field">

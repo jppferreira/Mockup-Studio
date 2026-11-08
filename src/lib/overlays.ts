@@ -34,7 +34,7 @@ export interface SceneOverlay {
   fill?: string;
   /** Relative font size vs frame short edge */
   fontSize?: number;
-  /** 0 keeps type flat. Above 0 extrudes it into the 3D scene. */
+  /** 0 keeps text / flat shapes on the frame. Above 0 extrudes into the 3D scene (shapes stay camera-facing). */
   extrusion?: number;
   imageData?: string | null;
   /** Set when the mark is glued to a device instead of the frame. */
@@ -168,7 +168,7 @@ export async function drawOverlays(
       });
     }
 
-    if (overlay.kind === 'shape') {
+    if (overlay.kind === 'shape' && (overlay.extrusion ?? 0) <= 0.001) {
       const size = shortEdge * 0.18 * overlay.scale;
       const shape = flatShapeOf(overlay);
       ctx.fillStyle = overlay.color || '#d7dde4';

@@ -2044,8 +2044,13 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
   background: #3a2a2a;
 }
 .scene-tree-row:hover .scene-tree-remove,
-.scene-tree-remove:focus-visible {
+.scene-tree-remove:focus-visible,
+.scene-tree-row.is-selected .scene-tree-remove.is-always-on {
   opacity: 1;
+}
+.scene-tree-remove.is-always-on {
+  opacity: 0.85;
+  color: #c5ccd4;
 }
 .scene-tree-rule {
   height: 1px;
@@ -2831,6 +2836,45 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
 }
 .gradient-color-grid.is-separate-stops {
   gap: 10px;
+}
+
+.surround-colour-dock {
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  outline: 1px solid rgba(255, 255, 255, 0.08);
+}
+.surround-colour-dock.is-active {
+  background: rgba(61, 126, 255, 0.1);
+  outline: 1px solid rgba(90, 143, 212, 0.55);
+  box-shadow: 0 0 0 1px rgba(61, 126, 255, 0.12);
+}
+.surround-colour-dock-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+.surround-colour-dock-head strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e8ecef;
+}
+.surround-colour-dock-head span {
+  font-size: 11px;
+  line-height: 1.35;
+  color: #9aa8c0;
+}
+.surround-colour-dock .gradient-color-field {
+  margin: 0;
+}
+.surround-colour-dock .gradient-color-grid {
+  margin: 0;
+}
+.surround-colour-restore {
+  width: 100%;
+  justify-content: center;
 }
 
 .modeling-mode-slider {
@@ -4018,6 +4062,12 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
   width: auto;
   height: 1px;
   margin: 4px 6px;
+}
+.canvas-tool-menu.is-stage-menu { width: 200px; }
+.canvas-tool-menu.is-stage-menu .canvas-tool-menu-label { flex: 1 1 auto; text-align: left; }
+.canvas-tool-menu.is-stage-menu .canvas-tool-menu-check {
+  flex: 0 0 auto;
+  color: var(--accent, #d7dbe0);
 }
 .canvas-tool-color-row {
   display: flex;
@@ -8258,6 +8308,11 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
 }
 .canvas-overlay-layer.is-extruded {
   text-shadow: none;
+}
+.canvas-overlay-layer.is-shape.is-extruded {
+  background: transparent !important;
+  border-color: transparent !important;
+  pointer-events: auto;
 }
 .canvas-overlay-layer.is-selected {
   outline-color: color-mix(in srgb, var(--accent-soft) 65%, transparent);
