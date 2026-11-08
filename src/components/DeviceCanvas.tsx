@@ -15,7 +15,7 @@ import {
   renderOutputGain,
   setRenderGradeGain,
 } from '../lib/renderRealism';
-import { ensureCleanShadowShader } from '../lib/shadowShader';
+import { installProgressiveShadowShader } from '../lib/progressiveShadows';
 import { useScreenEmissiveMap } from '../lib/useScreenTexture';
 import {
   applySurfaceLook,
@@ -2127,8 +2127,10 @@ function KeyLightRig({
     const size = resolveKeyShadowMapSize(shadowQuality, mode, shadowExportBoost, maxTex);
     const penumbra = softnessToPenumbra(shadowSoftness);
     light.shadow.mapSize.set(size, size);
-    // Modest PCF radius — softness mainly drives AccumulativeShadows / contact.
-    light.shadow.radius = penumbra.mapRadius;
+    // The PCSS shader treats shadow radius as emitter size (texels), so Softness
+    // produces a contact-hardening penumbra. Scale with map size so the
+    // world-space penumbra stays the same at 2048 and 4096.
+    light.shadow.radius = penumbra.emitterSize * (size / 2048);
     light.shadow.bias = -0.0002;
     light.shadow.normalBias = 0.025;
     light.shadow.blurSamples = size >= 2048 ? 12 : 8;
@@ -3301,9 +3303,11 @@ export default function DeviceCanvas({
         gl.setClearColor(studioPreset.clearColor, project.background === 'transparent' ? 0 : 1);
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = toneMappingExposure;
-        ensureCleanShadowShader();
+        // Rebuilds the shared shadow chunk from stock + PCSS so every canvas
+        // (split view, thumbnails, exports) and HMR cycle lands on the same shader.
+        installProgressiveShadowShader();
         gl.shadowMap.enabled = true;
-        // Soft PCF for mesh-to-mesh; floor soft shadows use AccumulativeShadows.
+        // PCSS (contact-hardening) for mesh-to-mesh and floor cast; ContactShadows adds a light foot kiss.
         gl.shadowMap.type = THREE.PCFSoftShadowMap;
         installRenderGrade(gl);
       }}

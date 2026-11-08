@@ -404,9 +404,12 @@ function StudioSoftFloorShadows({
   const [refreshToken, setRefreshToken] = useState(0);
 
   const lightFade = THREE.MathUtils.clamp(0.7 + lightStrength * 0.2, 0.65, 1);
+  // The key light's PCSS cast now carries the shadow shape; the contact plate is
+  // only a light grounding kiss, so keep it well below the old plate strength
+  // to avoid a uniformly fuzzy / double-dark base.
   const primaryOpacity = Math.min(
-    0.72,
-    (mode === 'studio' ? strength.accumulative : strength.contactPrimary) * lightFade,
+    0.4,
+    (mode === 'studio' ? strength.accumulative : strength.contactPrimary) * lightFade * 0.55,
   );
   const accentOpacity = mode === 'studio'
     ? Math.min(
@@ -419,10 +422,11 @@ function StudioSoftFloorShadows({
     1.2,
     4,
   );
-  // Studio uses a slightly softer plate; interactive stays tighter for stability.
+  // Tight plate: PCSS already widens the penumbra with height, so the contact
+  // blur only needs to feather the foot. Studio stays a touch softer than interactive.
   const blur = mode === 'studio'
-    ? penumbra.contactBlur * 1.05
-    : Math.max(0.45, penumbra.contactBlur * 0.82);
+    ? Math.max(0.35, penumbra.contactBlur * 0.5)
+    : Math.max(0.3, penumbra.contactBlur * 0.42);
 
   const reset = useCallback(() => {
     setRefreshToken((n) => n + 1);

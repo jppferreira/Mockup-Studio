@@ -7184,7 +7184,7 @@ export default function App() {
               </div>
             </SettingsSection>
 
-            <SettingsSection id="shadow" title="Shadow" hint="Photoreal floor cast and contact" icon={Layers3} open={openSectionId === 'shadow'} onToggle={toggleSection}>
+            <SettingsSection id="shadow" title="Shadow" hint="Progressive soft shadows and floor grounding" icon={Layers3} open={openSectionId === 'shadow'} onToggle={toggleSection}>
               <div className="env-group">
                 <div className="env-group-head">
                   <div className="field-caption">Shadows</div>

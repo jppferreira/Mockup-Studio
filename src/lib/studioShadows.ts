@@ -243,6 +243,8 @@ export function softnessToPenumbra(softness: number): {
   contactBlur: number;
   /** Key-light PCF radius (texels). */
   mapRadius: number;
+  /** Key-light PCSS emitter size at a 2048 map (texels) — drives penumbra growth. */
+  emitterSize: number;
   /** AccumulativeShadows alphaTest (higher = tighter core). */
   alphaTest: number;
 } {
@@ -252,6 +254,7 @@ export function softnessToPenumbra(softness: number): {
     radius: THREE.MathUtils.lerp(0.55, 3.4, t),
     contactBlur: THREE.MathUtils.lerp(0.55, 2.1, t),
     mapRadius: THREE.MathUtils.lerp(1.2, 3.8, t),
+    emitterSize: Math.max(2, s * 6),
     alphaTest: THREE.MathUtils.lerp(0.55, 0.82, 1 - t),
   };
 }
