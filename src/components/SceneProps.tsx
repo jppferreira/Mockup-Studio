@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, type MutableRefObject } from 'react';
 import { RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
 import { accentPair, useAccentTheme } from '../lib/accentTheme';
@@ -494,7 +494,7 @@ function RockMesh({ seed, tint }: { seed: number; tint: string }) {
   );
 }
 
-function StageSet({ tint }: { tint: string }) {
+function StageSet({ tint, selected = false }: { tint: string; selected?: boolean }) {
   const maps = useMemo(() => makeStageMaps(tint), [tint]);
   const [r, g, b] = parseRgb(tint);
   const deck = `#${[r, g, b].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
@@ -517,7 +517,9 @@ function StageSet({ tint }: { tint: string }) {
           normalScale={STAGE_NORMAL_SCALE}
           roughness={0.74}
           metalness={0.02}
-          envMapIntensity={0.28}
+          envMapIntensity={selected ? 0.42 : 0.28}
+          emissive={selected ? '#ffffff' : '#000000'}
+          emissiveIntensity={selected ? 0.05 : 0}
         />
       </RoundedBox>
       <RoundedBox args={[3.22, 0.1, 1.58]} radius={0.028} smoothness={4} position={[0, 0.2, 0]} castShadow receiveShadow>
@@ -533,7 +535,9 @@ function StageSet({ tint }: { tint: string }) {
           metalness={0.04}
           clearcoat={0.12}
           clearcoatRoughness={0.42}
-          envMapIntensity={0.62}
+          envMapIntensity={selected ? 0.78 : 0.62}
+          emissive={selected ? '#ffffff' : '#000000'}
+          emissiveIntensity={selected ? 0.06 : 0}
         />
       </RoundedBox>
     </group>
@@ -558,7 +562,7 @@ function ConcreteMaterial({ tint = TONE_CONCRETE, seed = 1 }: { tint?: string; s
 
 /**
  * One seamless paper sweep: floor, cove, and wall.
- * Shade is stored in uv.y (0 = floor, 1 = wall) for the backdrop shader.
+ * `uv` tiles paper maps in world units; `shade` (uv2.x) blends floor → wall colour.
  */
 export function createCycloramaGeometry() {
   const width = 12;
@@ -566,19 +570,20 @@ export function createCycloramaGeometry() {
   const centerZ = 0.15;
   const floorFront = 3.2;
   const wallTop = 5.8;
-  const profile: { z: number; y: number; shade: number }[] = [];
+  /** World metres per paper-texture repeat — keeps grain readable at studio scale. */
+  const tile = 1.15;
+  const profile: { z: number; y: number; shade: number; length: number }[] = [];
 
-  const floorSteps = 8;
+  const floorSteps = 10;
   for (let i = 0; i <= floorSteps; i += 1) {
     const t = i / floorSteps;
-    profile.push({
-      z: floorFront + (centerZ - floorFront) * t,
-      y: 0,
-      shade: 0,
-    });
+    const z = floorFront + (centerZ - floorFront) * t;
+    const length = (floorFront - z);
+    profile.push({ z, y: 0, shade: 0, length });
   }
 
-  const arcSteps = 32;
+  const arcSteps = 36;
+  const floorLen = floorFront - centerZ;
   for (let i = 1; i <= arcSteps; i += 1) {
     const t = i / arcSteps;
     const angle = -Math.PI / 2 - (Math.PI / 2) * t;
@@ -586,34 +591,45 @@ export function createCycloramaGeometry() {
       z: centerZ + Math.cos(angle) * radius,
       y: radius + Math.sin(angle) * radius,
       shade: t,
+      length: floorLen + radius * (Math.PI / 2) * t,
     });
   }
 
   const wallZ = centerZ - radius;
-  const wallSteps = 10;
+  const coveLen = floorLen + radius * (Math.PI / 2);
+  const wallSteps = 12;
   for (let i = 1; i <= wallSteps; i += 1) {
     const t = i / wallSteps;
+    const y = radius + (wallTop - radius) * t;
     profile.push({
       z: wallZ,
-      y: radius + (wallTop - radius) * t,
+      y,
       shade: 1,
+      length: coveLen + (y - radius),
     });
   }
 
-  const xSegs = 1;
+  const xSegs = 36;
   const cols = xSegs + 1;
   const rows = profile.length;
   const positions = new Float32Array(cols * rows * 3);
   const uvs = new Float32Array(cols * rows * 2);
+  const shades = new Float32Array(cols * rows);
+  const colors = new Float32Array(cols * rows * 3);
   profile.forEach((point, row) => {
     for (let col = 0; col < cols; col += 1) {
       const vertex = col * rows + row;
       const index = vertex * 3;
-      positions[index] = (col / xSegs - 0.5) * width;
+      const x = (col / xSegs - 0.5) * width;
+      positions[index] = x;
       positions[index + 1] = point.y;
       positions[index + 2] = point.z;
-      uvs[vertex * 2] = col / xSegs;
-      uvs[vertex * 2 + 1] = point.shade;
+      uvs[vertex * 2] = (x + width / 2) / tile;
+      uvs[vertex * 2 + 1] = point.length / tile;
+      shades[vertex] = point.shade;
+      colors[index] = 1;
+      colors[index + 1] = 1;
+      colors[index + 2] = 1;
     }
   });
 
@@ -631,57 +647,225 @@ export function createCycloramaGeometry() {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geometry.setAttribute('shade', new THREE.BufferAttribute(shades, 1));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
   return geometry;
 }
 
-const CYCLORAMA_VERT = /* glsl */`
-varying float vShade;
-void main() {
-  vShade = uv.y;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
-`;
+function makePaperMaps(seed = 11): MaterialMaps & { bumpMap: THREE.CanvasTexture } {
+  const size = 512;
+  const rand = mulberry32(seed * 9049 + 41);
+  const n1 = makeNoiseField(size, 56, rand);
+  const n2 = makeNoiseField(size, 18, rand);
+  const n3 = makeNoiseField(size, 5, rand);
 
-const CYCLORAMA_FRAG = /* glsl */`
-uniform vec3 uWall;
-uniform vec3 uFloor;
-varying float vShade;
-void main() {
-  float t = smoothstep(0.02, 0.92, vShade);
-  vec3 col = mix(uFloor, uWall, t);
-  float crease = exp(-pow((vShade - 0.36) / 0.14, 2.0));
-  col *= 1.0 - crease * 0.2;
-  gl_FragColor = vec4(col, 1.0);
-  #include <colorspace_fragment>
-}
-`;
+  const albedo = new ImageData(size, size);
+  const rough = new ImageData(size, size);
+  const bump = new ImageData(size, size);
+  const height = new Float32Array(size * size);
 
-/** Paper cyclorama used by the Soft Studio look and the studio backdrop prop. */
-export function CycloramaBackdrop({ color, floor }: { color: string; floor?: string }) {
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const i = y * size + x;
+      const idx = i * 4;
+      const soft = fbm(n1, x, y, 4);
+      const mid = fbm(n2, x * 1.15, y * 1.15, 3);
+      const fiber = n3(x * 1.8, y);
+      // Directional pulp streaks (paper grain)
+      const streak = n2(x * 0.35, y * 3.4);
+      const pulp = (fiber - 0.5) * 0.55 + (streak - 0.5) * 0.35;
+
+      // Keep grain near pure white so #ffffff backdrops stay white under ACES.
+      const tone = (soft - 0.5) * 4 + (mid - 0.5) * 2.5 + pulp * 5;
+      albedo.data[idx] = Math.max(0, Math.min(255, 252 + tone));
+      albedo.data[idx + 1] = Math.max(0, Math.min(255, 252 + tone * 0.98));
+      albedo.data[idx + 2] = Math.max(0, Math.min(255, 252 + tone * 0.96));
+      albedo.data[idx + 3] = 255;
+
+      height[i] = soft * 0.45 + mid * 0.3 + fiber * 0.35 + streak * 0.2;
+      const hByte = Math.max(0, Math.min(255, Math.floor(height[i] * 255)));
+      bump.data[idx] = bump.data[idx + 1] = bump.data[idx + 2] = hByte;
+      bump.data[idx + 3] = 255;
+
+      const rv = Math.floor(168 + fiber * 55 + soft * 25);
+      rough.data[idx] = rough.data[idx + 1] = rough.data[idx + 2] = Math.max(0, Math.min(255, rv));
+      rough.data[idx + 3] = 255;
+    }
+  }
+
+  // Sparse pressed flecks — like cotton paper inclusions
+  for (let k = 0; k < 420; k += 1) {
+    const cx = Math.floor(rand() * size);
+    const cy = Math.floor(rand() * size);
+    const rad = 1 + Math.floor(rand() * 2.5);
+    const lift = rand() > 0.55 ? 10 : -14;
+    for (let oy = -rad; oy <= rad; oy += 1) {
+      for (let ox = -rad; ox <= rad; ox += 1) {
+        if (ox * ox + oy * oy > rad * rad) continue;
+        const x = (cx + ox + size) % size;
+        const y = (cy + oy + size) % size;
+        const i = y * size + x;
+        const idx = i * 4;
+        const fall = 1 - Math.hypot(ox, oy) / (rad + 0.01);
+        const d = lift * fall;
+        albedo.data[idx] = Math.max(0, Math.min(255, albedo.data[idx] + d));
+        albedo.data[idx + 1] = Math.max(0, Math.min(255, albedo.data[idx + 1] + d * 0.95));
+        albedo.data[idx + 2] = Math.max(0, Math.min(255, albedo.data[idx + 2] + d * 0.9));
+        height[i] += fall * (lift > 0 ? 0.08 : -0.06);
+        const hByte = Math.max(0, Math.min(255, Math.floor(height[i] * 255)));
+        bump.data[idx] = bump.data[idx + 1] = bump.data[idx + 2] = hByte;
+      }
+    }
+  }
+
+  return {
+    map: texFromImageData(albedo, { srgb: true, repeat: 1 }),
+    roughnessMap: texFromImageData(rough, { srgb: false, repeat: 1 }),
+    normalMap: texFromImageData(heightToNormal(height, size, 2.6), { srgb: false, repeat: 1 }),
+    bumpMap: texFromImageData(bump, { srgb: false, repeat: 1 }),
+  };
+}
+
+/** Bump when albedo recipe changes so HMR / reloads don't keep a dirty grey map. */
+const PAPER_MAPS_VERSION = 2;
+let paperMapsCache: { version: number; maps: MaterialMaps & { bumpMap: THREE.CanvasTexture } } | null = null;
+function getPaperMaps() {
+  if (!paperMapsCache || paperMapsCache.version !== PAPER_MAPS_VERSION) {
+    paperMapsCache = { version: PAPER_MAPS_VERSION, maps: makePaperMaps() };
+  }
+  return paperMapsCache.maps;
+}
+
+export type CycloramaContactPoint = {
+  x: number;
+  z: number;
+  /** Half-extent of the contact silhouette along its yaw. */
+  radiusX: number;
+  /** Half-extent of the contact silhouette across its yaw. */
+  radiusZ: number;
+  /** Penumbra past the silhouette, in world units. */
+  blur: number;
+  /** Radians about Y. The card stays flat; only yaw turns it. */
+  yaw: number;
+  /** 0–1. Falls off as the device lifts off the floor. */
+  weight: number;
+};
+
+/** Soft product contact baked into paper colour — climbs floor → cove without a shadow map. */
+function applyCycloramaVertexColors(
+  geometry: THREE.BufferGeometry,
+  wallHex: string,
+  floorHex: string,
+  contactPoints: CycloramaContactPoint[] = [],
+  contactStrength = 0,
+) {
+  const shade = geometry.getAttribute('shade') as THREE.BufferAttribute | undefined;
+  const color = geometry.getAttribute('color') as THREE.BufferAttribute | undefined;
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+  if (!shade || !color || !position) return;
+  const wall = new THREE.Color(wallHex);
+  const floor = new THREE.Color(floorHex);
+  const mixed = new THREE.Color();
+  const strength = THREE.MathUtils.clamp(contactStrength, 0, 1);
+  for (let i = 0; i < shade.count; i += 1) {
+    const shadeV = shade.getX(i);
+    const t = THREE.MathUtils.smoothstep(shadeV, 0.02, 0.92);
+    mixed.copy(floor).lerp(wall, t);
+    // Soft crease in the cove — keep it subtle so white sets don't go grey.
+    const crease = Math.exp(-(((shadeV - 0.36) / 0.14) ** 2)) * 0.04;
+    mixed.multiplyScalar(1 - crease);
+
+    if (strength > 0.01 && contactPoints.length > 0) {
+      // Floor + cove get the blob; fade before the upper wall so it doesn't stain the seamless.
+      const heightFade = 1 - THREE.MathUtils.smoothstep(shadeV, 0.12, 0.72);
+      if (heightFade > 0.01) {
+        const vx = position.getX(i);
+        const vz = position.getZ(i);
+        let occ = 0;
+        for (const point of contactPoints) {
+          const dx = vx - point.x;
+          const dz = vz - point.z;
+          const cos = Math.cos(point.yaw || 0);
+          const sin = Math.sin(point.yaw || 0);
+          const lx = dx * cos - dz * sin;
+          const lz = dx * sin + dz * cos;
+          // Wide and faint so the coarse paper mesh only pools light,
+          // while the floor card draws the actual silhouette.
+          const sigmaX = Math.max(0.2, ((point.radiusX ?? 0.4) + (point.blur ?? 0.2)) * 2.1);
+          const sigmaZ = Math.max(0.2, ((point.radiusZ ?? 0.2) + (point.blur ?? 0.2)) * 2.1);
+          const rx = lx / sigmaX;
+          const rz = lz / sigmaZ;
+          occ += Math.exp(-(rx * rx + rz * rz) * 1.15) * (point.weight ?? 1);
+        }
+        mixed.multiplyScalar(1 - Math.min(1, occ) * heightFade * strength * 0.28);
+      }
+    }
+
+    color.setXYZ(i, mixed.r, mixed.g, mixed.b);
+  }
+  color.needsUpdate = true;
+}
+
+/** Paper cyclorama used by the Soft Studio look and the studio backdrop prop.
+ *  Kept unlit — softboxes wash meshStandard key shadows away, and coplanar
+ *  catchers stripe the seamless. The floor card draws the silhouette;
+ *  vertex colour only adds a wide faint pool into the cove. */
+export function CycloramaBackdrop({
+  color,
+  floor,
+  selected = false,
+  onSelect,
+  contactPoints = [],
+  contactStrength = 0,
+}: {
+  color: string;
+  floor?: string;
+  selected?: boolean;
+  onSelect?: () => void;
+  contactPoints?: CycloramaContactPoint[];
+  contactStrength?: number;
+  /** @deprecated Soft contact is ContactShadows; accepted for older call sites. */
+  shadowOpacity?: number;
+  shadowSoftness?: number;
+  lightPosition?: Vec3;
+  lightTarget?: Vec3;
+  shadowColor?: string;
+}) {
   const geometry = useMemo(() => createCycloramaGeometry(), []);
-  const material = useMemo(() => new THREE.ShaderMaterial({
-    uniforms: {
-      uWall: { value: new THREE.Color(color) },
-      uFloor: { value: new THREE.Color(floor ?? color) },
-    },
-    vertexShader: CYCLORAMA_VERT,
-    fragmentShader: CYCLORAMA_FRAG,
-    toneMapped: false,
-    lights: false,
-  }), []);
+  const floorColor = floor ?? color;
+  const contactKey = contactPoints
+    .map((point) => {
+      const n = (value: number | undefined) => (Number.isFinite(value) ? value : 0).toFixed(2);
+      return [n(point.x), n(point.z), n(point.radiusX), n(point.radiusZ), n(point.blur), n(point.yaw), n(point.weight)].join(':');
+    })
+    .join('|');
 
   useEffect(() => {
-    material.uniforms.uWall.value.set(color);
-    material.uniforms.uFloor.value.set(floor ?? color);
-  }, [material, color, floor]);
+    applyCycloramaVertexColors(geometry, color, floorColor, contactPoints, contactStrength);
+  }, [geometry, color, floorColor, contactKey, contactPoints, contactStrength]);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
-  useEffect(() => () => material.dispose(), [material]);
 
   return (
-    <mesh geometry={geometry} material={material} layers={1} receiveShadow raycast={() => null} />
+    <mesh
+      geometry={geometry}
+      layers={1}
+      receiveShadow={false}
+      castShadow={false}
+      userData={{ isStudioBackdrop: true }}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect?.();
+      }}
+      onPointerDown={(event) => {
+        // Claim the tap so orbit / device grab don't steal backdrop colour edits.
+        if (event.button === 0) event.stopPropagation();
+      }}
+    >
+      <meshBasicMaterial vertexColors toneMapped={false} />
+    </mesh>
   );
 }
 
@@ -702,15 +886,57 @@ function ClayHelix({ color, seed, selected = false }: { color: string; seed: num
   );
 }
 
-function PropMesh({ prop, selected = false, onSelect }: { prop: SceneProp; selected?: boolean; onSelect?: (id: string) => void }) {
+const MOVABLE_PROP_KINDS = new Set<SceneProp['kind']>([
+  'clay_sphere', 'clay_cube', 'clay_cylinder', 'clay_torus', 'clay_helix',
+  'clay_cone', 'clay_pyramid', 'pedestal', 'stone_plinth', 'metal_disc', 'rock',
+  'stage', 'concrete_slab',
+]);
+
+function PropMesh({
+  prop,
+  selected = false,
+  onSelect,
+  grabRegistry,
+  backdropFloor,
+  backdropShadowOpacity = 0.45,
+  backdropShadowSoftness = 4.2,
+  backdropLightPosition,
+  backdropLightTarget,
+  backdropShadowColor = '#0a0b0e',
+}: {
+  prop: SceneProp;
+  selected?: boolean;
+  onSelect?: (id: string) => void;
+  grabRegistry?: MutableRefObject<Map<string, THREE.Object3D>>;
+  /** Floor stop for studio cyclorama props — matches the sky gradient edge. */
+  backdropFloor?: string;
+  backdropShadowOpacity?: number;
+  backdropShadowSoftness?: number;
+  backdropLightPosition?: Vec3;
+  backdropLightTarget?: Vec3;
+  backdropShadowColor?: string;
+}) {
   const scale = asScale(prop.scale);
   const rot = prop.rotation;
   const pos = prop.position;
   const clay = prop.color ?? TONE_CLAY;
   const seed = prop.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+  const groupRef = useRef<THREE.Group>(null);
+
+  useLayoutEffect(() => {
+    const group = groupRef.current;
+    const registry = grabRegistry?.current;
+    if (!group || !registry || !MOVABLE_PROP_KINDS.has(prop.kind)) return undefined;
+    group.userData.propGrabId = prop.id;
+    registry.set(prop.id, group);
+    return () => {
+      if (registry.get(prop.id) === group) registry.delete(prop.id);
+    };
+  }, [grabRegistry, prop.id, prop.kind]);
 
   return (
     <group
+      ref={groupRef}
       position={[pos.x, pos.y, pos.z]}
       rotation={[
         THREE.MathUtils.degToRad(rot.x),
@@ -805,37 +1031,105 @@ function PropMesh({ prop, selected = false, onSelect }: { prop: SceneProp; selec
         <MetalDisc tint={prop.color ?? TONE_ALUMINUM} />
       )}
       {prop.kind === 'studio_backdrop' && (
-        <StudioBackdrop color={prop.color ?? '#f7f7f5'} />
+        <StudioBackdrop
+          color={prop.color ?? '#ffffff'}
+          floor={backdropFloor}
+          selected={selected}
+          onSelect={() => onSelect?.(prop.id)}
+          shadowOpacity={backdropShadowOpacity}
+          shadowSoftness={backdropShadowSoftness}
+          lightPosition={backdropLightPosition}
+          lightTarget={backdropLightTarget}
+          shadowColor={backdropShadowColor}
+        />
       )}
       {prop.kind === 'rock' && (
         <RockMesh seed={seed} tint={prop.color ?? TONE_GRANITE} />
       )}
       {prop.kind === 'stage' && (
-        <StageSet tint={prop.color ?? TONE_STAGE} />
+        <StageSet tint={prop.color ?? TONE_STAGE} selected={selected} />
       )}
     </group>
   );
 }
 
 /** Seamless paper cyclorama — floor sweeping up into the back wall. */
-function StudioBackdrop({ color }: { color: string }) {
-  return <CycloramaBackdrop color={color} />;
+function StudioBackdrop({
+  color,
+  floor,
+  selected = false,
+  onSelect,
+  shadowOpacity = 0.45,
+  shadowSoftness = 4.2,
+  lightPosition,
+  lightTarget,
+  shadowColor = '#0a0b0e',
+}: {
+  color: string;
+  floor?: string;
+  selected?: boolean;
+  onSelect?: () => void;
+  shadowOpacity?: number;
+  shadowSoftness?: number;
+  lightPosition?: Vec3;
+  lightTarget?: Vec3;
+  shadowColor?: string;
+}) {
+  return (
+    <CycloramaBackdrop
+      color={color}
+      floor={floor}
+      selected={selected}
+      onSelect={onSelect}
+      shadowOpacity={shadowOpacity}
+      shadowSoftness={shadowSoftness}
+      lightPosition={lightPosition}
+      lightTarget={lightTarget}
+      shadowColor={shadowColor}
+    />
+  );
 }
 
 export default function SceneProps({
   props,
   selectedId = null,
   onSelect,
+  grabRegistry,
+  backdropFloor,
+  backdropShadowOpacity = 0.45,
+  backdropShadowSoftness = 4.2,
+  backdropLightPosition,
+  backdropLightTarget,
+  backdropShadowColor = '#0a0b0e',
 }: {
   props: SceneProp[];
   selectedId?: string | null;
   onSelect?: (id: string) => void;
+  grabRegistry?: MutableRefObject<Map<string, THREE.Object3D>>;
+  backdropFloor?: string;
+  backdropShadowOpacity?: number;
+  backdropShadowSoftness?: number;
+  backdropLightPosition?: Vec3;
+  backdropLightTarget?: Vec3;
+  backdropShadowColor?: string;
 }) {
   if (!props.length) return null;
   return (
     <group>
       {props.map((prop) => (
-        <PropMesh key={prop.id} prop={prop} selected={prop.id === selectedId} onSelect={onSelect} />
+        <PropMesh
+          key={prop.id}
+          prop={prop}
+          selected={prop.id === selectedId}
+          onSelect={onSelect}
+          grabRegistry={grabRegistry}
+          backdropFloor={backdropFloor}
+          backdropShadowOpacity={backdropShadowOpacity}
+          backdropShadowSoftness={backdropShadowSoftness}
+          backdropLightPosition={backdropLightPosition}
+          backdropLightTarget={backdropLightTarget}
+          backdropShadowColor={backdropShadowColor}
+        />
       ))}
     </group>
   );

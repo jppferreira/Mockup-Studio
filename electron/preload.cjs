@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
   cloudRemove: (filePath) => ipcRenderer.invoke('cloud:remove', filePath),
   cloudTemplatesRead: () => ipcRenderer.invoke('cloud:templatesRead'),
   cloudTemplatesWrite: (contents) => ipcRenderer.invoke('cloud:templatesWrite', contents),
+  devWriteShippedTemplates: (contents) => ipcRenderer.invoke('dev:writeShippedTemplates', contents),
   onCloudChanged: (handler) => {
     const listener = () => handler();
     ipcRenderer.on('cloud:changed', listener);
@@ -23,6 +24,13 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
     dataBase64, proposedName, extension, mimeType,
   }),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  updateStatus: () => ipcRenderer.invoke('updater:status'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  onUpdateStatus: (handler) => {
+    const listener = (_event, payload) => handler(payload);
+    ipcRenderer.on('updater:status', listener);
+    return () => ipcRenderer.removeListener('updater:status', listener);
+  },
   readClipboardImage: () => ipcRenderer.invoke('clipboard:readImage'),
   ensureCameraAccess: () => ipcRenderer.invoke('media:ensureCameraAccess'),
   figmaRequest: (apiPath, token) => ipcRenderer.invoke('figma:request', { apiPath, token }),
@@ -41,4 +49,5 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
     ipcRenderer.on('android:mirrorError', listener);
     return () => ipcRenderer.removeListener('android:mirrorError', listener);
   },
+  convertBlend: (payload) => ipcRenderer.invoke('blend:convert', payload),
 });

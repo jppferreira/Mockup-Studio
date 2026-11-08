@@ -104,10 +104,16 @@ process.env.APPLE_TEAM_ID = process.env.APPLE_TEAM_ID || 'HG7F63WLGK';
 process.env.REQUIRE_NOTARIZE = '1';
 delete process.env.SKIP_NOTARIZE;
 
+const publish = process.env.GH_TOKEN ? 'always' : 'never';
 console.log(`[dist:mac:beta] Signing as: ${IDENTITY}`);
+if (publish === 'never') {
+  console.log('[dist:mac:beta] GH_TOKEN is unset, so this build will not publish the update feed.');
+}
 execSync('npm run build', { stdio: 'inherit' });
 execSync(
-  `npx electron-builder --mac dmg zip --arm64 -c.mac.identity="${SIGN_NAME}"`,
+  `npx electron-builder --mac dmg zip --arm64 --publish ${publish} -c.mac.identity="${SIGN_NAME}"`,
   { stdio: 'inherit', env: process.env },
 );
-console.log('[dist:mac:beta] Done — upload release/*.dmg as a GitHub pre-release.');
+console.log(publish === 'always'
+  ? '[dist:mac:beta] Done — GitHub Release now has the zip and latest-mac.yml. Installed apps will download it.'
+  : '[dist:mac:beta] Done. Set GH_TOKEN and rebuild to publish the update feed.');

@@ -56,17 +56,17 @@ export function sanitizeSessionFrameSize(raw: unknown): SessionFrameSize | null 
       && (ASPECT_IDS.has(id) || id.startsWith('size-'))
     ))
     : [];
-  const exportAspectIds = aspectIds.length ? [...new Set(aspectIds)] : ['tiktok'];
+  const exportAspectIds = aspectIds.length ? [...new Set(aspectIds)] : ['custom'];
   let previewFrame = typeof entry.previewFrame === 'string' && entry.previewFrame
     ? entry.previewFrame
-    : exportAspectIds[0];
+    : (exportAspectIds[0] === 'custom' ? 'free' : exportAspectIds[0]);
   if (
     previewFrame !== 'free'
     && !exportAspectIds.includes(previewFrame)
     && !ASPECT_IDS.has(previewFrame)
     && !previewFrame.startsWith('size-')
   ) {
-    previewFrame = exportAspectIds[0] ?? 'tiktok';
+    previewFrame = exportAspectIds[0] === 'custom' ? 'free' : (exportAspectIds[0] ?? 'free');
   }
   const exportResolution = (
     typeof entry.exportResolution === 'string' && RESOLUTION_IDS.has(entry.exportResolution)

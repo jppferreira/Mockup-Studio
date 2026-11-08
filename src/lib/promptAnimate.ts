@@ -28,7 +28,11 @@ export const PROMPT_SUGGESTIONS = [
   'pull back and reveal',
   'gentle breathe loop',
   'spin once, no loop',
+  'rotate left slowly',
+  'dramatic slam down',
+  'hero intro then breathe',
   'clear animation',
+  'reset animation',
 ] as const;
 
 type MotionKind =
@@ -48,6 +52,7 @@ type MotionKind =
   | 'pullBack'
   | 'breathe'
   | 'rise'
+  | 'drop'
   | 'slide'
   | 'peek'
   | 'drift'
@@ -128,11 +133,7 @@ function parseLoop(text: string, kind: MotionKind): boolean | null {
 }
 
 function detectKind(text: string): { kind: MotionKind; label: string } {
-  if (
-    /^(clear|reset|none)$/.test(text.trim())
-    || /\b(clear|reset|remove|delete)\b.*\b(anim|motion|key|clip)/.test(text)
-    || /\b(anim|motion|key|clip).*\b(clear|reset|remove|delete)\b/.test(text)
-  ) {
+  if (isClearPrompt(text)) {
     return { kind: 'clear', label: 'Clear' };
   }
   if (
@@ -140,21 +141,31 @@ function detectKind(text: string): { kind: MotionKind; label: string } {
   ) {
     return { kind: 'closePan', label: 'Close Pan' };
   }
+  if (/\b(pull\s*backs?|dolly\s*outs?|widen|wide\s*shots?|camera\s*outs?|reveal\s*wide)\b/.test(text)) {
+    return { kind: 'pullBack', label: 'Pull Back' };
+  }
   if (/\b(fan(?:ning|ned|s)?|fan\s*(out|open|spread)|hand\s*of\s*cards)\b/.test(text)) {
     return { kind: 'fan', label: 'Fan' };
   }
-  if (/\b(360|full\s*spin|revolv|spin)\b/.test(text)) return { kind: 'spin', label: 'Spin 360' };
-  if (/\b(turntable|product\s*spin|showcase\s*spin|y[\s-]?spin)\b/.test(text)) return { kind: 'turntable', label: 'Turntable' };
+  if (/\b(360|full\s*spin|revolv|twirl|whirl|spin)\b/.test(text)) return { kind: 'spin', label: 'Spin 360' };
+  if (/\b(turntable|product\s*spin|showcase\s*spin|y[\s-]?spin|rotat\w*|turns?|turning)\b/.test(text)) {
+    return { kind: 'turntable', label: 'Turntable' };
+  }
   if (/\b(orbit|diagonal|3d\s*peek)\b/.test(text)) return { kind: 'orbit', label: 'Orbit' };
-  if (/\b(wobble|wiggle|jiggle|shake|attention)\b/.test(text)) return { kind: 'wobble', label: 'Wobble' };
-  if (/\b(swing|pendulum|roll)\b/.test(text)) return { kind: 'swing', label: 'Swing' };
+  if (/\b(wobble|wiggle|jiggle|shake|shaking|attention|tremor)\b/.test(text)) return { kind: 'wobble', label: 'Wobble' };
+  if (/\b(swing|pendulum|roll(?:ing)?)\b/.test(text)) return { kind: 'swing', label: 'Swing' };
   if (/\b(flip)\b/.test(text)) return { kind: 'flip', label: 'Flip' };
-  if (/\b(tilt|pitch|lean)\b/.test(text)) return { kind: 'tilt', label: 'Tilt' };
+  if (/\b(tilt|pitch|lean|nod)\b/.test(text)) return { kind: 'tilt', label: 'Tilt' };
   if (/\b(zoom|punch|scale\s*in|close[\s-]?up)\b/.test(text)) return { kind: 'zoom', label: 'Zoom In' };
+  if (/\b(slam|drop|fall|falling|land(?:ing)?\s*hard|crash)\b/.test(text)) return { kind: 'drop', label: 'Drop' };
   if (/\b(present|reveal|intro|entrance|settle)\b/.test(text)) return { kind: 'present', label: 'Present' };
   if (/\b(bounce)\b/.test(text)) return { kind: 'bounce', label: 'Bounce' };
   if (/\b(float|hover|bob|levitat)\b/.test(text)) return { kind: 'float', label: 'Float' };
-  if (/\b(rotate|rotation|spinning|turn)\b/.test(text)) return { kind: 'turntable', label: 'Turntable' };
+  if (/\b(breathe|breathing|pulse|pulsing)\b/.test(text)) return { kind: 'breathe', label: 'Breathe' };
+  if (/\b(rise|rising|lift|lifting|ascend)\b/.test(text)) return { kind: 'rise', label: 'Rise' };
+  if (/\b(slide|glide)\b/.test(text)) return { kind: 'slide', label: 'Slide' };
+  if (/\b(peek|glance)\b/.test(text)) return { kind: 'peek', label: 'Peek' };
+  if (/\b(drift|drifting)\b/.test(text)) return { kind: 'drift', label: 'Drift' };
   return { kind: 'custom', label: 'Custom motion' };
 }
 
@@ -181,6 +192,7 @@ function defaultDuration(kind: MotionKind): number {
     case 'pullBack': return 3.4;
     case 'breathe': return 3.2;
     case 'rise': return 2.8;
+    case 'drop': return 2.2;
     case 'slide': return 3;
     case 'peek': return 2.6;
     case 'drift': return 5.5;
@@ -238,6 +250,7 @@ function scalePresetTracks(tracks: AnimTrack[], device: DeviceInstance, intensit
         case 'position.y': return device.position.y;
         case 'position.z': return device.position.z;
         case 'scale': return device.scale;
+        case 'lidOpen': return device.lidOpen ?? 1;
         default: return 0;
       }
     })();
@@ -490,6 +503,36 @@ function buildRise(device: DeviceInstance, intent: PromptIntent): AnimTrack[] {
   ];
 }
 
+/** Drop / slam from above with a short settle. */
+function buildDrop(device: DeviceInstance, intent: PromptIntent): AnimTrack[] {
+  const d = intent.duration ?? 2.2;
+  const i = intent.intensity;
+  const dir = intent.direction;
+  const { x, z } = device.rotation;
+  const { y: py } = device.position;
+  const ease = intent.ease;
+  const bez = intent.easeBezier;
+  const slam: EaseBezier = [0.15, 0.85, 0.35, 1];
+  return [
+    track(device, 'position.y', [
+      kf(0, scaleAround(py, 0.52, i), ease, bez),
+      kf(d * 0.42, scaleAround(py, -0.05, i), 'custom', slam),
+      kf(d * 0.62, scaleAround(py, 0.07, i), ease, bez),
+      kf(d, py, ease, bez),
+    ]),
+    track(device, 'rotation.x', [
+      kf(0, scaleAround(x, -10, i), ease, bez),
+      kf(d * 0.42, scaleAround(x, 6, i), 'custom', slam),
+      kf(d, x, ease, bez),
+    ]),
+    track(device, 'rotation.z', [
+      kf(0, scaleAround(z, -5 * dir, i), ease, bez),
+      kf(d * 0.42, scaleAround(z, 4 * dir, i), 'custom', slam),
+      kf(d, z, ease, bez),
+    ]),
+  ];
+}
+
 /** Lateral glide. */
 function buildSlide(device: DeviceInstance, intent: PromptIntent): AnimTrack[] {
   const d = intent.duration ?? 3;
@@ -623,6 +666,7 @@ function buildForDevice(device: DeviceInstance, intent: PromptIntent): AnimTrack
   if (intent.kind === 'pullBack') return buildPullBack(device, intent);
   if (intent.kind === 'breathe') return buildBreathe(device, intent);
   if (intent.kind === 'rise') return buildRise(device, intent);
+  if (intent.kind === 'drop') return buildDrop(device, intent);
   if (intent.kind === 'slide') return buildSlide(device, intent);
   if (intent.kind === 'peek') return buildPeek(device, intent);
   if (intent.kind === 'drift') return buildDrift(device, intent);
@@ -647,29 +691,30 @@ function intensityWord(n: number) {
 }
 
 const MOTION_CATALOG: { kind: MotionKind; label: string; re: RegExp }[] = [
-  { kind: 'closePan', label: 'Close pan', re: /\b(close\s*pans?|dolly\s*ins?|push[\s-]?ins?|camera\s*(?:push|dolly|close))\b/ },
-  { kind: 'pullBack', label: 'Pull back', re: /\b(pull\s*backs?|dolly\s*outs?|widen|wide\s*shots?|camera\s*outs?)\b/ },
-  { kind: 'fan', label: 'Fan', re: /\b(fan(?:ning|ned|s)?|fan\s*(?:out|open|spread)|hand\s*of\s*cards)\b/ },
-  { kind: 'spin', label: 'Spin', re: /\b(360|full\s*spin|revolv\w*|spins?|spinning)\b/ },
-  { kind: 'turntable', label: 'Turntable', re: /\b(turntables?|product\s*spins?)\b/ },
-  { kind: 'orbit', label: 'Orbit', re: /\b(orbits?|diagonals?)\b/ },
-  { kind: 'wobble', label: 'Wobble', re: /\b(wobbles?|wiggles?|jiggles?|shakes?|attention)\b/ },
-  { kind: 'swing', label: 'Swing', re: /\b(swings?|pendulums?)\b/ },
-  { kind: 'flip', label: 'Flip', re: /\b(flips?|flipping)\b/ },
-  { kind: 'tilt', label: 'Tilt', re: /\b(tilts?|pitch\w*|leans?|leaning)\b/ },
-  { kind: 'zoom', label: 'Zoom', re: /\b(zooms?|punch(?:es|\s*in)?|scale\s*ins?|close[\s-]?ups?)\b/ },
-  { kind: 'present', label: 'Settle', re: /\b(presents?|reveals?|intros?|entrances?|settles?|settling)\b/ },
+  { kind: 'closePan', label: 'Close pan', re: /\b(close\s*pans?|dolly\s*ins?|push[\s-]?ins?|camera\s*(?:push|dolly|close)|pans?\s*(?:in|clos|toward)|push(?:es|ing)?\s*(?:in|clos))\b/ },
+  { kind: 'pullBack', label: 'Pull back', re: /\b(pull\s*backs?|dolly\s*outs?|widen|wide\s*shots?|camera\s*outs?|reveal\s*wide|zoom\s*outs?)\b/ },
+  { kind: 'fan', label: 'Fan', re: /\b(fan(?:ning|ned|s)?|fan\s*(?:out|open|spread)|hand\s*of\s*cards|spread\s*out)\b/ },
+  { kind: 'spin', label: 'Spin', re: /\b(360|full\s*spins?|revolv\w*|twirls?|twirling|whirls?|spins?|spinning)\b/ },
+  { kind: 'turntable', label: 'Turntable', re: /\b(turntables?|product\s*spins?|showcase\s*spins?|y[\s-]?spins?|rotat\w*|turning)\b|(?<!\bin\s)\bturns?\b/ },
+  { kind: 'orbit', label: 'Orbit', re: /\b(orbits?|orbiting|diagonals?|3d\s*peeks?)\b/ },
+  { kind: 'wobble', label: 'Wobble', re: /\b(wobbles?|wiggles?|jiggles?|shakes?|shaking|attention|tremors?|vibrat\w*)\b/ },
+  { kind: 'swing', label: 'Swing', re: /\b(swings?|swinging|pendulums?|rolls?|rolling)\b/ },
+  { kind: 'flip', label: 'Flip', re: /\b(flips?|flipping|tumbles?|tumbling)\b/ },
+  { kind: 'tilt', label: 'Tilt', re: /\b(tilts?|tilting|pitch\w*|leans?|leaning|nods?|nodding)\b/ },
+  { kind: 'zoom', label: 'Zoom', re: /\b(zooms?|zooming|punch(?:es|\s*in)?|scale\s*ins?|close[\s-]?ups?)\b/ },
+  { kind: 'drop', label: 'Drop', re: /\b(drops?|dropping|slams?|slamming|falls?|falling|lands?\s*hard|crashes?|crash(?:ing)?)\b/ },
+  { kind: 'present', label: 'Settle', re: /\b(presents?|reveals?|intros?|entrances?|settles?|settling|lands?|landing)\b/ },
   { kind: 'bounce', label: 'Bounce', re: /\b(bounces?|bouncing)\b/ },
   { kind: 'float', label: 'Float', re: /\b(floats?|floating|hovers?|hovering|bobs?|bobbing|levitat\w*)\b/ },
-  { kind: 'breathe', label: 'Breathe', re: /\b(breathes?|breathing|pulses?|pulsing)\b/ },
-  { kind: 'rise', label: 'Rise', re: /\b(rises?|rising|lifts?|lifting|ascends?)\b/ },
-  { kind: 'slide', label: 'Slide', re: /\b(slides?|sliding|glides?|gliding)\b/ },
-  { kind: 'peek', label: 'Peek', re: /\b(peeks?|glances?|looks?\s+(?:left|right|over))\b/ },
-  { kind: 'drift', label: 'Drift', re: /\b(drifts?|drifting)\b/ },
+  { kind: 'breathe', label: 'Breathe', re: /\b(breathes?|breathing|pulses?|pulsing|idles?|idling)\b/ },
+  { kind: 'rise', label: 'Rise', re: /\b(rises?|rising|lifts?|lifting|ascends?|ascending|soars?|soaring)\b/ },
+  { kind: 'slide', label: 'Slide', re: /\b(slides?|sliding|glides?|gliding|sweeps?|sweeping)\b/ },
+  { kind: 'peek', label: 'Peek', re: /\b(peeks?|peeking|glances?|glancing|looks?\s+(?:left|right|over))\b/ },
+  { kind: 'drift', label: 'Drift', re: /\b(drifts?|drifting|editorial)\b/ },
 ];
 
 const CAMERA_KINDS = new Set<MotionKind>(['closePan', 'pullBack']);
-const ONE_SHOT_KINDS = new Set<MotionKind>(['present', 'flip', 'closePan', 'pullBack']);
+const ONE_SHOT_KINDS = new Set<MotionKind>(['present', 'flip', 'closePan', 'pullBack', 'drop']);
 
 export interface PromptMotionBeat {
   kinds: MotionKind[];
@@ -699,14 +744,106 @@ function kindLabel(kind: MotionKind) {
   return MOTION_CATALOG.find((item) => item.kind === kind)?.label ?? 'Motion';
 }
 
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const grid = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+  for (let i = 0; i < rows; i += 1) grid[i][0] = i;
+  for (let j = 0; j < cols; j += 1) grid[0][j] = j;
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      grid[i][j] = Math.min(
+        grid[i - 1][j] + 1,
+        grid[i][j - 1] + 1,
+        grid[i - 1][j - 1] + cost,
+      );
+    }
+  }
+  return grid[a.length][b.length];
+}
+
+function fuzzyHas(words: string[], targets: string[], maxDist = 2): boolean {
+  for (const word of words) {
+    if (word.length < 3) continue;
+    for (const target of targets) {
+      if (word === target || word.startsWith(target) || target.startsWith(word)) return true;
+      const limit = Math.min(maxDist, target.length <= 4 ? 1 : 2);
+      if (Math.abs(word.length - target.length) <= limit && editDistance(word, target) <= limit) return true;
+    }
+  }
+  return false;
+}
+
+/** True for wipe/clear/reset/stop-style prompts, including common typos. */
 function isClearPrompt(text: string) {
-  return /^(clear|reset|none)$/.test(text.trim())
-    || /\b(clear|reset|remove|delete)\b.*\b(anim|motion|key|clip)/.test(text)
-    || /\b(anim|motion|key|clip).*\b(clear|reset|remove|delete)\b/.test(text);
+  const t = text.trim().toLowerCase().replace(/[^\w\s.+-]/g, ' ').replace(/\s+/g, ' ');
+  if (!t) return false;
+
+  if (/^(clear|reset|none|stop|wipe|erase|empty)$/.test(t)) return true;
+  if (/^(clear|reset|wipe|erase|remove|delete|stop)\s+(all|it|everything|this|that)?$/.test(t)) return true;
+  if (/\b(no|without|without\s+any)\s+(anim\w*|motio?\w*|keyframe\w*|timeline)\b/.test(t)) return true;
+  if (/\b(clear|reset|wipe|erase|remove|delete|stop)\s+all\b/.test(t)) return true;
+
+  const clearRe = /\b(clear|clears|cleared|clearing|reset|resets|resetting|remove|removes|removed|removing|delete|deletes|deleted|deleting|wipe|wipes|wiped|wiping|erase|erases|erased|erasing|stop|stops|stopped|stopping|kill|kills|cancel|cancels|scrub|scrubs|empty|empties|unset)\b/;
+  const animRe = /\b(anim\w*|motio?\w*|key(?:s|frame\w*)?|clip\w*|timeline|tracks?|keyframes?)\b/;
+  if (clearRe.test(t) && animRe.test(t)) return true;
+  if (animRe.test(t) && clearRe.test(t)) return true;
+
+  const words = t.split(/\s+/).filter(Boolean);
+  const hasClear = fuzzyHas(words, ['clear', 'reset', 'remove', 'delete', 'wipe', 'erase', 'stop', 'scrub', 'empty']);
+  const hasAnim = fuzzyHas(words, ['animation', 'animations', 'anim', 'motion', 'motions', 'keyframe', 'keyframes', 'clip', 'timeline', 'tracks']);
+  if (hasClear && hasAnim) return true;
+  if (hasClear && words.length <= 3 && /\b(all|everything|it|this|that)?\b/.test(t)) {
+    // Short imperative in the animation prompt box: "reset all", "clear it", "wipe".
+    if (words.length <= 2 || fuzzyHas(words, ['all', 'everything', 'it', 'this', 'that'])) return true;
+  }
+  return false;
 }
 
 function wantsEnsemble(text: string) {
-  return /\b(all|every|each|both|together|stagger(?:ed)?|cascade|ripple|one after another|one by one|in turn|devices)\b/.test(text);
+  return /\b(all|every|each|both|together|stagger(?:ed)?|cascade|ripple|one after another|one by one|in turn|devices|phones?|mockups?)\b/.test(text);
+}
+
+function normalizePromptText(prompt: string) {
+  return prompt.trim().toLowerCase().replace(/[^\w\s.+-]/g, ' ').replace(/\s+/g, ' ');
+}
+
+/** Sequence delimiters: "then", "next", "after that", semicolons, "and then". */
+function splitSequenceSegments(text: string): string[] {
+  return text
+    .split(/\s*(?:;\s*|(?:,\s*)?(?:and\s+)?(?:then|next|afterwards|after\s+that|after\s+which|followed\s+by)\s+)\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+/**
+ * "spin, float, settle" → three beats. Keep "spin while floating" / "bounce and tilt"
+ * as one layered beat.
+ */
+function expandCommaMotionLists(segments: string[]): string[] {
+  const out: string[] = [];
+  for (const segment of segments) {
+    if (/\b(while|as\s+it|with\s+a|alongside)\b/.test(segment)) {
+      out.push(segment);
+      continue;
+    }
+    const parts = segment.split(/\s*,\s*/).map((part) => part.trim()).filter(Boolean);
+    if (parts.length <= 1) {
+      out.push(segment);
+      continue;
+    }
+    const motionParts = parts.filter((part) => findMotions(part).length > 0 || moodKinds(part) != null);
+    if (motionParts.length === parts.length && parts.length >= 2) {
+      out.push(...parts);
+    } else {
+      out.push(segment);
+    }
+  }
+  return out;
 }
 
 function findMotions(text: string): MotionKind[] {
@@ -721,35 +858,94 @@ function findMotions(text: string): MotionKind[] {
     if (!unique.includes(kind)) unique.push(kind);
   }
 
+  if (!unique.length) {
+    for (const kind of fuzzyMotionKinds(text)) {
+      if (!unique.includes(kind)) unique.push(kind);
+    }
+  }
+
   if (unique.includes('spin') && unique.includes('turntable')) {
-    const full = /\b(360|full\s*spin|revolv)/.test(text);
-    const drop = full ? 'turntable' : 'spin';
-    return unique.filter((kind) => kind !== drop);
+    const full = /\b(360|full\s*spin|revolv|twirl|whirl)/.test(text);
+    const dropKind = full ? 'turntable' : 'spin';
+    return unique.filter((kind) => kind !== dropKind);
+  }
+  if (unique.includes('drop') && unique.includes('present') && /\b(slam|drop|fall|crash|hard)\b/.test(text)) {
+    return unique.filter((kind) => kind !== 'present');
   }
   if (/\b(corkscrew|spiral|helix)\b/.test(text)) {
     if (!unique.includes('spin')) unique.unshift('spin');
     if (!unique.includes('rise')) unique.push('rise');
   }
+  if (/\b(while|as\s+it|with\s+a)\s+(?:a\s+)?(?:soft\s+|gentle\s+|slow\s+)?(float|hover|bob)/.test(text) && !unique.includes('float')) {
+    unique.push('float');
+  }
   return unique;
 }
 
 function moodKinds(text: string): MotionKind[][] | null {
-  if (/\b(luxury|premium|editorial|high[\s-]?end|expensive|apple[\s-]?style|commercial|product\s+(?:ad|shot))\b/.test(text)) {
+  if (/\b(luxury|premium|editorial|high[\s-]?end|expensive|apple[\s-]?style|commercial|product\s+(?:ad|shot|film|video))\b/.test(text)) {
     return [['drift', 'float']];
   }
-  if (/\b(cinematic|filmic|movie|widescreen)\b/.test(text)) {
+  if (/\b(cinematic|filmic|movie|widescreen|trailer)\b/.test(text)) {
     return [['pullBack', 'orbit']];
   }
-  if (/\b(playful|cheeky)\b/.test(text)) {
+  if (/\b(playful|cheeky|fun|goofy|silly)\b/.test(text)) {
     return [['bounce', 'wobble']];
   }
-  if (/\b(hero|showcase)\b/.test(text)) {
+  if (/\b(hero\s+intro|hero\s+shot|product\s+intro|launch\s+shot)\b/.test(text)) {
+    return [['present'], ['breathe']];
+  }
+  if (/\b(hero|showcase|spotlight)\b/.test(text)) {
     return [['present'], ['float']];
   }
-  if (/\b(calm|quiet|barely\s+moving)\b/.test(text)) {
+  if (/\b(calm|quiet|barely\s+moving|subtle\s+hold|soft\s+hold)\b/.test(text)) {
     return [['breathe']];
   }
+  if (/\b(tech|saas|startup|modern\s+app)\b/.test(text)) {
+    return [['closePan'], ['float']];
+  }
+  if (/\b(unbox|unboxing|unpack)\b/.test(text)) {
+    return [['rise', 'spin'], ['present']];
+  }
+  if (/\b(attention|hey|look\s+here|notice\s+me)\b/.test(text)) {
+    return [['wobble']];
+  }
+  if (/\b(dramatic\s+enter|big\s+enter|power\s+enter)\b/.test(text)) {
+    return [['drop'], ['present']];
+  }
   return null;
+}
+
+/** Soft synonym / typo rescue when regex catalog misses a verb. */
+function fuzzyMotionKinds(text: string): MotionKind[] {
+  const words = text.split(/\s+/).filter((word) => word.length >= 3);
+  const guesses: { kind: MotionKind; targets: string[] }[] = [
+    { kind: 'spin', targets: ['spin', 'spins', 'spinning', 'twirl', 'whirl', 'revolve'] },
+    { kind: 'turntable', targets: ['rotate', 'rotation', 'rotating', 'turn', 'turning', 'turntable'] },
+    { kind: 'float', targets: ['float', 'floating', 'hover', 'hovering', 'levitate'] },
+    { kind: 'bounce', targets: ['bounce', 'bouncing', 'bouncy'] },
+    { kind: 'wobble', targets: ['wobble', 'wiggle', 'jiggle', 'shake', 'shaking'] },
+    { kind: 'tilt', targets: ['tilt', 'tilting', 'lean', 'leaning', 'nod'] },
+    { kind: 'flip', targets: ['flip', 'flipping', 'tumble'] },
+    { kind: 'orbit', targets: ['orbit', 'orbiting'] },
+    { kind: 'zoom', targets: ['zoom', 'zooming'] },
+    { kind: 'present', targets: ['settle', 'settling', 'reveal', 'present', 'intro', 'entrance'] },
+    { kind: 'rise', targets: ['rise', 'rising', 'lift', 'lifting', 'ascend'] },
+    { kind: 'drop', targets: ['drop', 'dropping', 'slam', 'slamming', 'fall', 'falling'] },
+    { kind: 'slide', targets: ['slide', 'sliding', 'glide', 'gliding'] },
+    { kind: 'breathe', targets: ['breathe', 'breathing', 'pulse', 'pulsing', 'idle'] },
+    { kind: 'fan', targets: ['fan', 'fanning', 'spread'] },
+    { kind: 'peek', targets: ['peek', 'peeking', 'glance'] },
+    { kind: 'drift', targets: ['drift', 'drifting'] },
+    { kind: 'swing', targets: ['swing', 'swinging', 'pendulum'] },
+    { kind: 'closePan', targets: ['dolly', 'pushin'] },
+    { kind: 'pullBack', targets: ['pullback', 'widen'] },
+  ];
+  const found: MotionKind[] = [];
+  for (const guess of guesses) {
+    if (fuzzyHas(words, guess.targets, 2) && !found.includes(guess.kind)) found.push(guess.kind);
+  }
+  return found;
 }
 
 function beatDuration(segment: string, kinds: MotionKind[], explicit: number | null): number {
@@ -760,7 +956,7 @@ function beatDuration(segment: string, kinds: MotionKind[], explicit: number | n
 
 /** Read a prompt as layered beats ("spin while floating, then settle"). */
 export function planAnimationPrompt(prompt: string): PromptMotionPlan {
-  const text = prompt.trim().toLowerCase().replace(/[^\w\s.+-]/g, ' ').replace(/\s+/g, ' ');
+  const text = normalizePromptText(prompt);
   const ensemble = wantsEnsemble(text);
   const stagger = /\b(stagger(?:ed)?|cascade|ripple|one after another|one by one|in turn)\b/.test(text);
 
@@ -776,7 +972,7 @@ export function planAnimationPrompt(prompt: string): PromptMotionPlan {
     };
   }
 
-  const segments = text.split(/\s+(?:and then|then|after that|afterwards|followed by)\s+/).filter(Boolean);
+  const segments = expandCommaMotionLists(splitSequenceSegments(text));
   const globalDuration = parseDuration(text);
   const segmentDurations = segments.map((segment) => parseDuration(segment));
   const explicitCount = segmentDurations.filter((value) => value != null).length;
@@ -785,8 +981,13 @@ export function planAnimationPrompt(prompt: string): PromptMotionPlan {
     let kinds = findMotions(segment);
     let fallback = false;
     if (!kinds.length) {
-      const mood = segments.length === 1 ? moodKinds(segment) : null;
+      const mood = moodKinds(segment);
       if (mood) return { mood, segment, fallback: false };
+      // Whole-prompt moods still apply when a middle beat is vague.
+      if (segments.length === 1) {
+        const globalMood = moodKinds(text);
+        if (globalMood) return { mood: globalMood, segment, fallback: false };
+      }
       kinds = ['drift'];
       fallback = true;
     }

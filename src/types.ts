@@ -46,7 +46,20 @@ export type DeviceColor = 'graphite' | 'titanium' | 'silver' | 'rose' | 'clay';
 export type CameraView = 'front' | 'left' | 'right' | 'top';
 /** Perspective lens presets — changes scene FOV (not the phone’s rear cameras). */
 export type CameraLens = 'ultrawide' | 'wide' | 'standard' | 'telephoto';
+/**
+ * Floor shadow enabled state. Legacy `contact` / `sharp` still load; the UI
+ * treats anything other than `off` as on and stores `soft`.
+ */
+export type ShadowType = 'contact' | 'soft' | 'sharp' | 'off';
+/** Floor-shadow sampling quality. Export temporarily forces Ultra. */
+export type ShadowQuality = 'auto' | 'high' | 'ultra';
 export type { SceneOverlay };
+
+export const SHADOW_QUALITIES: { id: ShadowQuality; label: string; hint: string }[] = [
+  { id: 'auto', label: 'Auto', hint: 'Balanced for smooth interaction' },
+  { id: 'high', label: 'High', hint: 'Cleaner penumbra while editing' },
+  { id: 'ultra', label: 'Ultra', hint: 'Maximum samples — used automatically on export' },
+];
 
 /**
  * Vertical FOV of a 50 mm lens on 36×24 mm film: 2·atan(12/50) ≈ 27°.
@@ -123,12 +136,32 @@ export interface SceneStage {
   lightPosition: Vec3;
   lightColor: string;
   fillIntensity: number;
+  /** Extra luminaires layered on the studio rig */
+  sceneLights: SceneLight[];
+  /**
+   * HDRI / environment map strength. `null` keeps the studio preset default.
+   */
+  environmentIntensity: number | null;
+  /**
+   * ACES tone-mapping exposure. `null` keeps the studio preset default.
+   */
+  toneMappingExposure: number | null;
   shadowSoftness: number;
   shadowOpacity: number;
+  /** Floor shadows on (`soft`) or off. Legacy contact/sharp still accepted. */
+  shadowType: ShadowType;
+  /** Extra contact darkening under the closest mesh points, 0–1. */
+  shadowContact: number;
+  /** Interactive shadow map quality. */
+  shadowQuality: ShadowQuality;
   showGroundBase: boolean;
   edgeBlurTop: boolean;
   edgeBlurBottom: boolean;
   edgeBlurAmount: number;
+  /** Photographic blur. Off leaves the whole frame sharp. */
+  depthOfField: boolean;
+  /** Blur strength while depth of field is on, 0.05–1. */
+  depthOfFieldAmount: number;
 }
 
 /**
@@ -148,10 +181,10 @@ export function createCompositionScene(partial?: Partial<CompositionScene>): Com
   return {
     id: partial?.id ?? `scene-${Math.random().toString(36).slice(2, 10)}`,
     name: (partial?.name ?? 'Scene 1').trim().slice(0, 40) || 'Scene 1',
-    background: partial?.background ?? 'midnight',
+    background: partial?.background ?? 'studio',
     gradientColors: partial?.gradientColors
       ? { ...partial.gradientColors }
-      : { center: '#a7b0c2', mid: '#3c4558', edge: '#222836' },
+      : { ...BUILTIN_GRADIENTS.studio },
     stage: partial?.stage,
   };
 }
@@ -195,6 +228,9 @@ export interface Vec3 {
   z: number;
 }
 
+/** Per-material overrides authored in DEV modeling mode (Spline-style). */
+export type MaterialTweak = Record<string, number | boolean | string | null>;
+
 export interface DeviceInstance {
   id: string;
   deviceId: DeviceId;
@@ -216,6 +252,11 @@ export interface DeviceInstance {
   clayMode?: boolean;
   /** Laptop lid openness: 0 = closed, 1 = open (default). */
   lidOpen?: number;
+  /**
+   * DEV modeling overrides keyed by material name (color, roughness, mapDataUrl, …).
+   * Merged on top of the device library’s baked `tweaks`.
+   */
+  materialTweaks?: Record<string, MaterialTweak>;
 }
 
 export type CompositionMode = 'single' | 'split';
@@ -251,6 +292,119 @@ export interface SceneProp {
   color?: string;
 }
 
+/** Extra luminaires (Spline-style) on top of the studio key / fill / rim rig. */
+export type SceneLightKind = 'directional' | 'point' | 'spot' | 'area';
+
+export interface SceneLight {
+  id: string;
+  kind: SceneLightKind;
+  label: string;
+  enabled: boolean;
+  position: Vec3;
+  /** Aim point for directional / spot / area */
+  target: Vec3;
+  color: string;
+  intensity: number;
+  /** Point / spot falloff */
+  distance: number;
+  decay: number;
+  /** Spot cone (radians) */
+  angle: number;
+  penumbra: number;
+  /** Area softbox size */
+  width: number;
+  height: number;
+  castShadow: boolean;
+}
+
+export const SCENE_LIGHT_KINDS: SceneLightKind[] = [
+  'directional', 'point', 'spot', 'area',
+];
+
+export const MAX_SCENE_LIGHTS = 8;
+
+export function createSceneLight(
+  partial: Partial<SceneLight> & { kind: SceneLightKind },
+): SceneLight {
+  const kind = partial.kind;
+  const defaults: Record<SceneLightKind, Pick<SceneLight, 'label' | 'position' | 'intensity' | 'distance' | 'angle' | 'width' | 'height' | 'castShadow'>> = {
+    directional: {
+      label: 'Directional',
+      position: { x: 3.2, y: 6, z: 4 },
+      intensity: 0.85,
+      distance: 0,
+      angle: Math.PI / 6,
+      width: 2,
+      height: 2,
+      castShadow: true,
+    },
+    point: {
+      label: 'Point',
+      position: { x: -2.4, y: 2.8, z: 2.2 },
+      intensity: 1.1,
+      distance: 12,
+      angle: Math.PI / 6,
+      width: 1,
+      height: 1,
+      castShadow: false,
+    },
+    spot: {
+      label: 'Spot',
+      position: { x: 2.8, y: 5.2, z: 3.4 },
+      intensity: 1.4,
+      distance: 16,
+      angle: Math.PI / 7,
+      width: 1,
+      height: 1,
+      castShadow: true,
+    },
+    area: {
+      label: 'Area',
+      position: { x: -3.2, y: 3.6, z: 4.5 },
+      intensity: 1.2,
+      distance: 0,
+      angle: Math.PI / 6,
+      width: 3.2,
+      height: 2.4,
+      castShadow: false,
+    },
+  };
+  const base = defaults[kind];
+  return {
+    id: partial.id ?? `light-${Math.random().toString(36).slice(2, 10)}`,
+    kind,
+    label: partial.label?.trim().slice(0, 32) || base.label,
+    enabled: partial.enabled !== false,
+    position: partial.position ? { ...partial.position } : { ...base.position },
+    target: partial.target ? { ...partial.target } : { x: 0, y: 0, z: 0 },
+    color: typeof partial.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(partial.color)
+      ? partial.color
+      : '#fff8f0',
+    intensity: typeof partial.intensity === 'number' && Number.isFinite(partial.intensity)
+      ? Math.min(20, Math.max(0, partial.intensity))
+      : base.intensity,
+    distance: typeof partial.distance === 'number' && Number.isFinite(partial.distance)
+      ? Math.min(40, Math.max(0, partial.distance))
+      : base.distance,
+    decay: typeof partial.decay === 'number' && Number.isFinite(partial.decay)
+      ? Math.min(4, Math.max(0, partial.decay))
+      : 2,
+    angle: typeof partial.angle === 'number' && Number.isFinite(partial.angle)
+      ? Math.min(Math.PI / 2, Math.max(0.05, partial.angle))
+      : base.angle,
+    penumbra: typeof partial.penumbra === 'number' && Number.isFinite(partial.penumbra)
+      ? Math.min(1, Math.max(0, partial.penumbra))
+      : 0.45,
+    width: typeof partial.width === 'number' && Number.isFinite(partial.width)
+      ? Math.min(12, Math.max(0.2, partial.width))
+      : base.width,
+    height: typeof partial.height === 'number' && Number.isFinite(partial.height)
+      ? Math.min(12, Math.max(0.2, partial.height))
+      : base.height,
+    castShadow: partial.castShadow ?? base.castShadow,
+  };
+}
+
 export const SCENE_PROP_KINDS: ScenePropKind[] = [
   'clay_sphere', 'clay_cube', 'clay_cylinder', 'clay_torus',
   'clay_helix', 'clay_cone', 'clay_pyramid',
@@ -265,7 +419,7 @@ export function createSceneProp(partial: Partial<SceneProp> & { kind: ScenePropK
     position: partial.position ?? { x: 0, y: 0, z: 0 },
     rotation: partial.rotation ?? { x: 0, y: 0, z: 0 },
     scale: partial.scale ?? 1,
-    color: partial.color,
+    color: partial.color ?? (partial.kind === 'studio_backdrop' ? '#ffffff' : undefined),
   };
 }
 
@@ -281,6 +435,7 @@ export type AnimProperty =
   | 'position.y'
   | 'position.z'
   | 'scale'
+  | 'lidOpen'
   | 'camera.x'
   | 'camera.y'
   | 'camera.z';
@@ -385,10 +540,26 @@ export interface MockupProject {
   lightColor: string;
   /** Soft fill / ambient light strength */
   fillIntensity: number;
-  /** Contact shadow blur — higher = softer edges */
+  /** Extra luminaires (point / spot / area / directional) for realistic setups */
+  sceneLights: SceneLight[];
+  /**
+   * HDRI strength override. `null` uses the background studio preset.
+   */
+  environmentIntensity: number | null;
+  /**
+   * ACES exposure override. `null` uses the background studio preset.
+   */
+  toneMappingExposure: number | null;
+  /** Apparent key-light size — higher = softer penumbra */
   shadowSoftness: number;
-  /** Contact shadow darkness */
+  /** Floor shadow darkness */
   shadowOpacity: number;
+  /** Floor shadows on (`soft`) or off. Legacy contact/sharp still accepted. */
+  shadowType: ShadowType;
+  /** Extra contact darkening under the closest mesh points, 0–1. */
+  shadowContact: number;
+  /** Interactive shadow map quality. Export forces Ultra temporarily. */
+  shadowQuality: ShadowQuality;
   /** Soft disc under the device; turn off for a floating product shot */
   showGroundBase: boolean;
   /** Soft progressive blur along the top of the frame */
@@ -397,6 +568,10 @@ export interface MockupProject {
   edgeBlurBottom: boolean;
   /** Peak blur strength at the frame edges (px) */
   edgeBlurAmount: number;
+  /** Photographic blur. Off leaves the whole frame sharp. */
+  depthOfField: boolean;
+  /** Blur strength while depth of field is on, 0.05–1. */
+  depthOfFieldAmount: number;
   /**
    * @deprecated Prefer edgeBlurTop / edgeBlurBottom. Kept so older saves still load;
    * treated as “both edges” when the new flags are absent.
@@ -436,8 +611,10 @@ export function createDeviceInstance(partial?: Partial<DeviceInstance>): DeviceI
   return {
     id: partial?.id ?? `device-${Math.random().toString(36).slice(2, 10)}`,
     deviceId: partial?.deviceId ?? 'iphone_15_pro_max',
+    // Front-facing rest pose — studio camera looks straight at the screen.
     rotation: partial?.rotation ?? { x: 0, y: 0, z: 0 },
     scale: partial?.scale ?? 1,
+    // Centered above the studio floor; fitDeviceRoot seats the mesh for a soft shadow.
     position: partial?.position ?? { x: 0, y: 0, z: 0 },
     glassReflection: partial?.glassReflection ?? 0.55,
     reflectionStyle: normalizeReflectionStyle(partial?.reflectionStyle)
@@ -446,6 +623,11 @@ export function createDeviceInstance(partial?: Partial<DeviceInstance>): DeviceI
     deviceColor: partial?.deviceColor,
     clayMode: partial?.clayMode,
     lidOpen: partial?.lidOpen,
+    materialTweaks: partial?.materialTweaks
+      ? Object.fromEntries(
+        Object.entries(partial.materialTweaks).map(([name, tweak]) => [name, { ...tweak }]),
+      )
+      : undefined,
   };
 }
 
@@ -479,8 +661,10 @@ export function createDefaultAnimation(targetId = 'device-main'): AnimationClip 
 }
 
 export const BUILTIN_GRADIENTS: Record<Exclude<BuiltinBackgroundId, 'transparent'>, GradientColors> = {
-  midnight: { center: '#a7b0c2', mid: '#3c4558', edge: '#222836' },
-  studio: { center: '#f6f4f0', mid: '#e4dfd6', edge: '#c9c3b8' },
+  /** Dark Studio — wall / sky / floor as three distinct charcoal stops. */
+  midnight: { center: '#6b707a', mid: '#3a3f48', edge: '#1a1c21' },
+  /** Light Studio — soft white cyclorama with cove falloff. */
+  studio: { center: '#ffffff', mid: '#f4f4f6', edge: '#e6e6ea' },
   mint: { center: '#9ed9c6', mid: '#246456', edge: '#0e2c26' },
   sunset: { center: '#f3c6d4', mid: '#6d5078', edge: '#1c1626' },
 };
@@ -488,14 +672,20 @@ export const BUILTIN_GRADIENTS: Record<Exclude<BuiltinBackgroundId, 'transparent
 /** Earlier built-in palettes. Untouched looks are lifted onto the current one on load. */
 const LEGACY_BUILTIN_GRADIENTS: Record<Exclude<BuiltinBackgroundId, 'transparent'>, GradientColors[]> = {
   midnight: [
+    { center: '#4a4e58', mid: '#2e3138', edge: '#26282d' },
     { center: '#363e49', mid: '#1d232b', edge: '#0d1016' },
     { center: '#6d7786', mid: '#2c333d', edge: '#090b0e' },
     { center: '#a7b0c2', mid: '#3c4558', edge: '#141820' },
+    { center: '#a7b0c2', mid: '#3c4558', edge: '#222836' },
   ],
   studio: [
+    { center: '#efefef', mid: '#e4e4e4', edge: '#d6d6d6' },
+    { center: '#ffffff', mid: '#ffffff', edge: '#ffffff' },
     { center: '#ffffff', mid: '#f7f7f5', edge: '#ecece8' },
     { center: '#ffffff', mid: '#e4e3de', edge: '#b7b6b0' },
     { center: '#ffffff', mid: '#d4d0c8', edge: '#8a877f' },
+    { center: '#f6f4f0', mid: '#e4dfd6', edge: '#c9c3b8' },
+    { center: '#f5f3ef', mid: '#e6e3dc', edge: '#cfc9bf' },
   ],
   mint: [
     { center: '#487e6c', mid: '#18463c', edge: '#071916' },
@@ -507,13 +697,13 @@ const LEGACY_BUILTIN_GRADIENTS: Record<Exclude<BuiltinBackgroundId, 'transparent
   ],
 };
 
-export const DEFAULT_GRADIENT: GradientColors = { ...BUILTIN_GRADIENTS.midnight };
+export const DEFAULT_GRADIENT: GradientColors = { ...BUILTIN_GRADIENTS.studio };
 
 const defaultScene = createCompositionScene({
   id: 'scene-main',
   name: 'Scene 1',
-  background: 'midnight',
-  gradientColors: { ...DEFAULT_GRADIENT },
+  background: 'studio',
+  gradientColors: { ...BUILTIN_GRADIENTS.studio },
 });
 
 export const DEFAULT_PROJECT: MockupProject = {
@@ -530,20 +720,29 @@ export const DEFAULT_PROJECT: MockupProject = {
   activeSceneId: defaultScene.id,
   background: defaultScene.background,
   gradientColors: { ...defaultScene.gradientColors },
-  reflectionMap: 'match_background',
+  reflectionMap: 'softbox',
   reflectionMapImage: null,
   rotation: { ...primary.rotation },
   scale: primary.scale,
-  lightIntensity: 4.2,
-  lightPosition: { x: 4, y: 5, z: 7 },
-  lightColor: '#ffffff',
-  fillIntensity: 1.6,
-  shadowSoftness: 4,
-  shadowOpacity: 0.32,
+  // Spline-like: soft ambient wrap first, gentle key for shape.
+  lightIntensity: 0.9,
+  lightPosition: { x: 3.8, y: 5.8, z: 5.6 },
+  lightColor: '#fff8f0',
+  fillIntensity: 1.05,
+  sceneLights: [],
+  environmentIntensity: null,
+  toneMappingExposure: null,
+  shadowSoftness: 1.8,
+  shadowOpacity: 0.55,
+  shadowType: 'soft',
+  shadowContact: 0.7,
+  shadowQuality: 'auto',
   showGroundBase: true,
   edgeBlurTop: false,
   edgeBlurBottom: false,
   edgeBlurAmount: 24,
+  depthOfField: false,
+  depthOfFieldAmount: 0.48,
   cameraView: 'front',
   cameraLens: 'standard',
   compositionMode: 'single',
@@ -569,6 +768,7 @@ export const ANIM_PROPERTIES: { id: AnimProperty; label: string; unit: string }[
   { id: 'position.y', label: 'Pos Y', unit: '' },
   { id: 'position.z', label: 'Pos Z', unit: '' },
   { id: 'scale', label: 'Scale', unit: '×' },
+  { id: 'lidOpen', label: 'Fold / Lid', unit: '' },
   { id: 'camera.x', label: 'Camera X', unit: '' },
   { id: 'camera.y', label: 'Camera Y', unit: '' },
   { id: 'camera.z', label: 'Camera Z', unit: '' },
@@ -580,6 +780,7 @@ export const DEVICE_ANIM_PROPERTIES: AnimProperty[] = [
   'rotation.x', 'rotation.y', 'rotation.z',
   'position.x', 'position.y', 'position.z',
   'scale',
+  'lidOpen',
 ];
 
 export const IOS_DEVICE_ID: DeviceId = 'iphone_15_pro_max';
@@ -746,6 +947,14 @@ function cloneAnimation(clip: AnimationClip, mapTarget?: (targetId: string) => s
   };
 }
 
+function cloneSceneLight(light: SceneLight): SceneLight {
+  return {
+    ...light,
+    position: { ...light.position },
+    target: { ...light.target },
+  };
+}
+
 function cloneSceneStage(stage: SceneStage): SceneStage {
   return {
     ...stage,
@@ -755,6 +964,9 @@ function cloneSceneStage(stage: SceneStage): SceneStage {
     layers: stage.layers.map((layer) => ({ ...layer })),
     animation: cloneAnimation(stage.animation),
     lightPosition: { ...stage.lightPosition },
+    sceneLights: (stage.sceneLights ?? []).map((light) => cloneSceneLight(light)),
+    environmentIntensity: stage.environmentIntensity ?? null,
+    toneMappingExposure: stage.toneMappingExposure ?? null,
   };
 }
 
@@ -786,6 +998,9 @@ function duplicateSceneStage(stage: SceneStage): SceneStage {
       targetId === CAMERA_TARGET_ID ? CAMERA_TARGET_ID : deviceIds.get(targetId) ?? null
     )),
     lightPosition: { ...stage.lightPosition },
+    sceneLights: (stage.sceneLights ?? []).map((light) => cloneSceneLight(light)),
+    environmentIntensity: stage.environmentIntensity ?? null,
+    toneMappingExposure: stage.toneMappingExposure ?? null,
   };
 }
 
@@ -803,18 +1018,26 @@ function blankSceneStage(): SceneStage {
     compositionMode: 'single',
     linkSplitTransform: true,
     publishTarget: 'ios',
-    reflectionMap: 'match_background',
+    reflectionMap: DEFAULT_PROJECT.reflectionMap,
     reflectionMapImage: null,
     lightIntensity: DEFAULT_PROJECT.lightIntensity,
     lightPosition: { ...DEFAULT_PROJECT.lightPosition },
     lightColor: DEFAULT_PROJECT.lightColor,
     fillIntensity: DEFAULT_PROJECT.fillIntensity,
+    sceneLights: [],
+    environmentIntensity: null,
+    toneMappingExposure: null,
     shadowSoftness: DEFAULT_PROJECT.shadowSoftness,
     shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
+    shadowType: DEFAULT_PROJECT.shadowType,
+    shadowContact: DEFAULT_PROJECT.shadowContact,
+    shadowQuality: DEFAULT_PROJECT.shadowQuality,
     showGroundBase: DEFAULT_PROJECT.showGroundBase,
     edgeBlurTop: false,
     edgeBlurBottom: false,
     edgeBlurAmount: DEFAULT_PROJECT.edgeBlurAmount,
+    depthOfField: false,
+    depthOfFieldAmount: DEFAULT_PROJECT.depthOfFieldAmount,
   };
 }
 
@@ -850,12 +1073,20 @@ export function captureSceneStage(project: MockupProject): SceneStage {
     lightPosition: { ...project.lightPosition },
     lightColor: project.lightColor,
     fillIntensity: project.fillIntensity,
+    sceneLights: (project.sceneLights ?? []).map((light) => cloneSceneLight(light)),
+    environmentIntensity: project.environmentIntensity ?? null,
+    toneMappingExposure: project.toneMappingExposure ?? null,
     shadowSoftness: project.shadowSoftness,
     shadowOpacity: project.shadowOpacity,
+    shadowType: project.shadowType ?? DEFAULT_PROJECT.shadowType,
+    shadowContact: project.shadowContact ?? DEFAULT_PROJECT.shadowContact,
+    shadowQuality: project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality,
     showGroundBase: project.showGroundBase,
     edgeBlurTop: project.edgeBlurTop,
     edgeBlurBottom: project.edgeBlurBottom,
     edgeBlurAmount: project.edgeBlurAmount,
+    depthOfField: project.depthOfField,
+    depthOfFieldAmount: project.depthOfFieldAmount,
   };
 }
 
@@ -915,12 +1146,20 @@ export function applySceneStage(project: MockupProject, scene: CompositionScene)
     lightPosition: { ...stage.lightPosition },
     lightColor: stage.lightColor,
     fillIntensity: stage.fillIntensity,
+    sceneLights: (stage.sceneLights ?? []).map((light) => cloneSceneLight(light)),
+    environmentIntensity: stage.environmentIntensity ?? null,
+    toneMappingExposure: stage.toneMappingExposure ?? null,
     shadowSoftness: stage.shadowSoftness,
     shadowOpacity: stage.shadowOpacity,
+    shadowType: stage.shadowType ?? DEFAULT_PROJECT.shadowType,
+    shadowContact: stage.shadowContact ?? DEFAULT_PROJECT.shadowContact,
+    shadowQuality: stage.shadowQuality ?? DEFAULT_PROJECT.shadowQuality,
     showGroundBase: stage.showGroundBase,
     edgeBlurTop: stage.edgeBlurTop,
     edgeBlurBottom: stage.edgeBlurBottom,
     edgeBlurAmount: stage.edgeBlurAmount,
+    depthOfField: stage.depthOfField,
+    depthOfFieldAmount: stage.depthOfFieldAmount,
   }, selected));
 }
 
@@ -944,8 +1183,8 @@ export function addCompositionScene(project: MockupProject, mode: NewSceneMode |
     name: kind === 'blank'
       ? nextSceneName(scenes)
       : `${active.name.replace(/\s+copy$/i, '')} copy`.slice(0, 40),
-    background: kind === 'blank' ? 'midnight' : active.background,
-    gradientColors: kind === 'blank' ? { ...DEFAULT_GRADIENT } : { ...active.gradientColors },
+    background: kind === 'blank' ? 'studio' : active.background,
+    gradientColors: kind === 'blank' ? { ...BUILTIN_GRADIENTS.studio } : { ...active.gradientColors },
     stage: kind === 'blank' ? blankSceneStage() : duplicateSceneStage(sourceStage),
   });
   const index = Math.max(0, scenes.findIndex((scene) => scene.id === active.id));
@@ -991,11 +1230,11 @@ export function renameCompositionScene(project: MockupProject, sceneId: string, 
 }
 
 export const BACKGROUNDS: ScenePreset[] = [
-  { id: 'midnight', label: 'Midnight', description: 'Soft blue-charcoal studio', gradient: BUILTIN_GRADIENTS.midnight },
-  { id: 'studio', label: 'Soft Studio', description: 'Warm paper cyclorama', gradient: BUILTIN_GRADIENTS.studio },
+  { id: 'midnight', label: 'Dark Studio', description: 'Charcoal seamless, cinematic lighting', gradient: BUILTIN_GRADIENTS.midnight },
+  { id: 'studio', label: 'Light Studio', description: 'Soft white Apple-style product sweep', gradient: BUILTIN_GRADIENTS.studio },
   { id: 'mint', label: 'Emerald', description: 'Soft green studio', gradient: BUILTIN_GRADIENTS.mint },
   { id: 'sunset', label: 'Sunset', description: 'Soft dusk wash', gradient: BUILTIN_GRADIENTS.sunset },
-  { id: 'transparent', label: 'Transparent', description: 'No background', gradient: null },
+  { id: 'transparent', label: 'Transparent Studio', description: 'Clear BG for PNG/WebP export', gradient: null },
 ];
 
 export function isTransparentBackground(id: BackgroundPreset): boolean {

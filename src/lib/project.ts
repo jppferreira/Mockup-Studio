@@ -5,12 +5,14 @@ import { isValidScreenMediaDataUrl } from './screenMedia';
 import { REFLECTION_MAPS } from './reflectionMaps';
 import {
   ANIM_PROPERTIES, BACKGROUNDS, BUILTIN_GRADIENTS, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT,
-  DEVICE_COLORS, MAX_COMPOSITION_SCENES, SCENE_PROP_KINDS, createCompositionScene, createDefaultAnimation,
-  createDeviceInstance, createSceneProp, ensureCompositionScenes, getSelectedDevice,
+  DEVICE_COLORS, MAX_COMPOSITION_SCENES, MAX_SCENE_LIGHTS, SCENE_LIGHT_KINDS, SCENE_PROP_KINDS,
+  createCompositionScene, createDefaultAnimation, createDeviceInstance, createSceneLight, createSceneProp,
+  ensureCompositionScenes, getSelectedDevice,
   applySceneStage, captureSceneStage, resolveSceneGradient, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimKeyframe, type AnimProperty, type AnimTrack, type AnimationClip,
   type CompositionScene, type DeviceColor, type DeviceInstance, type MockupProject,
-  type PublishTarget, type ReflectionMapSetting, type SceneProp, type ScenePropKind, type SceneStage, type Vec3,
+  type PublishTarget, type ReflectionMapSetting, type SceneLight, type SceneLightKind, type SceneProp,
+  type ScenePropKind, type SceneStage, type Vec3,
 } from '../types';
 import { loadCustomScenePresets } from './scenePresets';
 
@@ -26,6 +28,22 @@ function vec3(input: Partial<Vec3> | undefined, fallback: Vec3): Vec3 {
     y: number(input?.y, fallback.y, -500, 500),
     z: number(input?.z, fallback.z, -500, 500),
   };
+}
+
+const SCENE_LIGHT_KIND_SET = new Set<string>(SCENE_LIGHT_KINDS);
+
+function normalizeSceneLights(raw: unknown): SceneLight[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const entry = item as Partial<SceneLight>;
+    if (!SCENE_LIGHT_KIND_SET.has(String(entry.kind))) return [];
+    return [createSceneLight({
+      ...entry,
+      kind: entry.kind as SceneLightKind,
+      id: typeof entry.id === 'string' && entry.id.trim() ? entry.id : undefined,
+    })];
+  }).slice(0, MAX_SCENE_LIGHTS);
 }
 
 function normalizeScale(input: unknown, fallback: number | Vec3 = 1): number | Vec3 {
@@ -223,14 +241,38 @@ export function validateProject(value: unknown): MockupProject {
     overlays,
     rotation: { ...selected.rotation },
     scale: selected.scale,
-    lightIntensity: number(input.lightIntensity, DEFAULT_PROJECT.lightIntensity, 0.5, 5),
+    lightIntensity: number(input.lightIntensity, DEFAULT_PROJECT.lightIntensity, 0, 5),
     lightPosition: vec3(input.lightPosition, DEFAULT_PROJECT.lightPosition),
     lightColor: typeof input.lightColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(input.lightColor)
       ? input.lightColor
       : DEFAULT_PROJECT.lightColor,
     fillIntensity: number(input.fillIntensity, DEFAULT_PROJECT.fillIntensity, 0, 2.5),
-    shadowSoftness: number(input.shadowSoftness, DEFAULT_PROJECT.shadowSoftness, 0.2, 8),
+    sceneLights: normalizeSceneLights(input.sceneLights),
+    environmentIntensity: input.environmentIntensity == null
+      ? null
+      : number(input.environmentIntensity, 1, 0, 4),
+    toneMappingExposure: input.toneMappingExposure == null
+      ? null
+      : number(input.toneMappingExposure, 1.45, 0.2, 4),
+    shadowSoftness: number(
+      input.shadowSoftness,
+      input.shadowType === 'sharp' ? Math.min(2.2, DEFAULT_PROJECT.shadowSoftness) : DEFAULT_PROJECT.shadowSoftness,
+      0.2,
+      8,
+    ),
     shadowOpacity: number(input.shadowOpacity, DEFAULT_PROJECT.shadowOpacity, 0, 0.85),
+    shadowType: (['contact', 'soft', 'sharp', 'off'] as const).includes(input.shadowType as never)
+      ? (input.shadowType as MockupProject['shadowType'])
+      : DEFAULT_PROJECT.shadowType,
+    shadowContact: number(
+      input.shadowContact,
+      input.shadowType === 'contact' ? 0.72 : input.shadowType === 'sharp' ? 0.58 : DEFAULT_PROJECT.shadowContact,
+      0,
+      1,
+    ),
+    shadowQuality: (['auto', 'high', 'ultra'] as const).includes(input.shadowQuality as never)
+      ? (input.shadowQuality as MockupProject['shadowQuality'])
+      : DEFAULT_PROJECT.shadowQuality,
     showGroundBase: input.showGroundBase !== false,
     edgeBlurTop: typeof input.edgeBlurTop === 'boolean'
       ? input.edgeBlurTop
@@ -239,6 +281,10 @@ export function validateProject(value: unknown): MockupProject {
       ? input.edgeBlurBottom
       : input.edgeBlurEnabled === true,
     edgeBlurAmount: number(input.edgeBlurAmount, DEFAULT_PROJECT.edgeBlurAmount, 4, 64),
+    depthOfField: typeof input.depthOfField === 'boolean'
+      ? input.depthOfField
+      : DEFAULT_PROJECT.depthOfField,
+    depthOfFieldAmount: number(input.depthOfFieldAmount, DEFAULT_PROJECT.depthOfFieldAmount, 0.05, 1),
     cameraView: ['front', 'left', 'right', 'top'].includes(String(input.cameraView)) ? input.cameraView! : 'front',
     cameraLens: (['ultrawide', 'wide', 'standard', 'telephoto'] as const).includes(input.cameraLens as never)
       ? (input.cameraLens as MockupProject['cameraLens'])
@@ -329,18 +375,41 @@ function normalizeStoredStage(raw: unknown, fallback: MockupProject): SceneStage
       : fallback.publishTarget,
     reflectionMap: reflectionMapImage ? 'custom' : (reflectionMap === 'custom' ? 'match_background' : reflectionMap),
     reflectionMapImage,
-    lightIntensity: number(source.lightIntensity, fallback.lightIntensity, 0.5, 5),
+    lightIntensity: number(source.lightIntensity, fallback.lightIntensity, 0, 5),
     lightPosition: vec3(source.lightPosition, fallback.lightPosition),
     lightColor: typeof source.lightColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(source.lightColor)
       ? source.lightColor
       : fallback.lightColor,
     fillIntensity: number(source.fillIntensity, fallback.fillIntensity, 0, 2.5),
+    sceneLights: normalizeSceneLights(source.sceneLights ?? fallback.sceneLights),
+    environmentIntensity: source.environmentIntensity == null
+      ? (fallback.environmentIntensity ?? null)
+      : number(source.environmentIntensity, 1, 0, 4),
+    toneMappingExposure: source.toneMappingExposure == null
+      ? (fallback.toneMappingExposure ?? null)
+      : number(source.toneMappingExposure, 1.45, 0.2, 4),
     shadowSoftness: number(source.shadowSoftness, fallback.shadowSoftness, 0.2, 8),
     shadowOpacity: number(source.shadowOpacity, fallback.shadowOpacity, 0, 0.85),
+    shadowType: (['contact', 'soft', 'sharp', 'off'] as const).includes(source.shadowType as never)
+      ? (source.shadowType as MockupProject['shadowType'])
+      : (fallback.shadowType ?? DEFAULT_PROJECT.shadowType),
+    shadowContact: number(
+      source.shadowContact,
+      fallback.shadowContact ?? DEFAULT_PROJECT.shadowContact,
+      0,
+      1,
+    ),
+    shadowQuality: (['auto', 'high', 'ultra'] as const).includes(source.shadowQuality as never)
+      ? (source.shadowQuality as MockupProject['shadowQuality'])
+      : (fallback.shadowQuality ?? DEFAULT_PROJECT.shadowQuality),
     showGroundBase: source.showGroundBase !== false,
     edgeBlurTop: typeof source.edgeBlurTop === 'boolean' ? source.edgeBlurTop : fallback.edgeBlurTop,
     edgeBlurBottom: typeof source.edgeBlurBottom === 'boolean' ? source.edgeBlurBottom : fallback.edgeBlurBottom,
     edgeBlurAmount: number(source.edgeBlurAmount, fallback.edgeBlurAmount, 4, 64),
+    depthOfField: typeof source.depthOfField === 'boolean'
+      ? source.depthOfField
+      : fallback.depthOfField,
+    depthOfFieldAmount: number(source.depthOfFieldAmount, fallback.depthOfFieldAmount, 0.05, 1),
   };
 }
 

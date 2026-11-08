@@ -5,8 +5,8 @@ import {
   Cone, Cylinder, Dna, Film, Hand, MessageSquare, MoveHorizontal, MousePointer2, PenTool, Pyramid, Square, Torus, Triangle, Type, ZoomIn,
   ClipboardPaste, Columns2, Command, Copy, Download, FileImage, FlipHorizontal2, Gauge, Glasses, Headphones,
   ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, MessageSquarePlus, Minus,
-  Menu, MonitorSmartphone, MoreHorizontal, Orbit, PanelLeftClose, PanelLeftOpen,
-  Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, Upload, Watch, Waves, X,
+  Menu, Monitor, MonitorSmartphone, MoreHorizontal, Orbit, PanelLeftClose, PanelLeftOpen,
+  Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, Upload, UserRound, Watch, Waves, Wrench, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import AccentThemePicker from './components/AccentThemePicker';
@@ -15,26 +15,48 @@ import ViewAxisGizmo from './components/ViewAxisGizmo';
 import CloudSyncPanel, { type CloudTarget } from './components/CloudSyncPanel';
 import ProjectsDashboard from './components/ProjectsDashboard';
 import ChangeLogPanel from './components/ChangeLogPanel';
+import CompositionSwitcher from './components/CompositionSwitcher';
 import SceneHierarchy, { sameLayerSelection, type SceneLayerSelection } from './components/SceneHierarchy';
 import TemplateThumb, { TemplateThumbHost } from './components/TemplateThumb';
 import CropFocusOverlay from './components/CropFocusOverlay';
 import CustomDevicePanel, { type CustomDevicePanelHandle } from './components/CustomDevicePanel';
-import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload, type ViewGesture } from './components/DeviceCanvas';
+import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload, type MaterialPickPayload, type ViewGesture } from './components/DeviceCanvas';
 import { type AnnotationMark } from './components/ModelAnnotations';
 import DualCanvasLayout from './components/DualCanvasLayout';
 import FeedbackModal from './components/FeedbackModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
 import LicenseModal from './components/LicenseModal';
+import UpdateBanner from './components/UpdateBanner';
 import SvgExplodeModal from './components/SvgExplodeModal';
 import ProgressiveBlurOverlay from './components/ProgressiveBlurOverlay';
 import LightDirectionControl from './components/LightDirectionControl';
+import ModelingModePanel, { type PickedMaterial, type StudioSetFocus } from './components/ModelingModePanel';
 import ReflectionMapPicker from './components/ReflectionMapPicker';
 import {
   hydrateCustomDeviceUrls,
+  importCustomDevices,
   loadCustomDeviceMeta,
   subscribeCustomDevices,
+  updateCustomDeviceMeta,
   type CustomDeviceMeta,
 } from './lib/customDevices';
+import { tweakFromPreset, type MaterialPresetId } from './lib/materialPresets';
+import {
+  isDevToolsetAvailable,
+  loadWorkspaceToolset,
+  saveWorkspaceToolset,
+  type WorkspaceToolset,
+} from './lib/modelingMode';
+import {
+  createBlankShippedTemplate,
+  deleteShippedTemplate,
+  duplicateShippedTemplate,
+  prepareShippedFromProject,
+  renameShippedTemplate,
+  shipCompositionTemplate,
+  subscribeRuntimePromoted,
+} from './lib/shippedTemplates';
+import { collectDroppedFiles, meshDropOffer, type MeshDropOffer } from './lib/meshBundle';
 import { isPlaceholderScreenshot, placeholderForDevice } from './lib/demo';
 import { TONE_CLAY } from './lib/referenceTones';
 import { recordProjectChange, type ChangeLogEntry } from './lib/changeLog';
@@ -45,6 +67,7 @@ import {
 } from './lib/animation';
 import { applyAnimationPreset, getAnimationPreset, shiftDeviceRotation } from './lib/animationPresets';
 import { STUDIO_POSES, getStudioPose, studioPoseIdFor } from './lib/studioPoses';
+import { resolveStudioPreset, STUDIO_START_POSITION, STUDIO_START_ROTATION } from './lib/studioEnvironment';
 import {
   DEVICE_CATEGORY_ICON,
   DEVICE_CATEGORY_TABS,
@@ -65,6 +88,7 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
   smartphone: Smartphone,
   tablet: Tablet,
   laptop: Laptop,
+  monitor: Monitor,
   watch: Watch,
   headphones: Headphones,
   glasses: Glasses,
@@ -112,6 +136,9 @@ import {
 } from './lib/cloudLibrary';
 import { downloadBlob, safeFilename, validateProject } from './lib/project';
 import {
+  encodeMockupFile, isProjectFileName, mockupDownloadName, MOCKUP_MIME, readProjectFileContents,
+} from './lib/projectFile';
+import {
   hydrateRecentScreenshots, loadRecentScreenshots, recentForPlatform, rememberRecentScreenshot,
   type RecentScreenshot,
 } from './lib/recentScreenshots';
@@ -149,27 +176,30 @@ import {
 import { promptToAnimationSmart } from './lib/promptAnimateLocal';
 import { deleteCustomScenePreset, loadCustomScenePresets, saveCustomScenePreset } from './lib/scenePresets';
 import {
-  canonicalTemplatesJson, deleteSavedAngle, deleteSavedComposition, deleteSavedSize,
+  canonicalTemplatesJson, copyTemplateToSaved, deleteSavedAngle, deleteSavedComposition, deleteSavedSize,
+  duplicateSavedComposition, formatBuiltinCompositionSource,
   loadSavedAngles, loadSavedCompositions, loadSavedSizes,
-  mergeSavedCompositions, parseTemplatesLibrary, replaceSavedCompositions,
+  mergeSavedCompositions, parseTemplatesLibrary, renameSavedComposition, replaceSavedCompositions,
   saveAngle, saveAssetSize, saveComposition, serializeTemplatesLibrary,
   type SavedAngle, type SavedAssetSize,
 } from './lib/userLibrary';
 import {
-  projectFromTemplate, templatesByCategory,
+  applyCompositionKeepingDevices, getCompositionTemplate, isDevEditableTemplateId, projectFromTemplate, templatesByCategory,
   type CompositionTemplate, type TemplateCategory,
 } from './lib/templates';
 import {
   BACKGROUNDS, CAMERA_LENSES, CAMERA_TARGET_ID, DEFAULT_PROJECT, DEVICE_COLORS,
   EXPORT_ASPECTS, EXPORT_ASPECT_GROUPS, EXPORT_FPS_OPTIONS, EXPORT_RESOLUTIONS,
-  EXPORT_SIZE_LIMITS, MAX_COMPOSITION_SCENES, MAX_DEVICES, exportAspectFixedSize, exportAspectHasFixed,
+  EXPORT_SIZE_LIMITS, MAX_COMPOSITION_SCENES, MAX_DEVICES, MAX_SCENE_LIGHTS, SHADOW_QUALITIES,
+  exportAspectFixedSize, exportAspectHasFixed,
   resolveExportDimensions, addCompositionScene, commitActiveScene, createDefaultAnimation,
-  createDeviceInstance, createSceneProp, ensureCompositionScenes, getSelectedDevice,
+  createDeviceInstance, createSceneLight, createSceneProp, duplicateCompositionScene, ensureCompositionScenes, getSelectedDevice,
   patchActiveCompositionScene, removeCompositionScene, renameCompositionScene,
   switchCompositionScene, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimProperty, type BackgroundPreset, type CameraView, type DeviceColor, type ExportAspectId,
-  type ExportResolutionId, type GradientColors, type MockupProject, type PublishTarget,
-  type ReflectionMapSetting, type ScenePreset, type ScenePropKind, type Vec3,
+  type ExportResolutionId, type GradientColors, type MaterialTweak, type MockupProject, type PublishTarget,
+  type ReflectionMapSetting, type SceneLight, type ScenePreset, type SceneProp, type ScenePropKind,
+  type ShadowType, type Vec3,
 } from './types';
 
 /** Top-left pinned tabs: scene objects vs Assets library. */
@@ -282,6 +312,38 @@ function SliderField({ label, value, min, max, step = 1, unit = '°', onChange }
         {unit ? <span className="slider-number-unit">{unit}</span> : null}
       </span>
     </label>
+  );
+}
+
+function AxisInputs({ label, axes, onChange }: {
+  label: string;
+  axes: { key: 'x' | 'y' | 'z'; min: number; max: number; value: number }[];
+  onChange: (axis: 'x' | 'y' | 'z', value: number) => void;
+}) {
+  return (
+    <div className="axis-inputs">
+      <span className="slider-label">{label}</span>
+      <div className="axis-inputs-fields">
+        {axes.map((axis) => (
+          <label key={axis.key} className="axis-input">
+            <span>{axis.key.toUpperCase()}</span>
+            <input
+              type="number"
+              min={axis.min}
+              max={axis.max}
+              step={0.01}
+              value={Number.isFinite(axis.value) ? axis.value.toFixed(2) : '0.00'}
+              aria-label={`${label} ${axis.key.toUpperCase()}`}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                if (!Number.isFinite(next)) return;
+                onChange(axis.key, Math.min(axis.max, Math.max(axis.min, next)));
+              }}
+            />
+          </label>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -577,6 +639,7 @@ export default function App() {
   const [sizeDraft, setSizeDraft] = useState({ width: 1080, height: 1920 });
   const [angleName, setAngleName] = useState('');
   const [compositionName, setCompositionName] = useState('');
+  const [compositionPick, setCompositionPick] = useState<{ tabId: string; templateId: string } | null>(null);
   const [customDevices, setCustomDevices] = useState<CustomDeviceMeta[]>(() => loadCustomDeviceMeta());
   const [devicesTick, setDevicesTick] = useState(0);
   const [presetName, setPresetName] = useState('');
@@ -589,6 +652,26 @@ export default function App() {
   const skipSessionRestoreRef = useRef(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [workspaceToolset, setWorkspaceToolset] = useState<WorkspaceToolset>(() => loadWorkspaceToolset());
+  const [modelingPanelOpen, setModelingPanelOpen] = useState(true);
+  const [pickedMaterial, setPickedMaterial] = useState<PickedMaterial | null>(null);
+  const [studioSetFocus, setStudioSetFocus] = useState<StudioSetFocus>(null);
+  const [templatesTick, setTemplatesTick] = useState(0);
+  const toolsetSwitchAvailable = isDevToolsetAvailable();
+  const isDeveloperToolset = toolsetSwitchAvailable && workspaceToolset === 'developer';
+
+  const setToolset = (next: WorkspaceToolset) => {
+    setWorkspaceToolset(next);
+    saveWorkspaceToolset(next);
+    if (next === 'developer') setModelingPanelOpen(true);
+    if (next === 'user') {
+      setPickedMaterial(null);
+      setModelingPanelOpen(false);
+    }
+    notify(next === 'developer'
+      ? 'Dev view — quick-edit templates, then Update shipped for User'
+      : 'User view — templates as customers see them');
+  };
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [licenseOpen, setLicenseOpen] = useState(false);
   const [figmaExploreOpen, setFigmaExploreOpen] = useState(false);
@@ -607,16 +690,16 @@ export default function App() {
   }, []);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>('devices');
-  /** Platforms queued for export — select multiple to render several sizes at once. */
-  const [exportAspectIds, setExportAspectIds] = useState<string[]>(['tiktok']);
-  /** Live canvas crop frame — defaults to TikTok 9:16; `free` hides the overlay. */
-  const [previewFrame, setPreviewFrame] = useState<string>('tiktok');
-  const [exportResolution, setExportResolution] = useState<ExportResolutionId>('fhd');
+  /** Platforms queued for export. A new canvas starts on Custom, not a social preset. */
+  const [exportAspectIds, setExportAspectIds] = useState<string[]>(['custom']);
+  /** Live canvas crop. `free` is the custom-size canvas, with no platform frame. */
+  const [previewFrame, setPreviewFrame] = useState<string>('free');
+  const [exportResolution, setExportResolution] = useState<ExportResolutionId>('custom');
   const [customExportSize, setCustomExportSize] = useState({ width: 1080, height: 1920 });
   const frameSizeRef = useRef<SessionFrameSize>({
-    exportAspectIds: ['tiktok'],
-    previewFrame: 'tiktok',
-    exportResolution: 'fhd',
+    exportAspectIds: ['custom'],
+    previewFrame: 'free',
+    exportResolution: 'custom',
     customExportSize: { width: 1080, height: 1920 },
   });
   frameSizeRef.current = {
@@ -632,6 +715,8 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [meshOffer, setMeshOffer] = useState<MeshDropOffer | null>(null);
+  const [meshExtracting, setMeshExtracting] = useState(false);
   const hoveredDeviceIdRef = useRef<string | null>(null);
   const [canvasHintVisible, setCanvasHintVisible] = useState(() => !canvasHintAlreadySeen());
   const dismissCanvasHint = useCallback(() => {
@@ -698,7 +783,7 @@ export default function App() {
   const [recentScreenshots, setRecentScreenshots] = useState<RecentScreenshot[]>(() => loadRecentScreenshots());
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
   const [layerSelection, setLayerSelection] = useState<SceneLayerSelection>({ kind: 'device', id: '' });
-  const [layerPin, setLayerPin] = useState<{ kind: 'device' | 'prop' | 'overlay'; id: string; token: number } | null>(null);
+  const [layerPin, setLayerPin] = useState<{ kind: 'device' | 'prop' | 'overlay' | 'backdrop'; id: string; token: number } | null>(null);
   const onLayerSelection = useCallback((next: SceneLayerSelection) => {
     setLayerSelection((current) => (sameLayerSelection(current, next) ? current : next));
   }, []);
@@ -953,14 +1038,14 @@ export default function App() {
         const aspects = frame.exportAspectIds.filter((id) => (
           !id.startsWith('size-') || knownSizes.has(id)
         ));
-        const exportAspectIdsNext = aspects.length ? aspects : ['tiktok'];
+        const exportAspectIdsNext = aspects.length ? aspects : ['custom'];
         let previewNext = frame.previewFrame;
         if (
           previewNext !== 'free'
           && previewNext.startsWith('size-')
           && !knownSizes.has(previewNext)
         ) {
-          previewNext = exportAspectIdsNext[0] ?? 'tiktok';
+          previewNext = exportAspectIdsNext[0] === 'custom' ? 'free' : (exportAspectIdsNext[0] ?? 'free');
         }
         setExportAspectIds(exportAspectIdsNext);
         setPreviewFrame(previewNext);
@@ -1093,6 +1178,9 @@ export default function App() {
 
   const allScenes = [...BACKGROUNDS, ...customPresets];
   const isTransparent = project.background === 'transparent';
+  const selectedSceneProp = layerSelection.kind === 'prop'
+    ? (project.sceneProps ?? []).find((prop) => prop.id === layerSelection.id) ?? null
+    : null;
 
   useEffect(() => {
     if (!isTransparent) return;
@@ -1290,8 +1378,12 @@ export default function App() {
     openTextMenu();
   };
 
-  const pinLayer = (kind: 'device' | 'prop' | 'overlay', id: string) => {
-    setLayerSelection({ kind, id });
+  const pinLayer = (kind: 'device' | 'prop' | 'overlay' | 'backdrop', id: string) => {
+    if (kind === 'backdrop') {
+      setLayerSelection({ kind: 'backdrop' });
+    } else {
+      setLayerSelection({ kind, id });
+    }
     setLayerPin({ kind, id, token: Date.now() });
     setSelectedOverlayId(kind === 'overlay' ? id : null);
   };
@@ -1645,6 +1737,12 @@ export default function App() {
     );
   };
 
+  const applyCustomFrame = () => {
+    setExportAspectIds(['custom']);
+    setPreviewFrame('free');
+    setExportResolution('custom');
+  };
+
   const startWithDevice = (deviceId: string) => {
     if (!isDeviceUnlocked(license.tier, deviceId)) {
       notify(upgradeCopy('The full device library'));
@@ -1658,18 +1756,58 @@ export default function App() {
       screenshot: shot,
       deviceColor: DEFAULT_PROJECT.deviceColor,
       clayMode: DEFAULT_PROJECT.clayMode,
+      rotation: { ...STUDIO_START_ROTATION },
+      position: { ...STUDIO_START_POSITION },
     });
     const name = uniqueProjectName(model.label);
+    applyCustomFrame();
     openProjectInTab({
       ...DEFAULT_PROJECT,
       name,
       deviceId,
       screenshot: shot,
       publishTarget: model.platform,
+      cameraView: 'front',
       devices: [instance],
       selectedDeviceId: instance.id,
       animation: createDefaultAnimation(instance.id),
     }, `Started “${name}”`);
+  };
+
+  /** Fresh untitled studio file — front device, soft lighting, no template motion. */
+  const startBlankFile = () => {
+    if (workspaceRef.current.tabs.length >= MAX_PROJECT_TABS) {
+      notify(`Tab limit reached (${MAX_PROJECT_TABS})`);
+      return;
+    }
+    const deviceId = DEFAULT_PROJECT.deviceId;
+    const model = getDevice(deviceId);
+    const shot = placeholderForDevice(deviceId);
+    const instance = createDeviceInstance({
+      deviceId,
+      screenshot: shot,
+      deviceColor: DEFAULT_PROJECT.deviceColor,
+      clayMode: DEFAULT_PROJECT.clayMode,
+      rotation: { ...STUDIO_START_ROTATION },
+      position: { ...STUDIO_START_POSITION },
+    });
+    const name = uniqueProjectName('Untitled composition');
+    applyCustomFrame();
+    setTemplatePickerOpen(false);
+    setFileMenuOpen(false);
+    openProjectInTab({
+      ...DEFAULT_PROJECT,
+      name,
+      deviceId,
+      screenshot: shot,
+      publishTarget: model.platform,
+      cameraView: 'front',
+      devices: [instance],
+      selectedDeviceId: instance.id,
+      animation: createDefaultAnimation(instance.id),
+      sceneProps: [],
+      sceneLights: [],
+    }, `Opened blank file “${name}”`);
   };
 
   const startFromTemplate = (template: CompositionTemplate) => {
@@ -1681,11 +1819,13 @@ export default function App() {
       setLicenseOpen(true);
       return;
     }
+    applyCustomFrame();
     const finalName = uniqueProjectName(template.label);
     const nextProject = projectFromTemplate(template, { name: finalName });
     const motion = template.motion ? getAnimationPreset(template.motion) : undefined;
     const playMotion = Boolean(motion && motion.loop && motion.id !== 'clear');
     const canAddTab = workspace.tabs.length < MAX_PROJECT_TABS;
+    const editingShipped = isDeveloperToolset && isDevEditableTemplateId(template.id);
     setDeviceMenu(null);
     setTemplatePickerOpen(false);
     trackRecent(nextProject);
@@ -1700,10 +1840,17 @@ export default function App() {
       const nextWs = { tabs: [...workspaceRef.current.tabs, tab], activeId: tab.id };
       workspaceRef.current = nextWs;
       setWorkspace(nextWs);
+      if (editingShipped || isDevEditableTemplateId(template.id)) {
+        setCompositionPick({ tabId: tab.id, templateId: template.id });
+      }
       if (cloudRef.current?.configured) {
         void persistCloudRef.current(tab.id, nextProject, null, { quiet: true, force: true });
       }
-      notify(`Opened “${finalName}” in a new tab`);
+      notify(
+        editingShipped
+          ? `Editing “${finalName}” in Dev · Update shipped when ready`
+          : `Opened “${finalName}” in a new tab`,
+      );
       return;
     }
 
@@ -1722,30 +1869,46 @@ export default function App() {
       };
       workspaceRef.current = nextWs;
       setWorkspace(nextWs);
+      if (editingShipped || isDevEditableTemplateId(template.id)) {
+        setCompositionPick({ tabId: activeId, templateId: template.id });
+      }
       if (cloudRef.current?.configured) {
         void persistCloudRef.current(activeId, nextProject, null, { quiet: true, force: true });
       }
     }
-    notify(`Started “${finalName}”`);
+    notify(
+      editingShipped
+        ? `Editing “${finalName}” in Dev · Update shipped when ready`
+        : `Started “${finalName}”`,
+    );
   };
 
   const patchSelectedDevice = useCallback((patch: Partial<ReturnType<typeof getSelectedDevice>>) => {
     setProject((current) => {
       const selected = getSelectedDevice(current);
+      // Switching the GLB always snaps back to a front-facing studio seat so
+      // every model opens the same way: screen to camera, soft floor shadow.
+      const switchingModel = Boolean(patch.deviceId && patch.deviceId !== selected.deviceId);
+      const studioRotation = switchingModel && !patch.rotation
+        ? { ...STUDIO_START_ROTATION }
+        : (patch.rotation ? { ...patch.rotation } : { ...selected.rotation });
+      const studioPosition = switchingModel && !patch.position
+        ? { ...STUDIO_START_POSITION }
+        : (patch.position ? { ...patch.position } : { ...selected.position });
       const nextSelected = {
         ...selected,
         ...patch,
-        rotation: patch.rotation ? { ...patch.rotation } : { ...selected.rotation },
-        position: patch.position ? { ...patch.position } : { ...selected.position },
+        rotation: studioRotation,
+        position: studioPosition,
       };
       const linkTransform = current.linkSplitTransform !== false;
       const devices = current.devices.map((device) => {
         if (device.id !== selected.id) {
           // Optional link: rotation/scale stay mirrored; position stays free
-          if (current.compositionMode === 'split' && linkTransform && (patch.rotation || patch.scale != null)) {
+          if (current.compositionMode === 'split' && linkTransform && (patch.rotation || patch.scale != null || switchingModel)) {
             return {
               ...device,
-              rotation: patch.rotation ? { ...patch.rotation } : device.rotation,
+              rotation: switchingModel ? { ...studioRotation } : (patch.rotation ? { ...patch.rotation } : device.rotation),
               scale: patch.scale ?? device.scale,
             };
           }
@@ -1760,10 +1923,15 @@ export default function App() {
         return {
           ...next,
           publishTarget: getDevice(patch.deviceId).platform,
+          cameraView: switchingModel ? 'front' : next.cameraView,
         };
+      }
+      if (switchingModel) {
+        return { ...next, cameraView: 'front' };
       }
       return next;
     });
+    if (patch.deviceId) setCameraRecenterToken((n) => n + 1);
   }, []);
 
   const keyPropertyAtPlayhead = (property: AnimProperty, value: number) => {
@@ -2630,55 +2798,198 @@ export default function App() {
     };
   }, [aspectDropdownOpen]);
 
+  useEffect(() => {
+    if (!deviceMenu) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.device-action-menu')) return;
+      setDeviceMenu(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setDeviceMenu(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [deviceMenu]);
+
   const onImageChange = (event: ChangeEvent<HTMLInputElement>) => {
     void importScreenMedia(event.currentTarget.files?.[0]).catch((e: Error) => notify(e.message));
     event.currentTarget.value = '';
   };
 
+  const takeDroppedFiles = async (dataTransfer: DataTransfer) => {
+    const files = await collectDroppedFiles(dataTransfer);
+    const projectFile = files.find((file) => isProjectFileName(file.name));
+    if (projectFile) {
+      try {
+        if (projectFile.size > 45_000_000) throw new Error('This project file is too large.');
+        applyProject(await readProjectFileContents(projectFile));
+      } catch (error) {
+        notify(error instanceof Error ? error.message : 'Invalid project');
+      }
+      return;
+    }
+    const offer = meshDropOffer(files);
+    if (offer) {
+      setMeshOffer(offer);
+      return;
+    }
+    const screen = files.find((file) => isImageFile(file) || isVideoFile(file) || /\.svg$/i.test(file.name));
+    void importScreenMedia(screen ?? files[0]).catch((error: Error) => notify(error.message));
+  };
+
+  const placeImportedCustomDevices = (imported: CustomDeviceMeta[]) => {
+    if (!imported.length) return;
+    setCustomDevices(loadCustomDeviceMeta());
+    setDevicesTick((n) => n + 1);
+    const [first, ...rest] = imported;
+    setProject((current) => {
+      const selected = getSelectedDevice(current);
+      let devices = current.devices.map((device) => (
+        device.id === selected.id ? { ...device, deviceId: first.id } : device
+      ));
+      if (current.compositionMode !== 'split' && rest.length) {
+        const base = devices.find((d) => d.id === selected.id) ?? devices[0];
+        let added = 0;
+        for (const meta of rest) {
+          if (devices.length >= Math.min(MAX_DEVICES, entitlementsMaxDevices)) break;
+          added += 1;
+          devices = [...devices, createDeviceInstance({
+            deviceId: meta.id,
+            rotation: { ...base.rotation, y: base.rotation.y + (added % 2 === 0 ? 18 : -18) },
+            scale: base.scale,
+            position: {
+              x: base.position.x + 1.15 * added,
+              y: base.position.y,
+              z: base.position.z - added * 0.08,
+            },
+            glassReflection: base.glassReflection,
+            reflectionStyle: base.reflectionStyle,
+            screenshot: null,
+            deviceColor: base.deviceColor ?? current.deviceColor,
+            clayMode: base.clayMode ?? current.clayMode,
+          })];
+        }
+      }
+      const nextSelected = devices.find((d) => d.id === selected.id) ?? devices[0];
+      return syncProjectFromSelected({ ...current, devices }, nextSelected);
+    });
+    if (isPlaceholderScreenshot(activeEnvScreenshot)) {
+      applyScreenImage(placeholderForDevice(first.id), first.label || 'Custom', 'Size guide updated');
+    }
+  };
+
+  const confirmMeshExtract = async () => {
+    if (!meshOffer || meshOffer.error || meshExtracting) return;
+    setMeshExtracting(true);
+    try {
+      const { imported, skipped } = await importCustomDevices({ files: meshOffer.files });
+      placeImportedCustomDevices(imported);
+      const skipNote = skipped ? ` · ${skipped} skipped (library full)` : '';
+      notify(
+        imported.length === 1
+          ? `Extracted “${imported[0].label}”${skipNote}`
+          : `Extracted ${imported.length} models${skipNote}`,
+      );
+      setMeshOffer(null);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not extract that model');
+    } finally {
+      setMeshExtracting(false);
+    }
+  };
+
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragOver(false);
-    void importScreenMedia(event.dataTransfer.files[0]).catch((e: Error) => notify(e.message));
+    void takeDroppedFiles(event.dataTransfer);
+  };
+
+  useEffect(() => {
+    if (!meshOffer) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || meshExtracting) return;
+      event.preventDefault();
+      setMeshOffer(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [meshOffer, meshExtracting]);
+
+  const writeProjectFile = async (snapshot: MockupProject, opts?: { forceDialog?: boolean }) => {
+    const contents = JSON.stringify(snapshot, null, 2);
+    const fileName = safeFilename(snapshot.name);
+    if (!opts?.forceDialog && window.mockupDesktop?.cloudWrite && cloudRef.current?.configured) {
+      const tabId = activeTab?.id;
+      if (!tabId) return false;
+      const savedPath = await persistCloudRef.current(
+        tabId,
+        snapshot,
+        activeTab?.syncPath ?? null,
+        { quiet: false, force: true },
+      );
+      if (savedPath) trackRecent(snapshot);
+      return Boolean(savedPath);
+    }
+    if (window.mockupDesktop) {
+      const result = await window.mockupDesktop.saveProject(contents, fileName);
+      if (result.canceled) return false;
+      trackRecent(snapshot);
+      if (result.path && cloudRef.current?.path && isPathInsideLibrary(result.path, cloudRef.current.path) && activeTab) {
+        savedJsonRef.current.set(result.path, canonicalProjectJson(snapshot));
+        syncPathByTabRef.current.set(activeTab.id, result.path);
+        setWorkspace((ws) => ({
+          ...ws,
+          tabs: ws.tabs.map((tab) => (
+            tab.id === activeTab.id ? { ...tab, syncPath: result.path } : tab
+          )),
+        }));
+      }
+      notify(opts?.forceDialog ? 'Project saved as new file' : 'Project saved successfully');
+      return true;
+    }
+    const bytes = await encodeMockupFile(contents);
+    downloadBlob(new Blob([bytes as BlobPart], { type: MOCKUP_MIME }), mockupDownloadName(fileName));
+    trackRecent(snapshot);
+    notify(opts?.forceDialog ? 'Project downloaded as new file' : 'Project downloaded');
+    return true;
   };
 
   const onSave = async () => {
     if (!hasOpenProject || !activeTab) return;
     try {
-      if (window.mockupDesktop?.cloudWrite && cloudRef.current?.configured) {
-        const savedPath = await persistCloudRef.current(
-          activeTab.id,
-          project,
-          activeTab.syncPath ?? null,
-          { quiet: false, force: true },
-        );
-        if (savedPath) trackRecent(project);
-        return;
-      }
-      const contents = JSON.stringify(project, null, 2);
-      const fileName = safeFilename(project.name);
-      if (window.mockupDesktop) {
-        const result = await window.mockupDesktop.saveProject(contents, fileName);
-        if (!result.canceled) {
-          trackRecent(project);
-          if (result.path && cloudRef.current?.path && isPathInsideLibrary(result.path, cloudRef.current.path)) {
-            savedJsonRef.current.set(result.path, canonicalProjectJson(project));
-            syncPathByTabRef.current.set(activeTab.id, result.path);
-            setWorkspace((ws) => ({
-              ...ws,
-              tabs: ws.tabs.map((tab) => (
-                tab.id === activeTab.id ? { ...tab, syncPath: result.path } : tab
-              )),
-            }));
-          }
-          notify('Project saved successfully');
-        }
-      } else {
-        downloadBlob(new Blob([contents], { type: 'application/json' }), `${fileName}.mockup.json`);
-        trackRecent(project);
-        notify('Project downloaded');
-      }
+      await writeProjectFile(project);
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Unable to save project');
+    }
+  };
+
+  const onSaveAs = async () => {
+    if (!hasOpenProject || !activeTab) return;
+    try {
+      await writeProjectFile(project, { forceDialog: true });
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Unable to save project');
+    }
+  };
+
+  const onDuplicateProject = () => {
+    if (!hasOpenProject) return;
+    try {
+      const clone = validateProject(JSON.parse(JSON.stringify(project)) as unknown);
+      const named = {
+        ...clone,
+        name: uniqueProjectName(`${clone.name || 'Untitled'} copy`),
+      };
+      openProjectInTab(named, `Duplicated “${project.name}”`, null);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Unable to duplicate project');
     }
   };
 
@@ -2715,7 +3026,7 @@ export default function App() {
     if (!file) return;
     try {
       if (file.size > 45_000_000) throw new Error('This project file is too large.');
-      applyProject(await file.text());
+      applyProject(await readProjectFileContents(file));
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Invalid project');
     }
@@ -2725,7 +3036,7 @@ export default function App() {
     previewFrame !== 'free' && exportAspectIds.includes(previewFrame)
       ? previewFrame
       : exportAspectIds[0]
-  ) ?? 'tiktok';
+  ) ?? 'custom';
 
   const aspectHasLockedPixels = useCallback((id: string) => (
     savedSizes.some((item) => item.id === id) || exportAspectHasFixed(id as ExportAspectId)
@@ -3288,10 +3599,17 @@ export default function App() {
 
   const onSelectDevice = (payload: DeviceSelectPayload) => {
     pinLayer('device', payload.id);
+    setLightGizmoActive(false);
     setDeviceChosen(true);
     setProject((current) => {
-      const selected = current.devices.find((d) => d.id === payload.id) ?? getSelectedDevice(current);
-      return setPublishTarget(current, platformOfDevice(selected));
+      const selected = current.devices.find((d) => d.id === payload.id);
+      if (!selected) return current;
+      // Bind the gimbal to the device that was tapped. setPublishTarget would
+      // jump back to the first device of that platform.
+      return syncProjectFromSelected({
+        ...current,
+        publishTarget: platformOfDevice(selected),
+      }, selected);
     });
     if (payload.openMenu === false) {
       setDeviceMenu(null);
@@ -3299,6 +3617,27 @@ export default function App() {
     }
     setDeviceMenu({ id: payload.id, x: payload.clientX, y: payload.clientY });
   };
+
+  const focusKeyLight = useCallback(() => {
+    setLayerSelection({ kind: 'key-light' });
+    setLightGizmoActive(true);
+    setOpenSectionId('light');
+  }, []);
+
+  const focusSceneLight = useCallback((lightId: string) => {
+    setLayerSelection({ kind: 'scene-light', id: lightId });
+    setLightGizmoActive(false);
+    setOpenSectionId('light');
+  }, []);
+
+  const patchSceneLightPosition = useCallback((id: string, position: Vec3) => {
+    setProject((current) => ({
+      ...current,
+      sceneLights: (current.sceneLights ?? []).map((light) => (
+        light.id === id ? { ...light, position: { ...position } } : light
+      )),
+    }));
+  }, []);
 
   const onRotateDevice = (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => {
     const recordKeys = opts?.recordKeys !== false;
@@ -3370,6 +3709,135 @@ export default function App() {
       return next;
     });
   };
+
+  const onMoveProp = (id: string, position: Vec3) => {
+    const nextPosition = {
+      x: Math.max(-10, Math.min(10, position.x)),
+      y: Math.max(-6, Math.min(6, position.y)),
+      z: Math.max(-8, Math.min(8, position.z)),
+    };
+    setProject((current) => ({
+      ...current,
+      sceneProps: (current.sceneProps ?? []).map((prop) => (
+        prop.id === id ? { ...prop, position: { ...nextPosition } } : prop
+      )),
+    }));
+  };
+
+  const selectSceneProp = (id: string) => {
+    pinLayer('prop', id);
+    setLightGizmoActive(false);
+    setOpenSectionId('look');
+    setDeviceMenu(null);
+    setPickedMaterial(null);
+    const prop = (project.sceneProps ?? []).find((entry) => entry.id === id);
+    setStudioSetFocus(prop?.kind === 'studio_backdrop' ? 'backdrop' : null);
+  };
+
+  const selectBackdrop = () => {
+    const deviceId = project.selectedDeviceId || project.devices[0]?.id || 'backdrop';
+    pinLayer('backdrop', deviceId);
+    setLightGizmoActive(false);
+    setOpenSectionId('look');
+    setDeviceMenu(null);
+    setPickedMaterial(null);
+    setStudioSetFocus('backdrop');
+  };
+
+  const onPickMaterial = useCallback((payload: MaterialPickPayload) => {
+    setPickedMaterial({
+      deviceInstanceId: payload.deviceInstanceId,
+      materialName: payload.materialName,
+      colorHex: payload.colorHex,
+    });
+    setStudioSetFocus(null);
+    pinLayer('device', payload.deviceInstanceId);
+  }, []);
+
+  const persistCustomMaterialTweaks = useCallback((deviceId: string, tweaks: Record<string, MaterialTweak> | undefined) => {
+    if (!isCustomDeviceId(deviceId)) return;
+    void updateCustomDeviceMeta(deviceId, { tweaks: tweaks ?? undefined }).then(() => {
+      setCustomDevices(loadCustomDeviceMeta());
+      setDevicesTick((n) => n + 1);
+    });
+  }, []);
+
+  const patchPickedMaterial = useCallback((patch: MaterialTweak) => {
+    setPickedMaterial((current: PickedMaterial | null) => {
+      if (!current) return current;
+      const { deviceInstanceId, materialName } = current;
+      setProject((project) => {
+        const devices = project.devices.map((device) => {
+          if (device.id !== deviceInstanceId) return device;
+          const nextTweaks = {
+            ...(device.materialTweaks ?? {}),
+            [materialName]: {
+              ...(device.materialTweaks?.[materialName] ?? {}),
+              ...patch,
+            },
+          };
+          persistCustomMaterialTweaks(device.deviceId, nextTweaks);
+          return { ...device, materialTweaks: nextTweaks };
+        });
+        return { ...project, devices };
+      });
+      return current;
+    });
+  }, [persistCustomMaterialTweaks]);
+
+  const clearPickedMaterialOverrides = useCallback(() => {
+    setPickedMaterial((current: PickedMaterial | null) => {
+      if (!current) return current;
+      const { deviceInstanceId, materialName } = current;
+      setProject((project) => {
+        const devices = project.devices.map((device) => {
+          if (device.id !== deviceInstanceId) return device;
+          if (!device.materialTweaks?.[materialName]) return device;
+          const nextTweaks = { ...device.materialTweaks };
+          delete nextTweaks[materialName];
+          const cleaned = Object.keys(nextTweaks).length ? nextTweaks : undefined;
+          persistCustomMaterialTweaks(device.deviceId, cleaned);
+          return { ...device, materialTweaks: cleaned };
+        });
+        return { ...project, devices };
+      });
+      return current;
+    });
+  }, [persistCustomMaterialTweaks]);
+
+  const applyMaterialPresetToPicked = useCallback((presetId: MaterialPresetId) => {
+    patchPickedMaterial(tweakFromPreset(presetId));
+  }, [patchPickedMaterial]);
+
+  const setPickedMaterialMap = useCallback((
+    slot: 'mapDataUrl' | 'normalMapDataUrl',
+    dataUrl: string | null,
+  ) => {
+    patchPickedMaterial({ [slot]: dataUrl });
+  }, [patchPickedMaterial]);
+
+  const patchSceneProp = useCallback((propId: string, patch: Partial<SceneProp>) => {
+    setProject((current) => {
+      const nextProps = (current.sceneProps ?? []).map((prop) => (
+        prop.id === propId ? { ...prop, ...patch } : prop
+      ));
+      const edited = nextProps.find((prop) => prop.id === propId);
+      // Backdrop prop only drives the Backdrop wall stop — Sky and Floor stay independent.
+      if (edited?.kind === 'studio_backdrop' && typeof patch.color === 'string') {
+        const hex = patch.color.toLowerCase();
+        if (/^#[0-9a-fA-F]{6}$/.test(hex) && hex !== current.gradientColors.center) {
+          const gradientColors = { ...current.gradientColors, center: hex };
+          return patchActiveCompositionScene({
+            ...current,
+            sceneProps: nextProps,
+            gradientColors,
+            background: current.background === 'transparent' ? current.background : 'custom',
+          }, { gradientColors, background: current.background === 'transparent' ? current.background : 'custom' });
+        }
+      }
+      return { ...current, sceneProps: nextProps };
+    });
+  }, []);
 
   const addDeviceToScene = (opts?: { quiet?: boolean }) => {
     let message = 'Device added';
@@ -3447,17 +3915,25 @@ export default function App() {
   };
 
   const deleteDeviceById = (id: string) => {
+    let removed = false;
     setProject((current) => {
-      if (current.compositionMode === 'split' || current.devices.length <= 1) {
+      if (current.devices.length <= 1) {
         notify('Keep at least one device in the scene');
         return current;
       }
       if (!current.devices.some((device) => device.id === id)) return current;
       const remaining = current.devices.filter((device) => device.id !== id);
       const nextSelected = remaining.find((device) => device.id === current.selectedDeviceId) ?? remaining[0];
-      return syncProjectFromSelected({ ...current, devices: remaining }, nextSelected);
+      let next = syncProjectFromSelected({ ...current, devices: remaining }, nextSelected);
+      // Split needs two envs — dropping one collapses back to a single canvas.
+      if (next.compositionMode === 'split' && remaining.length < 2) {
+        next = { ...next, compositionMode: 'single' };
+      }
+      removed = true;
+      return next;
     });
     setDeviceMenu(null);
+    if (removed) notify('Device removed');
   };
 
   const deleteSelectedDevice = () => {
@@ -3514,9 +3990,15 @@ export default function App() {
           if (selectedOverlayId === id) setSelectedOverlayId(null);
           return;
         }
+        // Device row or nested Screen — remove that device. Backdrop is scene-level.
         if (layerSelection.kind === 'device') {
           event.preventDefault();
           deleteDeviceById(layerSelection.id || project.selectedDeviceId);
+          return;
+        }
+        if (layerSelection.kind === 'screen') {
+          event.preventDefault();
+          deleteDeviceById(layerSelection.deviceId);
         }
         return;
       }
@@ -3552,6 +4034,10 @@ export default function App() {
       if (key === 't') {
         event.preventDefault();
         if (workspace.tabs.length < MAX_PROJECT_TABS) setTemplatePickerOpen(true);
+      }
+      if (key === 'n' && !event.shiftKey) {
+        event.preventDefault();
+        startBlankFile();
       }
       if (key === 'w' && workspace.activeId) {
         event.preventDefault();
@@ -3631,12 +4117,16 @@ export default function App() {
     setProject((current) => switchCompositionScene(current, sceneId));
   };
 
-  const onCreateCompositionScene = (mode: 'duplicate' | 'blank') => {
+  const onCreateCompositionScene = (mode: 'duplicate' | 'blank', sceneId?: string) => {
     if (compositionScenes.length >= MAX_COMPOSITION_SCENES) {
       notify(`Up to ${MAX_COMPOSITION_SCENES} scenes per composition`);
       return;
     }
-    setProject((current) => addCompositionScene(current, mode));
+    setProject((current) => (
+      mode === 'duplicate'
+        ? duplicateCompositionScene(current, sceneId)
+        : addCompositionScene(current, 'blank')
+    ));
     notify(mode === 'duplicate' ? 'Scene duplicated' : 'New scene');
   };
 
@@ -3646,7 +4136,92 @@ export default function App() {
       return;
     }
     setProject((current) => removeCompositionScene(current, sceneId));
-    notify('Scene removed');
+    notify('Scene deleted');
+  };
+
+  const onDuplicateLibraryTemplate = (template: CompositionTemplate) => {
+    if (template.category === 'saved' || template.id.startsWith('comp-')) {
+      const copy = duplicateSavedComposition(template.id) ?? copyTemplateToSaved(template);
+      const next = loadSavedCompositions();
+      setSavedCompositions(next);
+      void pushTemplatesRef.current(next);
+      notify(`Duplicated “${copy.label}”`);
+      return;
+    }
+    if (isDeveloperToolset) {
+      void (async () => {
+        const result = await duplicateShippedTemplate(template);
+        if (!result.ok) {
+          notify(result.reason || 'Could not duplicate shipped template');
+          return;
+        }
+        setTemplatesTick((n) => n + 1);
+        notify(`Duplicated shipped “${result.template.label}”`);
+        startFromTemplate(result.template);
+      })();
+      return;
+    }
+    const copy = copyTemplateToSaved(template);
+    const next = loadSavedCompositions();
+    setSavedCompositions(next);
+    void pushTemplatesRef.current(next);
+    notify(`Copied “${copy.label}” into Your templates`);
+  };
+
+  const onRenameLibraryTemplate = (template: CompositionTemplate) => {
+    const nextLabel = window.prompt('Rename template', template.label)?.trim().slice(0, 40);
+    if (!nextLabel || nextLabel === template.label) return;
+    if (template.category === 'saved' || template.id.startsWith('comp-')) {
+      const next = renameSavedComposition(template.id, nextLabel);
+      setSavedCompositions(next);
+      void pushTemplatesRef.current(next);
+      notify(`Renamed “${nextLabel}”`);
+      return;
+    }
+    void (async () => {
+      const result = await renameShippedTemplate(template, nextLabel);
+      if (!result.ok) {
+        notify(result.reason || 'Could not rename shipped template');
+        return;
+      }
+      setTemplatesTick((n) => n + 1);
+      notify(`Renamed “${result.template.label}”`);
+    })();
+  };
+
+  const onAddShippedLibraryTemplate = (category: 'devices' | 'scenes') => {
+    // Electron has no window.prompt — mint a blank library entry and open it as a new file.
+    if (!isDeveloperToolset) setToolset('developer');
+    const fallback = category === 'scenes' ? 'New composition' : 'New layout';
+    void (async () => {
+      const blank = createBlankShippedTemplate(fallback, category);
+      const result = await shipCompositionTemplate(blank);
+      setTemplatesTick((n) => n + 1);
+      // Always open the blank file. Pack write can fail outside Electron DEV; runtime
+      // already holds the template so Dev editing still works for this session.
+      if (!result.ok) {
+        notify(result.reason
+          ? `Opened “${result.template.label}” · ${result.reason}`
+          : `Opened “${result.template.label}”`);
+      } else {
+        notify(`Created “${result.template.label}” · editing in Dev`);
+      }
+      startFromTemplate(result.template);
+    })();
+  };
+
+  const onDeleteShippedLibraryTemplate = async (template: CompositionTemplate) => {
+    if (!window.confirm(`Delete shipped “${template.label}”? User view will no longer show it.`)) return;
+    const result = await deleteShippedTemplate(template.id);
+    if (!result.ok) {
+      notify(result.reason || 'Could not delete shipped template');
+      return;
+    }
+    setTemplatesTick((n) => n + 1);
+    setCompositionPick((current) => (
+      current?.templateId === template.id ? null : current
+    ));
+    notify(`Deleted shipped “${template.label}”`);
   };
 
   const onRenameCompositionScene = (sceneId: string, name: string) => {
@@ -3664,11 +4239,20 @@ export default function App() {
       && item.gradient.center === next.center && item.gradient.mid === next.mid && item.gradient.edge === next.edge);
     const keepsCustom = customPresets.some((item) => item.id === project.background && item.gradient
       && item.gradient.center === next.center && item.gradient.mid === next.mid && item.gradient.edge === next.edge);
+    const props = project.sceneProps ?? [];
+    // Backdrop wall colour stays in sync with any cyclorama prop so User + Dev both drive the set.
+    const nextProps = key === 'center' && props.some((prop) => prop.kind === 'studio_backdrop')
+      ? props.map((prop) => (prop.kind === 'studio_backdrop' ? { ...prop, color: hex } : prop))
+      : null;
+    const allWhite = [next.center, next.mid, next.edge].every((stop) => stop === '#ffffff');
     updateProject({
       gradientColors: next,
-      background: keepsBuiltin || keepsCustom || project.background === 'transparent'
-        ? project.background
-        : 'custom',
+      background: allWhite
+        ? 'studio'
+        : keepsBuiltin || keepsCustom || project.background === 'transparent'
+          ? project.background
+          : 'custom',
+      ...(nextProps ? { sceneProps: nextProps } : {}),
     });
   };
 
@@ -3711,11 +4295,11 @@ export default function App() {
     setSavedSizes(deleteSavedSize(id));
     setExportAspectIds((current) => {
       const next = current.filter((item) => item !== id);
-      return next.length ? next : ['tiktok'];
+      return next.length ? next : ['custom'];
     });
     if (previewFrame === id) {
-      setPreviewFrame('tiktok');
-      setExportResolution('fhd');
+      setPreviewFrame('free');
+      setExportResolution('custom');
     }
     notify('Custom size removed');
   };
@@ -3732,6 +4316,61 @@ export default function App() {
     notify('Angle removed');
   };
 
+  useEffect(() => subscribeRuntimePromoted(() => {
+    setTemplatesTick((n) => n + 1);
+  }), []);
+
+  const sceneCompositions = useMemo(
+    () => templatesByCategory('scenes'),
+    [templatesTick],
+  );
+  const activeCompositionId = compositionPick?.tabId === workspace.activeId
+    ? compositionPick.templateId
+    : null;
+
+  const onApplyComposition = (template: CompositionTemplate) => {
+    const tabId = workspace.activeId;
+    if (!tabId) return;
+    setProject((current) => applyCompositionKeepingDevices(current, template));
+    setCompositionPick({ tabId, templateId: template.id });
+    setAnimTime(0);
+    const motion = template.motion ? getAnimationPreset(template.motion) : undefined;
+    setAnimPlaying(Boolean(motion && motion.loop && motion.id !== 'clear'));
+    notify(
+      isDeveloperToolset
+        ? `Quick-editing “${template.label}” — Update shipped when ready`
+        : `Applied “${template.label}”`,
+    );
+  };
+
+  const quickUpdateShippedTemplate = async () => {
+    if (!activeCompositionId || !isDevEditableTemplateId(activeCompositionId)) {
+      notify('Pick a Devices or Scenes template first');
+      setTemplatePickerOpen(true);
+      return;
+    }
+    const existing = getCompositionTemplate(activeCompositionId);
+    const category = existing?.category === 'scenes' ? 'scenes' as const : 'devices' as const;
+    const label = compositionName || project.name || existing?.label || 'Untitled composition';
+    try {
+      const next = prepareShippedFromProject(label, project, category, { id: activeCompositionId });
+      const result = await shipCompositionTemplate(next);
+      if (!result.ok) {
+        notify(result.reason || 'Could not update shipped template');
+        return;
+      }
+      setTemplatesTick((n) => n + 1);
+      setCompositionPick((current) => (
+        current?.tabId === workspace.activeId
+          ? { tabId: current.tabId, templateId: result.template.id }
+          : current
+      ));
+      notify(`Updated shipped “${result.template.label}” · User view sees it now`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Could not update shipped template');
+    }
+  };
+
   const onSaveComposition = (opts?: { openLibrary?: boolean }) => {
     const saved = saveComposition(compositionName, project);
     const next = loadSavedCompositions();
@@ -3744,6 +4383,17 @@ export default function App() {
     notify(`Saved “${saved.label}” as template · ${project.devices.length} device${project.devices.length === 1 ? '' : 's'}${where}`);
   };
 
+  const onCopyBuiltinComposition = async (category: 'devices' | 'scenes' = 'devices') => {
+    const source = formatBuiltinCompositionSource(compositionName || project.name, project, { category });
+    try {
+      await navigator.clipboard.writeText(source);
+      notify(`Copied built-in ${category} template · paste into src/lib/templates.ts`);
+    } catch {
+      notify('Could not copy — select and copy from the console instead');
+      console.info('[mockup-studio] Built-in composition for templates.ts:\n', source);
+    }
+  };
+
   const onDeleteComposition = (id: string) => {
     const next = deleteSavedComposition(id);
     setSavedCompositions(next);
@@ -3754,7 +4404,7 @@ export default function App() {
   const resetDevice = () => {
     setProject((current) => {
       const selected = getSelectedDevice(current);
-      const rotation = { ...DEFAULT_PROJECT.rotation };
+      const rotation = { ...STUDIO_START_ROTATION };
       const linkTransform = current.linkSplitTransform !== false;
       const devices = current.devices.map((device) => (
         (current.compositionMode === 'split' && linkTransform) || device.id === selected.id
@@ -3764,7 +4414,7 @@ export default function App() {
             scale: 1,
             // Position stays free in split — only reset the selected phone’s seat
             position: device.id === selected.id
-              ? (current.compositionMode === 'split' ? device.position : { x: 0, y: 0, z: 0 })
+              ? (current.compositionMode === 'split' ? device.position : { ...STUDIO_START_POSITION })
               : device.position,
           }
           : device
@@ -3772,7 +4422,9 @@ export default function App() {
       const nextSelected = devices.find((d) => d.id === selected.id) ?? devices[0];
       return syncProjectFromSelected({ ...current, devices, cameraView: 'front' }, nextSelected);
     });
-    notify('Camera and device position reset');
+    setCameraRecenterToken((n) => n + 1);
+    applyCustomFrame();
+    notify('Reset to the custom canvas');
   };
 
   const selectedMark = (project.overlays ?? []).find((item) => (
@@ -3782,13 +4434,14 @@ export default function App() {
 
   return (
     <div className={`app-shell ${hasOpenProject ? 'has-project' : 'is-dashboard'}`}>
+      <UpdateBanner />
       {hasOpenProject && (
       <header className="topbar">
         <button
           type="button"
           className="brand-area"
-          title="Mockup Studio"
-          aria-label="Mockup Studio"
+          title="Mockup Studio 3D"
+          aria-label="Mockup Studio 3D"
           onClick={goToRecentProjects}
         >
           <img className="brand-mark" src="./splash/logo.png" alt="" width={22} height={22} />
@@ -3808,6 +4461,70 @@ export default function App() {
             </button>
             {fileMenuOpen && (
               <div className="file-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={workspace.tabs.length >= MAX_PROJECT_TABS}
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    startBlankFile();
+                  }}
+                >
+                  Blank File
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={workspace.tabs.length >= MAX_PROJECT_TABS}
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    setTemplatePickerOpen(true);
+                  }}
+                >
+                  New from Template…
+                </button>
+                <div className="file-menu-sep" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    void onSave();
+                  }}
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    void onSaveAs();
+                  }}
+                >
+                  Save as…
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    onDuplicateProject();
+                  }}
+                >
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setFileMenuOpen(false);
+                    setExportOpen(true);
+                  }}
+                >
+                  Export as…
+                </button>
+                <div className="file-menu-sep" role="separator" />
                 <button
                   type="button"
                   role="menuitem"
@@ -3836,21 +4553,22 @@ export default function App() {
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    setLeftWorkspaceTab('log');
-                    setFileMenuOpen(false);
-                  }}
-                >
-                  Version History
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
                     setFileMenuOpen(false);
                     onSaveComposition({ openLibrary: true });
                   }}
                 >
                   Save as Template
+                </button>
+                <div className="file-menu-sep" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setLeftWorkspaceTab('log');
+                    setFileMenuOpen(false);
+                  }}
+                >
+                  Version History
                 </button>
                 <button
                   type="button"
@@ -3924,6 +4642,16 @@ export default function App() {
                 </div>
               );
             })}
+            <button
+              type="button"
+              className="project-tab-add"
+              title="Blank file"
+              aria-label="Open blank file"
+              disabled={workspace.tabs.length >= MAX_PROJECT_TABS}
+              onClick={startBlankFile}
+            >
+              <Plus size={14} strokeWidth={2.2} />
+            </button>
           </div>
         </div>
         <div className="sync-menu-wrap" ref={syncMenuRef}>
@@ -3969,11 +4697,19 @@ export default function App() {
           onOpenProject={openRecentProject}
           onRemoveProject={(id) => setRecentProjects(removeRecentProject(id))}
           onNewProject={() => setTemplatePickerOpen(true)}
+          onBlankFile={startBlankFile}
           onOpenFile={() => void onOpen()}
           onStartTemplate={startFromTemplate}
           onStartDevice={startWithDevice}
           savedCompositions={savedCompositions}
           onDeleteSavedTemplate={onDeleteComposition}
+          onDeleteShippedTemplate={(template) => { void onDeleteShippedLibraryTemplate(template); }}
+          onDuplicateTemplate={onDuplicateLibraryTemplate}
+          onRenameTemplate={onRenameLibraryTemplate}
+          onAddShippedTemplate={onAddShippedLibraryTemplate}
+          toolsetSwitchAvailable={toolsetSwitchAvailable}
+          isDeveloperToolset={isDeveloperToolset}
+          onSetToolset={setToolset}
           onExplorePro={() => {
             if (LICENSING_DISABLED) {
               notify('Pro features are unlocked in this build');
@@ -4035,24 +4771,36 @@ export default function App() {
                   onRemoveScene={onRemoveCompositionScene}
                   onSelectDevice={(device) => {
                     pinLayer('device', device.id);
+                    setLightGizmoActive(false);
                     setDeviceChosen(true);
                     setProject((current) => {
-                      const selected = current.devices.find((item) => item.id === device.id) ?? getSelectedDevice(current);
-                      return setPublishTarget(syncProjectFromSelected(current, selected), platformOfDevice(selected));
+                      const selected = current.devices.find((item) => item.id === device.id);
+                      if (!selected) return current;
+                      return syncProjectFromSelected({
+                        ...current,
+                        publishTarget: platformOfDevice(selected),
+                      }, selected);
                     });
                   }}
+                  onRemoveDevice={deleteDeviceById}
                   onChooseLook={chooseScene}
                   onDeleteLook={onDeletePreset}
+                  onUpdateGradient={updateGradient}
                   onOpenSection={(sectionId) => setOpenSectionId(sectionId)}
                   onOpenAssets={() => setLeftWorkspaceTab('assets')}
                   onSelectOverlay={selectCanvasOverlay}
-                  onSelectProp={(propId) => pinLayer('prop', propId)}
+                  onSelectProp={(propId) => {
+                    pinLayer('prop', propId);
+                    setLightGizmoActive(false);
+                    setOpenSectionId('look');
+                  }}
                   onRemoveProp={removeSceneProp}
-                  onFocusKeyLight={() => setLightGizmoActive(true)}
+                  onFocusKeyLight={focusKeyLight}
+                  onFocusSceneLight={focusSceneLight}
                   onSelectionChange={onLayerSelection}
                   layerPin={layerPin}
                   onAddScene={() => onCreateCompositionScene('blank')}
-                  onDuplicateScene={() => onCreateCompositionScene('duplicate')}
+                  onDuplicateScene={(sceneId) => onCreateCompositionScene('duplicate', sceneId)}
                   canAddScene={compositionScenes.length < MAX_COMPOSITION_SCENES}
                 />
               </section>
@@ -4109,7 +4857,7 @@ export default function App() {
                         event.preventDefault();
                         event.stopPropagation();
                         setAssetsDropActive(false);
-                        void importScreenMedia(event.dataTransfer.files[0]).catch((err: Error) => notify(err.message));
+                        void takeDroppedFiles(event.dataTransfer);
                       }}
                       title={`Drop, paste, or browse a screenshot for ${getDevice(activeEnvDevice.deviceId).label}`}
                     >
@@ -4280,6 +5028,35 @@ export default function App() {
                 <Settings2 size={15} strokeWidth={1.9} />
                 <span>Settings</span>
               </button>
+              {toolsetSwitchAvailable && (
+                <div
+                  className="workspace-toolset-switch"
+                  data-hide-with-timeline
+                  role="group"
+                  aria-label="Workspace toolset"
+                >
+                  <button
+                    type="button"
+                    className={isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={isDeveloperToolset}
+                    title="Developer toolset — author & ship templates"
+                    onClick={() => setToolset('developer')}
+                  >
+                    <Wrench size={13} strokeWidth={1.9} />
+                    Dev
+                  </button>
+                  <button
+                    type="button"
+                    className={!isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={!isDeveloperToolset}
+                    title="User toolset — preview as customers see the app"
+                    onClick={() => setToolset('user')}
+                  >
+                    <UserRound size={13} strokeWidth={1.9} />
+                    User
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -4313,6 +5090,34 @@ export default function App() {
             ref={canvasStageRef}
           >
             <div className="canvas-top-right">
+              {toolsetSwitchAvailable && (
+                <div
+                  className={`workspace-view-toggle${isDeveloperToolset ? ' is-dev' : ' is-user'}`}
+                  role="group"
+                  aria-label="Workspace view"
+                >
+                  <button
+                    type="button"
+                    className={isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={isDeveloperToolset}
+                    title="Dev view — quick-edit templates and ship updates to User"
+                    onClick={() => setToolset('developer')}
+                  >
+                    <Wrench size={12} strokeWidth={2.2} aria-hidden />
+                    Dev
+                  </button>
+                  <button
+                    type="button"
+                    className={!isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={!isDeveloperToolset}
+                    title="User view — preview the templates customers get"
+                    onClick={() => setToolset('user')}
+                  >
+                    <UserRound size={12} strokeWidth={2.2} aria-hidden />
+                    User view
+                  </button>
+                </div>
+              )}
               <div className="view-buttons canvas-gesture-bar" role="toolbar" aria-label="Gestures">
                 {VIEW_GESTURES.map((gesture) => {
                   const Icon = gesture.icon;
@@ -4359,7 +5164,7 @@ export default function App() {
                 </div>
               ) : canvasHintVisible ? (
                 <p className="canvas-usage-hint" role="status">
-                  Hold <kbd>Space</kbd> + drag to pan · Drag a device to move it · Drag the rings to rotate
+                  Drag beside the model to orbit the camera · Drag the model to spin it · <kbd>Shift</kbd>+drag to move · <kbd>Space</kbd>+drag to pan
                   <button
                     type="button"
                     className="canvas-usage-hint-close"
@@ -4392,6 +5197,7 @@ export default function App() {
                         canvasId="env-ios"
                         project={iosDisplayProject}
                         captureRef={iosCaptureRef}
+                        shadowExportBoost={exporting}
                         mediaPlaying={animPlaying}
                         liveStream={mirrorSource === 'ios' || (!mirrorSource && activePublishTarget === 'ios') ? mirrorStream : null}
                         liveStreamDeviceId={liveStreamDeviceId}
@@ -4404,15 +5210,27 @@ export default function App() {
                         recenterToken={cameraRecenterToken}
                         lightGizmoActive={lightGizmoActive && activePublishTarget === 'ios'}
                         onLightPositionChange={(position) => updateProject({ lightPosition: position })}
+                        selectedSceneLightId={
+                          activePublishTarget === 'ios' && layerSelection.kind === 'scene-light'
+                            ? layerSelection.id
+                            : null
+                        }
+                        onSceneLightPositionChange={patchSceneLightPosition}
+                        onSelectSceneLight={focusSceneLight}
+                        onSelectKeyLight={focusKeyLight}
                         onSelectDevice={onSelectDevice}
                         overlayTime={animTime}
                         selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
-                        onSelectProp={(id) => pinLayer('prop', id)}
+                        onSelectProp={selectSceneProp}
+                        backdropSelected={layerSelection.kind === 'backdrop'}
+                        onSelectBackdrop={selectBackdrop}
+                        onMoveProp={onMoveProp}
                         onSelectOverlay={selectCanvasOverlay}
-                        onClearSelection={() => setDeviceMenu(null)}
+                        onClearSelection={() => { setDeviceMenu(null); setPickedMaterial(null); }}
                         onRotateDevice={onRotateDevice}
                         onMoveDevice={onMoveDevice}
                         onGizmoDraggingChange={setGizmoDragging}
+                        gizmoDragging={gizmoDragging}
                         screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
                         onSpacePanDrag={noteSpacePan}
                         viewGesture={viewGesture}
@@ -4422,6 +5240,10 @@ export default function App() {
                         annotateInk={markInk}
                         onAnnotation={commitAnnotation}
                         selectedOverlayId={selectedOverlayId}
+                        materialEditEnabled={isDeveloperToolset}
+                        selectedMaterialName={pickedMaterial?.materialName ?? null}
+                        selectedMaterialDeviceId={pickedMaterial?.deviceInstanceId ?? null}
+                        onPickMaterial={onPickMaterial}
                       />
                     ),
                   }}
@@ -4437,6 +5259,7 @@ export default function App() {
                         canvasId="env-android"
                         project={androidDisplayProject}
                         captureRef={androidCaptureRef}
+                        shadowExportBoost={exporting}
                         mediaPlaying={animPlaying}
                         liveStream={mirrorSource === 'android' || (!mirrorSource && activePublishTarget === 'android') ? mirrorStream : null}
                         liveStreamDeviceId={liveStreamDeviceId}
@@ -4449,15 +5272,27 @@ export default function App() {
                         recenterToken={cameraRecenterToken}
                         lightGizmoActive={lightGizmoActive && activePublishTarget === 'android'}
                         onLightPositionChange={(position) => updateProject({ lightPosition: position })}
+                        selectedSceneLightId={
+                          activePublishTarget === 'android' && layerSelection.kind === 'scene-light'
+                            ? layerSelection.id
+                            : null
+                        }
+                        onSceneLightPositionChange={patchSceneLightPosition}
+                        onSelectSceneLight={focusSceneLight}
+                        onSelectKeyLight={focusKeyLight}
                         onSelectDevice={onSelectDevice}
                         overlayTime={animTime}
                         selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
-                        onSelectProp={(id) => pinLayer('prop', id)}
+                        onSelectProp={selectSceneProp}
+                        backdropSelected={layerSelection.kind === 'backdrop'}
+                        onSelectBackdrop={selectBackdrop}
+                        onMoveProp={onMoveProp}
                         onSelectOverlay={selectCanvasOverlay}
-                        onClearSelection={() => setDeviceMenu(null)}
+                        onClearSelection={() => { setDeviceMenu(null); setPickedMaterial(null); }}
                         onRotateDevice={onRotateDevice}
                         onMoveDevice={onMoveDevice}
                         onGizmoDraggingChange={setGizmoDragging}
+                        gizmoDragging={gizmoDragging}
                         screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
                         onSpacePanDrag={noteSpacePan}
                         viewGesture={viewGesture}
@@ -4467,6 +5302,10 @@ export default function App() {
                         annotateInk={markInk}
                         onAnnotation={commitAnnotation}
                         selectedOverlayId={selectedOverlayId}
+                        materialEditEnabled={isDeveloperToolset}
+                        selectedMaterialName={pickedMaterial?.materialName ?? null}
+                        selectedMaterialDeviceId={pickedMaterial?.deviceInstanceId ?? null}
+                        onPickMaterial={onPickMaterial}
                       />
                     ),
                   }}
@@ -4475,6 +5314,7 @@ export default function App() {
                 <DeviceCanvas
                   project={displayProject}
                   captureRef={captureRef}
+                  shadowExportBoost={exporting}
                   mediaPlaying={animPlaying}
                   liveStream={mirrorStream}
                   liveStreamDeviceId={liveStreamDeviceId}
@@ -4486,15 +5326,23 @@ export default function App() {
                   recenterToken={cameraRecenterToken}
                   lightGizmoActive={lightGizmoActive}
                   onLightPositionChange={(position) => updateProject({ lightPosition: position })}
+                  selectedSceneLightId={layerSelection.kind === 'scene-light' ? layerSelection.id : null}
+                  onSceneLightPositionChange={patchSceneLightPosition}
+                  onSelectSceneLight={focusSceneLight}
+                  onSelectKeyLight={focusKeyLight}
                   onSelectDevice={onSelectDevice}
-                        overlayTime={animTime}
-                        selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
-                        onSelectProp={(id) => pinLayer('prop', id)}
-                        onSelectOverlay={selectCanvasOverlay}
-                  onClearSelection={() => setDeviceMenu(null)}
+                  overlayTime={animTime}
+                  selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
+                  onSelectProp={selectSceneProp}
+                  backdropSelected={layerSelection.kind === 'backdrop'}
+                  onSelectBackdrop={selectBackdrop}
+                  onMoveProp={onMoveProp}
+                  onSelectOverlay={selectCanvasOverlay}
+                  onClearSelection={() => { setDeviceMenu(null); setPickedMaterial(null); }}
                   onRotateDevice={onRotateDevice}
                   onMoveDevice={onMoveDevice}
                   onGizmoDraggingChange={setGizmoDragging}
+                  gizmoDragging={gizmoDragging}
                   screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
                   onSpacePanDrag={noteSpacePan}
                   viewGesture={viewGesture}
@@ -4504,6 +5352,10 @@ export default function App() {
                   annotateInk={markInk}
                   onAnnotation={commitAnnotation}
                   selectedOverlayId={selectedOverlayId}
+                  materialEditEnabled={isDeveloperToolset}
+                  selectedMaterialName={pickedMaterial?.materialName ?? null}
+                  selectedMaterialDeviceId={pickedMaterial?.deviceInstanceId ?? null}
+                  onPickMaterial={onPickMaterial}
                 />
               )}
               <ProgressiveBlurOverlay
@@ -4586,7 +5438,7 @@ export default function App() {
             {deviceMenu && (
               <div className="device-action-menu" style={{ left: Math.min(deviceMenu.x, window.innerWidth - 240), top: Math.min(deviceMenu.y, window.innerHeight - 200) }}>
                 <div className="device-action-hint">
-                  Drag the device to move it · rings rotate · arrows slide on one axis
+                  Drag to move · tap another object to select it · hold for this menu
                 </div>
                 <button
                   type="button"
@@ -4623,15 +5475,15 @@ export default function App() {
                 )}
                 <button type="button" title="Add another device (⌘D)" onClick={duplicateSelectedDevice}><Copy size={14} /> Add device</button>
                 <button type="button" onClick={rotateSelectedDevice}><Rotate3D size={14} /> Snap +45°</button>
-                <button type="button" className="danger" onClick={deleteSelectedDevice} disabled={project.compositionMode === 'split' || project.devices.length <= 1}><Trash2 size={14} /> Remove</button>
+                <button type="button" className="danger" onClick={deleteSelectedDevice} disabled={project.devices.length <= 1}><Trash2 size={14} /> Remove</button>
                 <div className="device-action-meta">Ideal size {screenSizeLabel(getDevice(project.deviceId).screenSize)}</div>
               </div>
             )}
             {dragOver && (
               <div className="drag-overlay">
                 <Upload size={16} />
-                <b>Drop on the highlighted screen</b>
-                <span>Image or video · {screenSizeLabel(getDevice(getPublishEnvDevice(project).deviceId).screenSize)}</span>
+                <b>Drop a screenshot or a 3D model</b>
+                <span>FBX, DAE, OBJ, glTF, Blend, and C4D ask before they are extracted</span>
               </div>
             )}
             <ViewAxisGizmo
@@ -4942,8 +5794,49 @@ export default function App() {
         </main>
 
         <aside className="right-panel" aria-hidden={sidePanelsHidden} ref={rightPanelRef}>
+          <CompositionSwitcher
+            templates={sceneCompositions}
+            activeId={activeCompositionId}
+            onApply={onApplyComposition}
+            mode={isDeveloperToolset ? 'developer' : 'user'}
+            onDuplicate={onDuplicateLibraryTemplate}
+          />
+          {isDeveloperToolset && (
+            <div className="template-quick-edit" aria-label="Quick edit shipped template">
+              <div className="template-quick-edit-copy">
+                <strong>Quick edit</strong>
+                <span>
+                  {activeCompositionId && isDevEditableTemplateId(activeCompositionId)
+                    ? (getCompositionTemplate(activeCompositionId)?.label ?? activeCompositionId)
+                    : 'Pick a template to edit'}
+                </span>
+              </div>
+              <div className="template-quick-edit-actions">
+                <button
+                  type="button"
+                  className="text-button"
+                  title="Browse Devices & Scenes templates"
+                  onClick={() => {
+                    setTemplateCategory('scenes');
+                    setTemplatePickerOpen(true);
+                  }}
+                >
+                  <LayoutTemplate size={13} /> Browse
+                </button>
+                <button
+                  type="button"
+                  className="button primary-button"
+                  disabled={!activeCompositionId || !isDevEditableTemplateId(activeCompositionId) || project.devices.length === 0}
+                  title="Write current shot into shippedTemplates.json for User view"
+                  onClick={() => void quickUpdateShippedTemplate()}
+                >
+                  <RefreshCw size={13} /> Update shipped
+                </button>
+              </div>
+            </div>
+          )}
           <div className="inspector-scroll" ref={inspectorScrollRef}>
-            <SettingsSection id="camera" title="Camera" hint="Control the camera view and lens" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection}>
+            <SettingsSection id="camera" title="Camera" hint="Control the camera view, lens, and focus" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection}>
               <div className="field-caption">Angle</div>
               <div className="camera-preset-grid">
                 {(['front', 'left', 'right', 'top'] as CameraView[]).map((view) => (
@@ -4967,6 +5860,28 @@ export default function App() {
               </div>
               <p className="field-caption" style={{ marginTop: 8 }}>
                 {CAMERA_LENSES.find((l) => l.id === (project.cameraLens ?? 'standard'))?.hint ?? '~50 mm'} · changes perspective FOV
+              </p>
+              <div className="option-toggle-row" style={{ marginTop: 14 }}>
+                <span>Depth of field</span>
+                <SwitchControl
+                  checked={project.depthOfField ?? false}
+                  label="Depth of field"
+                  onChange={(on) => updateProject({ depthOfField: on })}
+                />
+              </div>
+              {(project.depthOfField ?? false) && (
+                <SliderField
+                  label="Blur"
+                  min={5}
+                  max={100}
+                  step={1}
+                  unit="%"
+                  value={Math.round((project.depthOfFieldAmount ?? DEFAULT_PROJECT.depthOfFieldAmount) * 100)}
+                  onChange={(v) => updateProject({ depthOfFieldAmount: v / 100 })}
+                />
+              )}
+              <p className="field-caption" style={{ marginTop: 0 }}>
+                Keeps the selected device sharp and softens the rest of the scene.
               </p>
               <button type="button" className="button full-outline compact" style={{ marginTop: 10 }} onClick={keyCameraAtPlayhead}>
                 <Aperture size={14} /> Key camera at playhead
@@ -4992,8 +5907,8 @@ export default function App() {
                   {exportAspectIds.filter((id) => id !== 'custom').length > 1
                     ? `${exportAspectIds.filter((id) => id !== 'custom').length} formats`
                     : previewFrame === 'free'
-                      ? 'Free'
-                      : (previewAspect?.hint ?? EXPORT_ASPECTS.find((item) => item.id === exportAspectIds[0])?.hint ?? '9:16')}
+                      ? (exportAspectIds.length === 1 && exportAspectIds[0] === 'custom' ? 'Custom' : 'Free')
+                      : (previewAspect?.hint ?? EXPORT_ASPECTS.find((item) => item.id === exportAspectIds[0])?.hint ?? 'Custom')}
                 </span>
               </div>
               <p className="aspect-sidebar-hint">Multi-select formats, then tap a pill to preview that crop.</p>
@@ -5323,6 +6238,7 @@ export default function App() {
                                       return;
                                     }
                                     setProject((current) => applyDeviceToPlatform(current, platform, option.id));
+                                    setCameraRecenterToken((n) => n + 1);
                                     setDeviceChosen(true);
                                     setSplitDeviceMenu(null);
                                   }}
@@ -5410,6 +6326,18 @@ export default function App() {
                           <Upload size={13} />
                           Import model
                         </button>
+                        <button
+                          type="button"
+                          className="device-dropdown-import device-dropdown-import-folder"
+                          onClick={() => {
+                            customDevicePanelRef.current?.openImportFolder();
+                            setDeviceDropdownOpen(false);
+                          }}
+                        >
+                          <Upload size={13} />
+                          Import folder
+                        </button>
+                          <p className="device-dropdown-import-hint">GLB, glTF, FBX, DAE, OBJ, Blend, or C4D — pick several models at once. Select texture images with each mesh, or import the export folder. Desktop converts .blend via Blender; C4D / Max / Maya still need an export to GLB or FBX first.</p>
                       </div>
                     )}
                   </div>
@@ -5418,13 +6346,8 @@ export default function App() {
                     selectedDeviceId={project.deviceId}
                     customDevices={customDevices}
                     onNotify={notify}
-                    onImported={(meta) => {
-                      setCustomDevices(loadCustomDeviceMeta());
-                      setDevicesTick((n) => n + 1);
-                      patchSelectedDevice({ deviceId: meta.id });
-                      if (isPlaceholderScreenshot(activeEnvScreenshot)) {
-                        applyScreenImage(placeholderForDevice(meta.id), meta.label || 'Custom', 'Size guide updated');
-                      }
+                    onImported={(metas) => {
+                      placeImportedCustomDevices(metas);
                     }}
                     onUpdated={() => {
                       setCustomDevices(loadCustomDeviceMeta());
@@ -5488,7 +6411,7 @@ export default function App() {
               )}
             </SettingsSection>
 
-            <SettingsSection id="transform" title="Transform" hint="Studio angle, rotation and materials" icon={Rotate3D} open={openSectionId === 'transform'} onToggle={toggleSection}>
+            <SettingsSection id="transform" title="Transform" hint="Position, angle, rotation and materials" icon={Rotate3D} open={openSectionId === 'transform'} onToggle={toggleSection}>
               <div className="field-caption">Studio angle</div>
               <div className="camera-preset-grid studio-pose-grid" role="group" aria-label="Studio angles">
                 {STUDIO_POSES.map((pose) => (
@@ -5565,6 +6488,31 @@ export default function App() {
               <p className="field-caption" style={{ marginTop: 6 }}>
                 Keeps all {project.devices.length} device{project.devices.length === 1 ? '' : 's'}, angles, lighting, and motion. ⇧⌘S
               </p>
+              {isDeveloperToolset && (
+                <>
+                  <div className="preset-save-row" style={{ marginTop: 6 }}>
+                    <button
+                      type="button"
+                      className="text-button"
+                      title="Copy TypeScript for COMPOSITION_TEMPLATES so this shot ships with the app"
+                      onClick={() => void onCopyBuiltinComposition('devices')}
+                    >
+                      <Copy size={13} /> Copy as built-in
+                    </button>
+                    <button
+                      type="button"
+                      className="text-button"
+                      title="Same, with category: scenes"
+                      onClick={() => void onCopyBuiltinComposition('scenes')}
+                    >
+                      <Copy size={13} /> as scene
+                    </button>
+                  </div>
+                  <p className="field-caption" style={{ marginTop: 4 }}>
+                    Dev only — prefer Ship in the developer panel so User gets the layout live.
+                  </p>
+                </>
+              )}
               <button
                 type="button"
                 className="text-button"
@@ -5575,6 +6523,18 @@ export default function App() {
               >
                 <LayoutTemplate size={13} /> Browse your templates
               </button>
+              <AxisInputs
+                label="Position"
+                axes={[
+                  { key: 'x', min: -10, max: 10, value: displaySelected.position?.x ?? 0 },
+                  { key: 'y', min: -6, max: 6, value: displaySelected.position?.y ?? 0 },
+                  { key: 'z', min: -8, max: 8, value: displaySelected.position?.z ?? 0 },
+                ]}
+                onChange={(axis, value) => {
+                  const position = displaySelected.position ?? { x: 0, y: 0, z: 0 };
+                  onMoveDevice(displaySelected.id, { ...position, [axis]: value });
+                }}
+              />
               <SliderField label="Rotate X" min={-90} max={90} value={displaySelected.rotation.x} onChange={(v) => updateRotation('x', v)} />
               <SliderField label="Rotate Y" min={-180} max={180} value={displaySelected.rotation.y} onChange={(v) => updateRotation('y', v)} />
               <SliderField label="Rotate Z" min={-90} max={90} value={displaySelected.rotation.z} onChange={(v) => updateRotation('z', v)} />
@@ -5584,13 +6544,16 @@ export default function App() {
               }} />
               {getDevice(displaySelected.deviceId).lid ? (
                 <SliderField
-                  label="Lid"
+                  label={getDevice(displaySelected.deviceId).lid?.mode === 'fold' ? 'Fold' : 'Lid'}
                   min={0}
                   max={1}
                   step={0.01}
                   unit=""
                   value={displaySelected.lidOpen ?? 1}
-                  onChange={(v) => patchSelectedDevice({ lidOpen: v })}
+                  onChange={(v) => {
+                    patchSelectedDevice({ lidOpen: v });
+                    if (timelineOpen) keyPropertyAtPlayhead('lidOpen', v);
+                  }}
                 />
               ) : null}
               <div className="field-caption">Materials</div>
@@ -5866,7 +6829,7 @@ export default function App() {
               </div>
               <p className="field-caption">Matte stays soft, glossy sheens, mirror sharpens. Applies to every screen and glass surface.</p>
               <ReflectionMapPicker
-                value={project.reflectionMap ?? 'match_background'}
+                value={project.reflectionMap ?? DEFAULT_PROJECT.reflectionMap}
                 customImage={project.reflectionMapImage ?? null}
                 background={project.background}
                 colors={project.background === 'transparent' ? null : project.gradientColors}
@@ -5878,28 +6841,38 @@ export default function App() {
               />
             </SettingsSection>
 
-            <SettingsSection id="light" title="Light" hint="Key light colour, strength and direction" icon={Sun} open={openSectionId === 'light'} onToggle={toggleSection}>
+            <SettingsSection id="light" title="Light" hint="Gentle key, soft HDRI, and optional extra lights" icon={Sun} open={openSectionId === 'light'} onToggle={toggleSection}>
               <div className="env-group">
                 <div className="env-group-head">
                   <div className="field-caption">Key light</div>
-                  <button
-                    type="button"
-                    className="env-reset"
-                    title="Reset key light"
-                    onClick={() => updateProject({
-                      lightIntensity: DEFAULT_PROJECT.lightIntensity,
-                      lightPosition: { ...DEFAULT_PROJECT.lightPosition },
-                      lightColor: DEFAULT_PROJECT.lightColor,
-                    })}
-                  >
-                    <RotateCcw size={12} />
-                    Reset
-                  </button>
+                  <div className="env-reset-row">
+                    <button
+                      type="button"
+                      className="env-reset"
+                      title="Turn key light off"
+                      onClick={() => updateProject({ lightIntensity: 0 })}
+                    >
+                      Off
+                    </button>
+                    <button
+                      type="button"
+                      className="env-reset"
+                      title="Reset key light"
+                      onClick={() => updateProject({
+                        lightIntensity: DEFAULT_PROJECT.lightIntensity,
+                        lightPosition: { ...DEFAULT_PROJECT.lightPosition },
+                        lightColor: DEFAULT_PROJECT.lightColor,
+                      })}
+                    >
+                      <RotateCcw size={12} />
+                      Reset
+                    </button>
+                  </div>
                 </div>
                 <div className="env-sliders">
                   <SliderField
                     label="Intensity"
-                    min={0.5}
+                    min={0}
                     max={5}
                     step={0.1}
                     unit="×"
@@ -5923,30 +6896,276 @@ export default function App() {
                     onChange={(lightPosition) => updateProject({ lightPosition })}
                   />
                   <div className="option-toggle-row">
-                    <span>Handle</span>
+                    <span>Move in scene</span>
                     <SwitchControl
                       checked={lightGizmoActive}
-                      label="Show light handle"
-                      onChange={setLightGizmoActive}
+                      label="Show light move gimbal"
+                      onChange={(on) => {
+                        setLightGizmoActive(on);
+                        if (on) setLayerSelection({ kind: 'key-light' });
+                      }}
                     />
                   </div>
+                  <p className="field-caption" style={{ marginTop: 2 }}>
+                    Drag the coloured axes on the key light to reposition it. Zoom out if the handle is off-frame.
+                  </p>
                 </div>
               </div>
-            </SettingsSection>
 
-            <SettingsSection id="rim" title="Rim light" hint="Fill that lifts the dark side" icon={Sun} open={openSectionId === 'rim'} onToggle={toggleSection}>
-              <div className="env-group">
+              <div className="env-group" style={{ marginTop: 12 }}>
                 <div className="env-group-head">
-                  <div className="field-caption">Fill</div>
+                  <div className="field-caption">Environment HDRI</div>
                   <button
                     type="button"
                     className="env-reset"
-                    title="Reset rim light"
-                    onClick={() => updateProject({ fillIntensity: DEFAULT_PROJECT.fillIntensity })}
+                    title="Use studio preset HDRI strength"
+                    onClick={() => updateProject({ environmentIntensity: null })}
                   >
-                    <RotateCcw size={12} />
-                    Reset
+                    Auto
                   </button>
+                </div>
+                <div className="env-sliders">
+                  <SliderField
+                    label="Intensity"
+                    min={0}
+                    max={3}
+                    step={0.05}
+                    unit="×"
+                    value={project.environmentIntensity
+                      ?? resolveStudioPreset(project.background, project.gradientColors).environmentIntensity}
+                    onChange={(v) => updateProject({ environmentIntensity: v })}
+                  />
+                  <p className="field-caption" style={{ marginTop: 2 }}>
+                    Soft IBL wrap on metal and glass. Auto follows the studio look.
+                  </p>
+                </div>
+              </div>
+
+              <div className="env-group" style={{ marginTop: 12 }}>
+                <div className="env-group-head">
+                  <div className="field-caption">Exposure</div>
+                  <button
+                    type="button"
+                    className="env-reset"
+                    title="Use studio preset exposure"
+                    onClick={() => updateProject({ toneMappingExposure: null })}
+                  >
+                    Auto
+                  </button>
+                </div>
+                <div className="env-sliders">
+                  <SliderField
+                    label="ACES"
+                    min={0.4}
+                    max={2.5}
+                    step={0.02}
+                    unit="×"
+                    value={project.toneMappingExposure
+                      ?? resolveStudioPreset(project.background, project.gradientColors).toneMappingExposure}
+                    onChange={(v) => updateProject({ toneMappingExposure: v })}
+                  />
+                  <p className="field-caption" style={{ marginTop: 2 }}>
+                    Overall scene brightness after lighting. Auto follows the background studio look.
+                  </p>
+                </div>
+              </div>
+
+              <div className="env-group" style={{ marginTop: 12 }}>
+                <div className="env-group-head">
+                  <div className="field-caption">Extra lights</div>
+                  <span className="field-caption">{(project.sceneLights ?? []).length}/{MAX_SCENE_LIGHTS}</span>
+                </div>
+                <p className="field-caption" style={{ marginBottom: 6 }}>
+                  Point, spot, area, and directional luminaires for Spline-like setups. Layered on the studio softboxes.
+                </p>
+                <div className="preset-save-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                  {([
+                    ['point', 'Point'],
+                    ['spot', 'Spot'],
+                    ['area', 'Area'],
+                    ['directional', 'Dir'],
+                  ] as const).map(([kind, label]) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      className="text-button"
+                      disabled={(project.sceneLights ?? []).length >= MAX_SCENE_LIGHTS}
+                      title={`Add ${label} light`}
+                      onClick={() => {
+                        const focus = displaySelected?.position ?? { x: 0, y: 0, z: 0 };
+                        const next = createSceneLight({ kind, target: { ...focus } });
+                        updateProject({
+                          sceneLights: [...(project.sceneLights ?? []), next].slice(0, MAX_SCENE_LIGHTS),
+                        });
+                        notify(`Added ${next.label} light`);
+                      }}
+                    >
+                      <Plus size={13} /> {label}
+                    </button>
+                  ))}
+                </div>
+                {(project.sceneLights ?? []).map((light) => {
+                  const patchLight = (patch: Partial<SceneLight>) => {
+                    updateProject({
+                      sceneLights: (project.sceneLights ?? []).map((item) => (
+                        item.id === light.id ? { ...item, ...patch } : item
+                      )),
+                    });
+                  };
+                  return (
+                    <div key={light.id} className="env-group" style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                      <div className="env-group-head">
+                        <div className="field-caption">{light.label}</div>
+                        <div className="env-reset-row">
+                          <SwitchControl
+                            checked={light.enabled}
+                            label={`Toggle ${light.label}`}
+                            onChange={(enabled) => patchLight({ enabled })}
+                          />
+                          <button
+                            type="button"
+                            className="env-reset"
+                            title={`Remove ${light.label}`}
+                            onClick={() => updateProject({
+                              sceneLights: (project.sceneLights ?? []).filter((item) => item.id !== light.id),
+                            })}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                      {light.enabled && (
+                        <div className="env-sliders">
+                          <SliderField
+                            label="Intensity"
+                            min={0}
+                            max={light.kind === 'directional' ? 8 : 12}
+                            step={0.1}
+                            unit="×"
+                            value={light.intensity}
+                            onChange={(intensity) => patchLight({ intensity })}
+                          />
+                          <label className="env-color-row">
+                            <span>Color</span>
+                            <input
+                              type="color"
+                              value={light.color}
+                              onChange={(e) => patchLight({ color: e.target.value })}
+                              aria-label={`${light.label} color`}
+                            />
+                          </label>
+                          {(light.kind === 'point' || light.kind === 'spot') && (
+                            <SliderField
+                              label="Distance"
+                              min={0}
+                              max={30}
+                              step={0.5}
+                              value={light.distance}
+                              onChange={(distance) => patchLight({ distance })}
+                            />
+                          )}
+                          {light.kind === 'spot' && (
+                            <>
+                              <SliderField
+                                label="Angle"
+                                min={5}
+                                max={80}
+                                step={1}
+                                unit="°"
+                                value={(light.angle * 180) / Math.PI}
+                                onChange={(deg) => patchLight({ angle: (deg * Math.PI) / 180 })}
+                              />
+                              <SliderField
+                                label="Penumbra"
+                                min={0}
+                                max={1}
+                                step={0.05}
+                                value={light.penumbra}
+                                onChange={(penumbra) => patchLight({ penumbra })}
+                              />
+                            </>
+                          )}
+                          {light.kind === 'area' && (
+                            <>
+                              <SliderField
+                                label="Width"
+                                min={0.2}
+                                max={8}
+                                step={0.1}
+                                value={light.width}
+                                onChange={(width) => patchLight({ width })}
+                              />
+                              <SliderField
+                                label="Height"
+                                min={0.2}
+                                max={8}
+                                step={0.1}
+                                value={light.height}
+                                onChange={(height) => patchLight({ height })}
+                              />
+                            </>
+                          )}
+                          {(light.kind === 'directional' || light.kind === 'spot' || light.kind === 'point') && (
+                            <div className="option-toggle-row">
+                              <span>Shadow</span>
+                              <SwitchControl
+                                checked={light.castShadow}
+                                label={`${light.label} cast shadow`}
+                                onChange={(castShadow) => patchLight({ castShadow })}
+                              />
+                            </div>
+                          )}
+                          <div className="option-toggle-row">
+                            <span>Move in scene</span>
+                            <SwitchControl
+                              checked={layerSelection.kind === 'scene-light' && layerSelection.id === light.id}
+                              label={`Show ${light.label} move gimbal`}
+                              onChange={(on) => {
+                                if (on) focusSceneLight(light.id);
+                                else if (layerSelection.kind === 'scene-light' && layerSelection.id === light.id) {
+                                  setLayerSelection({ kind: 'key-light' });
+                                }
+                              }}
+                            />
+                          </div>
+                          <LightDirectionControl
+                            position={light.position}
+                            color={light.color}
+                            focus={light.target}
+                            deviceYawDeg={displaySelected?.rotation.y ?? 0}
+                            onChange={(position) => patchLight({ position })}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </SettingsSection>
+
+            <SettingsSection id="rim" title="Ambient" hint="Soft wrap that fills the dark side" icon={Sun} open={openSectionId === 'rim'} onToggle={toggleSection}>
+              <div className="env-group">
+                <div className="env-group-head">
+                  <div className="field-caption">Wrap</div>
+                  <div className="env-reset-row">
+                    <button
+                      type="button"
+                      className="env-reset"
+                      title="Turn ambient off"
+                      onClick={() => updateProject({ fillIntensity: 0 })}
+                    >
+                      Off
+                    </button>
+                    <button
+                      type="button"
+                      className="env-reset"
+                      title="Reset ambient"
+                      onClick={() => updateProject({ fillIntensity: DEFAULT_PROJECT.fillIntensity })}
+                    >
+                      <RotateCcw size={12} />
+                      Reset
+                    </button>
+                  </div>
                 </div>
                 <div className="env-sliders">
                   <SliderField
@@ -5958,21 +7177,27 @@ export default function App() {
                     value={project.fillIntensity ?? DEFAULT_PROJECT.fillIntensity}
                     onChange={(v) => updateProject({ fillIntensity: v })}
                   />
+                  <p className="field-caption" style={{ marginTop: 2 }}>
+                    Spline-style soft ambient. Raise for flatter wrap, lower for more contrast.
+                  </p>
                 </div>
               </div>
             </SettingsSection>
 
-            <SettingsSection id="shadow" title="Shadow" hint="Contact shadow and floor plate" icon={Layers3} open={openSectionId === 'shadow'} onToggle={toggleSection}>
+            <SettingsSection id="shadow" title="Shadow" hint="Photoreal floor cast and contact" icon={Layers3} open={openSectionId === 'shadow'} onToggle={toggleSection}>
               <div className="env-group">
                 <div className="env-group-head">
-                  <div className="field-caption">Ground</div>
+                  <div className="field-caption">Shadows</div>
                   <button
                     type="button"
                     className="env-reset"
                     title="Reset shadow"
                     onClick={() => updateProject({
+                      shadowType: DEFAULT_PROJECT.shadowType,
                       shadowSoftness: DEFAULT_PROJECT.shadowSoftness,
                       shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
+                      shadowContact: DEFAULT_PROJECT.shadowContact,
+                      shadowQuality: DEFAULT_PROJECT.shadowQuality,
                       showGroundBase: DEFAULT_PROJECT.showGroundBase,
                     })}
                   >
@@ -5980,53 +7205,158 @@ export default function App() {
                     Reset
                   </button>
                 </div>
-                <div className="env-sliders">
-                  <SliderField
-                    label="Softness"
-                    min={0.2}
-                    max={8}
-                    step={0.1}
-                    unit=""
-                    value={project.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness}
-                    onChange={(v) => updateProject({ shadowSoftness: v })}
+                <div className="option-toggle-row">
+                  <span>Shadows</span>
+                  <SwitchControl
+                    checked={(project.shadowType ?? DEFAULT_PROJECT.shadowType) !== 'off'}
+                    label="Toggle floor shadows"
+                    onChange={(on) => updateProject({ shadowType: on ? 'soft' : 'off' })}
                   />
-                  <SliderField
-                    label="Strength"
-                    min={0}
-                    max={0.85}
-                    step={0.01}
-                    unit=""
-                    value={project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity}
-                    onChange={(v) => updateProject({ shadowOpacity: v })}
-                  />
-                  <div className="option-toggle-row">
-                    <span>Floor plate</span>
-                    <SwitchControl
-                      checked={project.showGroundBase !== false}
-                      label="Show floor plate"
-                      title="Soft disc under the device. Turn off for a floating product shot."
-                      onChange={(on) => updateProject({ showGroundBase: on })}
+                </div>
+                {(project.shadowType ?? DEFAULT_PROJECT.shadowType) !== 'off' && (
+                  <div className="env-sliders" style={{ marginTop: 12 }}>
+                    <SliderField
+                      label="Softness"
+                      min={0.2}
+                      max={8}
+                      step={0.1}
+                      unit=""
+                      value={project.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness}
+                      onChange={(v) => updateProject({ shadowSoftness: v })}
                     />
+                    <p className="field-caption" style={{ marginTop: -4 }}>
+                      Apparent key-light size — higher softens the penumbra.
+                    </p>
+                    <SliderField
+                      label="Intensity"
+                      min={0}
+                      max={0.85}
+                      step={0.01}
+                      unit=""
+                      value={project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity}
+                      onChange={(v) => updateProject({ shadowOpacity: v })}
+                    />
+                    <SliderField
+                      label="Contact"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      unit=""
+                      value={project.shadowContact ?? DEFAULT_PROJECT.shadowContact}
+                      onChange={(v) => updateProject({ shadowContact: v })}
+                    />
+                    <p className="field-caption" style={{ marginTop: -4 }}>
+                      Subtle darkening where the mesh meets the floor.
+                    </p>
+                    <div className="field-caption" style={{ marginTop: 10 }}>Quality</div>
+                    <div className="camera-preset-grid">
+                      {SHADOW_QUALITIES.map((quality) => (
+                        <button
+                          key={quality.id}
+                          type="button"
+                          title={quality.hint}
+                          onClick={() => updateProject({ shadowQuality: quality.id })}
+                          className={(project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality) === quality.id ? 'selected' : ''}
+                        >
+                          {quality.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="field-caption" style={{ marginTop: 8 }}>
+                      {SHADOW_QUALITIES.find((quality) => quality.id === (project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality))?.hint
+                        ?? 'Balanced for smooth interaction'}
+                    </p>
+                    <p className="field-caption" style={{ marginTop: 8 }}>
+                      Direction follows the key light — open Light and enable Move in scene, then drag the axes.
+                    </p>
+                    <div className="option-toggle-row" style={{ marginTop: 8 }}>
+                      <span>Move key light</span>
+                      <SwitchControl
+                        checked={lightGizmoActive}
+                        label="Show light move gimbal"
+                        onChange={(on) => {
+                          setLightGizmoActive(on);
+                          if (on) setLayerSelection({ kind: 'key-light' });
+                        }}
+                      />
+                    </div>
                   </div>
+                )}
+                <div className="option-toggle-row" style={{ marginTop: 12 }}>
+                  <span>Floor plate</span>
+                  <SwitchControl
+                    checked={project.showGroundBase !== false}
+                    label="Show floor plate"
+                    title="Soft disc under the device. Turn off for a floating product shot."
+                    onChange={(on) => updateProject({ showGroundBase: on })}
+                  />
                 </div>
               </div>
             </SettingsSection>
 
             <SettingsSection id="look" title="Look & motion" hint="Style, effects and animation" icon={Sparkles} open={openSectionId === 'look'} onToggle={toggleSection}>
               <div className="scene-look-block is-inspector">
+                {selectedSceneProp && (
+                  <div className="scene-look-group">
+                    <div className="field-caption scene-look-sub">
+                      {selectedSceneProp.kind === 'studio_backdrop' ? 'Cyclorama colour' : 'Prop colour'}
+                    </div>
+                    <label className="gradient-color-field">
+                      <span className="gradient-color-label">
+                        {selectedSceneProp.kind === 'studio_backdrop' ? 'Backdrop' : 'Colour'}
+                      </span>
+                      <span className="gradient-color-input">
+                        <input
+                          type="color"
+                          value={selectedSceneProp.color && /^#[0-9a-fA-F]{6}$/.test(selectedSceneProp.color)
+                            ? selectedSceneProp.color
+                            : '#d8d2c8'}
+                          aria-label={selectedSceneProp.kind === 'studio_backdrop' ? 'Backdrop colour' : 'Prop colour'}
+                          onChange={(e) => patchSceneProp(selectedSceneProp.id, { color: e.target.value })}
+                        />
+                        <input
+                          type="text"
+                          defaultValue={selectedSceneProp.color ?? '#d8d2c8'}
+                          key={`prop-color-${selectedSceneProp.id}-${selectedSceneProp.color ?? ''}`}
+                          maxLength={7}
+                          aria-label={selectedSceneProp.kind === 'studio_backdrop' ? 'Backdrop hex' : 'Prop colour hex'}
+                          onBlur={(e) => {
+                            const next = e.target.value.trim();
+                            if (/^#[0-9a-fA-F]{6}$/.test(next)) {
+                              patchSceneProp(selectedSceneProp.id, { color: next.toLowerCase() });
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') e.currentTarget.blur();
+                          }}
+                        />
+                      </span>
+                    </label>
+                  </div>
+                )}
                 {!isTransparent && (
                   <div className="scene-look-group">
-                    <div className="field-caption scene-look-sub">Colours</div>
-                    <div className="gradient-color-grid">
+                    <div className="field-caption scene-look-sub">Backdrop · Sky · Floor</div>
+                    <div className="gradient-color-grid is-separate-stops">
                       {([
-                        ['center', 'Wall'],
-                        ['mid', 'Cove'],
+                        ['center', 'Backdrop'],
+                        ['mid', 'Sky'],
                         ['edge', 'Floor'],
-                      ] as const).map(([key, label]) => (
-                        <label key={key} className="gradient-color-field">
+                      ] as const).map(([key, label]) => {
+                        const stopFocus = key === 'center' ? 'backdrop' : key === 'mid' ? 'sky' : 'floor';
+                        const highlighted = studioSetFocus === stopFocus
+                          || (layerSelection.kind === 'backdrop' && stopFocus === 'backdrop')
+                          || (selectedSceneProp?.kind === 'studio_backdrop' && stopFocus === 'backdrop');
+                        return (
+                        <label
+                          key={key}
+                          className={`gradient-color-field${highlighted ? ' is-highlighted' : ''}`}
+                          onPointerDown={() => setStudioSetFocus(stopFocus)}
+                        >
                           <span className="gradient-color-label">{label}</span>
                           <span className="gradient-color-input">
                             <input type="color" value={project.gradientColors[key]} aria-label={`${label} colour`}
+                              onFocus={() => setStudioSetFocus(stopFocus)}
                               onChange={(e) => updateGradient(key, e.target.value)} />
                             <input
                               type="text"
@@ -6034,6 +7364,7 @@ export default function App() {
                               key={`${key}-${project.gradientColors[key]}`}
                               maxLength={7}
                               aria-label={`${label} hex`}
+                              onFocus={() => setStudioSetFocus(stopFocus)}
                               onBlur={(e) => updateGradient(key, e.target.value)}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
@@ -6043,7 +7374,8 @@ export default function App() {
                             />
                           </span>
                         </label>
-                      ))}
+                        );
+                      })}
                     </div>
                     {savingPreset ? (
                       <div className="preset-save-row">
@@ -6302,7 +7634,7 @@ export default function App() {
           event.currentTarget.value = '';
         }}
       />
-      <input ref={projectInputRef} type="file" accept=".json,.mockup.json,application/json" hidden onChange={(e) => { void onProjectFile(e); }} />
+      <input ref={projectInputRef} type="file" accept=".mockup,.mockup.json,.json,application/json,application/x-mockup-studio" hidden onChange={(e) => { void onProjectFile(e); }} />
 
       {hasOpenProject && exportOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !exporting) setExportOpen(false); }}>
@@ -6435,7 +7767,7 @@ export default function App() {
                 const preview = savedSizes.some((size) => size.id === primaryExportAspect) && item.id !== 'custom'
                   ? resolveExportSize(primaryExportAspect)
                   : resolveExportDimensions(
-                    (EXPORT_ASPECTS.some((aspect) => aspect.id === primaryExportAspect) ? primaryExportAspect : 'tiktok') as ExportAspectId,
+                    (EXPORT_ASPECTS.some((aspect) => aspect.id === primaryExportAspect) ? primaryExportAspect : 'custom') as ExportAspectId,
                     item.id,
                     item.id === 'custom' ? customExportSize : undefined,
                   );
@@ -6555,9 +7887,9 @@ export default function App() {
                   type="button"
                   className="button subtle-button export-free-restore"
                   disabled={exporting}
-                  onClick={() => focusPlatformAspect(exportAspectIds[0] ?? 'tiktok')}
+                  onClick={() => focusPlatformAspect(exportAspectIds[0] ?? 'custom')}
                 >
-                  Restore {EXPORT_ASPECTS.find((item) => item.id === (exportAspectIds[0] ?? 'tiktok'))?.shortLabel ?? 'crop'}
+                  Restore {EXPORT_ASPECTS.find((item) => item.id === (exportAspectIds[0] ?? 'custom'))?.shortLabel ?? 'crop'}
                 </button>
               )}
             </div>
@@ -6582,6 +7914,95 @@ export default function App() {
           </div>
         </div>
       )}
+      {hasOpenProject && isDeveloperToolset && modelingPanelOpen && (
+        <ModelingModePanel
+          project={project}
+          compositionName={compositionName}
+          activeTemplateId={activeCompositionId}
+          pickedMaterial={pickedMaterial}
+          materialTweak={
+            pickedMaterial
+              ? (project.devices.find((d) => d.id === pickedMaterial.deviceInstanceId)?.materialTweaks?.[pickedMaterial.materialName]
+                ?? (pickedMaterial.colorHex ? { color: pickedMaterial.colorHex } : null))
+              : null
+          }
+          selectedProp={
+            layerSelection.kind === 'prop'
+              ? (project.sceneProps ?? []).find((p) => p.id === layerSelection.id) ?? null
+              : null
+          }
+          backdropSelected={layerSelection.kind === 'backdrop'}
+          studioSetFocus={studioSetFocus}
+          onPickClear={() => setPickedMaterial(null)}
+          onPatchMaterial={patchPickedMaterial}
+          onClearMaterial={clearPickedMaterialOverrides}
+          onApplyPreset={applyMaterialPresetToPicked}
+          onSetMaterialMap={setPickedMaterialMap}
+          onPatchProp={patchSceneProp}
+          onUpdateGradient={updateGradient}
+          onFocusStudioStop={setStudioSetFocus}
+          onUpdateProject={(patch) => updateProject(patch)}
+          onAddDevice={(deviceId) => {
+            const ids = Array.isArray(deviceId) ? deviceId : [deviceId];
+            let message = ids.length > 1 ? `Placed ${ids.length} scene sets` : 'Placed scene set';
+            let placed = 0;
+            setProject((current) => {
+              if (current.compositionMode === 'split') {
+                message = 'Switch off iOS + Android to place a scene set';
+                return current;
+              }
+              let devices = [...current.devices];
+              let last = getSelectedDevice(current);
+              for (const id of ids) {
+                if (devices.length >= MAX_DEVICES) {
+                  message = placed
+                    ? `Placed ${placed} · scene is full (${MAX_DEVICES} max)`
+                    : `You can place up to ${MAX_DEVICES} devices`;
+                  break;
+                }
+                placed += 1;
+                const instance = createDeviceInstance({
+                  deviceId: id,
+                  rotation: { ...STUDIO_START_ROTATION },
+                  position: {
+                    x: (placed - 1) * 1.15,
+                    y: 0,
+                    z: -0.4,
+                  },
+                  scale: 1.25,
+                  screenshot: null,
+                });
+                devices = [...devices, instance];
+                last = instance;
+              }
+              if (!placed) return current;
+              if (placed > 1 && !message.includes('full')) {
+                message = `Placed ${placed} scene sets`;
+              } else if (placed === 1 && !message.includes('full') && !message.includes('Switch')) {
+                message = 'Placed scene set';
+              }
+              return syncProjectFromSelected({ ...current, devices }, last);
+            });
+            setDevicesTick((n) => n + 1);
+            notify(message);
+          }}
+          onOpenLightSection={() => setOpenSectionId('light')}
+          onNotify={notify}
+          onBumpDevices={() => {
+            setCustomDevices(loadCustomDeviceMeta());
+            setDevicesTick((n) => n + 1);
+          }}
+          onPromoted={(template) => {
+            setTemplatesTick((n) => n + 1);
+            setTemplateCategory(template.category === 'scenes' ? 'scenes' : 'devices');
+            startFromTemplate(template);
+          }}
+          onClose={() => {
+            setModelingPanelOpen(false);
+            setPickedMaterial(null);
+          }}
+        />
+      )}
       {helpOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setHelpOpen(false); }}>
           <div className="export-modal help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
@@ -6593,12 +8014,12 @@ export default function App() {
               <AccentThemePicker />
             </div>
             <div className="help-rows">
-              <div><MousePointer2 size={17} /><span>Drag on the preview to orbit the 3D phone. Scroll to zoom. Hold Space + drag to pan.</span></div>
-              <div><ImagePlus size={17} /><span>Drop a screenshot onto the preview or select Assets → Import.</span></div>
+              <div><MousePointer2 size={17} /><span>Drag empty canvas to orbit the camera. Drag a device to spin it freely; Shift+drag slides it. Right-drag or Space+drag pans the view. Scroll zooms. Rings and arrows still work for precise moves.</span></div>
+              <div><ImagePlus size={17} /><span>Drop a screenshot onto the preview, or drop an FBX, DAE, OBJ, glTF, Blend, or C4D file to extract it as a device. Blend uses your local Blender install.</span></div>
               <div><MonitorSmartphone size={17} /><span>Plug in an iPhone or Android over USB and use Phone Mirror — it auto-detects the device. Snapshot freezes the live screen onto the mockup.</span></div>
-              <div><SlidersHorizontal size={17} /><span>Drag a device to move it. Rings rotate; coloured arrows slide on one world axis (X / Y / Z). Add more devices from Device → Add device, then Save as template (⇧⌘S) under Templates → Yours.</span></div>
+              <div><SlidersHorizontal size={17} /><span>Rings rotate on one axis; coloured arrows slide on X / Y / Z. Drag the device body to tumble freely, Shift+drag to reposition. Add more devices from Device → Add device, then Save as template (⇧⌘S) under Templates → Yours.</span></div>
               <div><Gauge size={17} /><span>Space play/pause · long-press & drag to multi-select keys · set Ease on selection · Delete removes selected.</span></div>
-              <div><Command size={17} /><span>⌘S Save · ⇧⌘S Save as template · ⌘Z Undo last edit · ⌘D Add device · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab (last tab → recent projects) · . hide panels.</span></div>
+              <div><Command size={17} /><span>⌘N Blank file · ⌘S Save · File menu → Save as / Duplicate / Export as · ⇧⌘S Save as template · ⌘Z Undo · ⌘D Add device · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab · . hide panels.</span></div>
             </div>
             <div className="help-modal-actions">
               <button
@@ -6618,6 +8039,56 @@ export default function App() {
           </div>
         </div>
       )}
+      {meshOffer && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !meshExtracting) setMeshOffer(null);
+          }}
+        >
+          <div className="mesh-extract" role="dialog" aria-modal="true" aria-labelledby="mesh-extract-title">
+            <h2 id="mesh-extract-title">
+              {meshOffer.error
+                ? 'Can’t extract this drop'
+                : meshOffer.meshCount > 1
+                  ? `Extract ${meshOffer.meshCount} models?`
+                  : 'Extract this model?'}
+            </h2>
+            <p>
+              {meshOffer.error
+                ? meshOffer.error
+                : `${meshOffer.format} · ${meshOffer.meshName}. ${
+                  meshOffer.textureCount > 0
+                    ? `${meshOffer.textureCount} texture ${meshOffer.textureCount === 1 ? 'file' : 'files'} will be packed in.`
+                    : meshOffer.meshCount > 1
+                      ? 'Each model is added to the library; extras are placed beside the selected device.'
+                      : 'Textures already inside the file stay with the model.'
+                }`}
+            </p>
+            <div className="mesh-extract-actions">
+              <button
+                type="button"
+                className="button subtle-button"
+                disabled={meshExtracting}
+                onClick={() => setMeshOffer(null)}
+              >
+                {meshOffer.error ? 'OK' : 'Cancel'}
+              </button>
+              {!meshOffer.error && (
+                <button
+                  type="button"
+                  className="button primary-button"
+                  disabled={meshExtracting}
+                  onClick={() => { void confirmMeshExtract(); }}
+                >
+                  {meshExtracting ? 'Extracting…' : 'Extract'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <FeedbackModal
         open={feedbackOpen}
         onClose={() => setFeedbackOpen(false)}
@@ -6627,13 +8098,52 @@ export default function App() {
       <TemplateThumbHost />
       {templatePickerOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setTemplatePickerOpen(false); }}>
-          <div className="export-modal template-modal" role="dialog" aria-modal="true" aria-labelledby="template-title">
+          <div
+            className={`export-modal template-modal${isDeveloperToolset ? ' is-dev-toolset' : ''}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="template-title"
+          >
             <div className="modal-head">
               <div className="modal-icon"><LayoutTemplate size={21} /></div>
               <button className="modal-close" aria-label="Close templates" onClick={() => setTemplatePickerOpen(false)}><X size={19} /></button>
             </div>
-            <h2 id="template-title">Start a new project</h2>
-            <p>Each template is a studio angle with its motion already on the timeline. Looping shots start playing. Opens in a new tab.</p>
+            <h2 id="template-title">
+              {isDeveloperToolset ? 'Edit shipped templates' : 'Start a new project'}
+            </h2>
+            <p>
+              {isDeveloperToolset
+                ? 'Dev mode — open any Devices or Scenes layout, tweak it, then Ship / Update so User mode gets the same templates.'
+                : 'Each template is a studio angle with its motion already on the timeline. Looping shots start playing. Opens in a new tab.'}
+            </p>
+            {toolsetSwitchAvailable && (
+              <div
+                className="workspace-toolset-switch template-toolset-switch"
+                role="group"
+                aria-label="Template library mode"
+              >
+                <button
+                  type="button"
+                  className={isDeveloperToolset ? 'is-active' : ''}
+                  aria-pressed={isDeveloperToolset}
+                  title="Show all templates as Dev-editable"
+                  onClick={() => setToolset('developer')}
+                >
+                  <Wrench size={13} strokeWidth={1.9} />
+                  Dev templates
+                </button>
+                <button
+                  type="button"
+                  className={!isDeveloperToolset ? 'is-active' : ''}
+                  aria-pressed={!isDeveloperToolset}
+                  title="Show templates as users see them"
+                  onClick={() => setToolset('user')}
+                >
+                  <UserRound size={13} strokeWidth={1.9} />
+                  User templates
+                </button>
+              </div>
+            )}
             <div className="template-category-tabs" role="tablist" aria-label="Template type">
               <button
                 type="button"
@@ -6665,66 +8175,130 @@ export default function App() {
             </div>
             <div className="modal-field-label">
               {templateCategory === 'devices'
-                ? 'DEVICE LAYOUTS'
+                ? (isDeveloperToolset ? 'DEV · DEVICE LAYOUTS' : 'DEVICE LAYOUTS')
                 : templateCategory === 'scenes'
-                  ? 'SCENE COMPOSITIONS'
+                  ? (isDeveloperToolset ? 'DEV · SCENE COMPOSITIONS' : 'SCENE COMPOSITIONS')
                   : 'YOUR TEMPLATES'}
               <span>{templateCategory === 'saved' ? savedCompositions.length : `${workspace.tabs.length}/${MAX_PROJECT_TABS} tabs`}</span>
             </div>
             {templateCategory === 'saved' && (
-              <form
-                className="preset-save-row template-save-row"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  onSaveComposition();
-                }}
-              >
-                <input
-                  className="preset-name-input"
-                  value={compositionName}
-                  maxLength={40}
-                  placeholder={project.name || 'Name this template'}
-                  aria-label="Template name"
-                  onChange={(event) => setCompositionName(event.target.value)}
-                />
-                <button type="submit" className="button primary-button">
-                  <Save size={13} /> Save as template
-                </button>
-              </form>
+              <>
+                <form
+                  className="preset-save-row template-save-row"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    onSaveComposition();
+                  }}
+                >
+                  <input
+                    className="preset-name-input"
+                    value={compositionName}
+                    maxLength={40}
+                    placeholder={project.name || 'Name this template'}
+                    aria-label="Template name"
+                    onChange={(event) => setCompositionName(event.target.value)}
+                  />
+                  <button type="submit" className="button primary-button">
+                    <Save size={13} /> Save as template
+                  </button>
+                </form>
+                {isDeveloperToolset && (
+                  <div className="preset-save-row template-save-row">
+                    <button
+                      type="button"
+                      className="button"
+                      title="Copy TypeScript for COMPOSITION_TEMPLATES so this shot ships with the app"
+                      onClick={() => void onCopyBuiltinComposition('devices')}
+                    >
+                      <Copy size={13} /> Copy as built-in
+                    </button>
+                    <button
+                      type="button"
+                      className="button"
+                      title="Same, with category: scenes"
+                      onClick={() => void onCopyBuiltinComposition('scenes')}
+                    >
+                      <Copy size={13} /> as scene
+                    </button>
+                  </div>
+                )}
+              </>
             )}
             {templateCategory === 'saved' && savedCompositions.length === 0 && (
               <p className="field-caption">
                 Add devices with Device → Add device, arrange the shot, then save it as a template. Devices, angles, lighting, and motion come back with it.
               </p>
             )}
+            {templateCategory !== 'saved' && (
+              <div className="preset-save-row template-save-row" style={{ marginBottom: 10 }}>
+                <button
+                  type="button"
+                  className="button primary-button"
+                  disabled={workspace.tabs.length >= MAX_PROJECT_TABS}
+                  onClick={startBlankFile}
+                >
+                  <Plus size={13} /> Blank file
+                </button>
+                <span className="field-caption">Untitled studio — soft light, no template motion</span>
+              </div>
+            )}
             <div className="template-grid">
-              {(templateCategory === 'saved' ? savedCompositions : templatesByCategory(templateCategory)).map((template) => (
-                <div key={template.id} className="template-card-wrap">
-                  <button
-                    type="button"
-                    className="template-card"
-                    onClick={() => startFromTemplate(template)}
-                  >
-                    <TemplateThumb template={template} />
-                    <div className="template-card-body">
-                      <strong>{template.label}</strong>
-                      <span>{template.description}</span>
-                      <em>{template.badge}</em>
-                    </div>
-                  </button>
-                  {templateCategory === 'saved' && (
+              {(templateCategory === 'saved' ? savedCompositions : templatesByCategory(templateCategory)).map((template) => {
+                const editable = isDeveloperToolset && templateCategory !== 'saved';
+                return (
+                  <div key={template.id} className={`template-card-wrap${editable ? ' is-dev-editable' : ''}`}>
                     <button
                       type="button"
-                      className="template-card-remove"
-                      title={`Remove ${template.label}`}
-                      aria-label={`Remove ${template.label}`}
-                      onClick={() => onDeleteComposition(template.id)}
+                      className="template-card"
+                      title={editable ? `Edit “${template.label}” in Dev, then Ship / Update for User` : undefined}
+                      onClick={() => startFromTemplate(template)}
                     >
-                      <Trash2 size={12} />
+                      <TemplateThumb template={template} />
+                      <div className="template-card-body">
+                        <strong>{template.label}</strong>
+                        <span>
+                          {editable
+                            ? 'Open → tweak → Update shipped so User templates match'
+                            : template.description}
+                        </span>
+                        <em>{editable ? 'Dev editable' : template.badge}</em>
+                      </div>
                     </button>
-                  )}
-                </div>
-              ))}
+                    <div className="template-card-actions">
+                      <button
+                        type="button"
+                        className="template-card-action"
+                        title={
+                          templateCategory === 'saved'
+                            ? `Duplicate “${template.label}”`
+                            : `Duplicate “${template.label}” into Yours`
+                        }
+                        aria-label={`Duplicate ${template.label}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onDuplicateLibraryTemplate(template);
+                        }}
+                      >
+                        <Copy size={12} />
+                      </button>
+                      {templateCategory === 'saved' && (
+                        <button
+                          type="button"
+                          className="template-card-action is-danger"
+                          title={`Delete “${template.label}”`}
+                          aria-label={`Delete ${template.label}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDeleteComposition(template.id);
+                          }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
             <div className="export-modal-actions">
               <button type="button" className="button subtle-button" onClick={() => setTemplatePickerOpen(false)}>Cancel</button>

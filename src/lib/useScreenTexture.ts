@@ -120,7 +120,9 @@ export function useScreenEmissiveMap({
     if (kind === 'none' || (!screenshot && !liveStream)) {
       stopLoop();
       disposeVideo();
-      material.emissiveMap = originalEmissiveMap ?? null;
+      // Keep the display black. originalEmissiveMap is only a UV reference —
+      // assigning a packed albedo atlas here showed random logos on the screen.
+      material.emissiveMap = null;
       material.needsUpdate = true;
       return () => {
         cancelled = true;

@@ -102,3 +102,61 @@ export function applySurfaceLook(
   material.specularIntensity = 1;
   material.needsUpdate = true;
 }
+
+function authoredShimmer(physical: THREE.MeshPhysicalMaterial): boolean {
+  if ((physical.sheen ?? 0) > 0.02) return true;
+  if ((physical.iridescence ?? 0) > 0.02) return true;
+  if (Math.abs(physical.anisotropy ?? 0) > 0.02) return true;
+  if ((physical.clearcoat ?? 0) > 0.05) return true;
+  if ((physical.transmission ?? 0) > 0.05) return true;
+  if ((physical.specularIntensity ?? 1) > 1.05) return true;
+  return false;
+}
+
+/**
+ * Wire the studio HDRI onto authored materials without rewriting PBR values.
+ * Used for imported GLBs so metal / glass / clearcoat / sheen stay as exported.
+ */
+export function attachStudioEnvMap(
+  root: THREE.Object3D,
+  envMap: THREE.Texture | null,
+  skipNames: Set<string> = new Set(),
+) {
+  if (!envMap) return;
+  const seen = new Set<THREE.Material>();
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      if (!mat || seen.has(mat) || skipNames.has(mat.name)) continue;
+      seen.add(mat);
+      const standard = mat as THREE.MeshStandardMaterial;
+      if (!('envMap' in standard)) continue;
+      standard.envMap = envMap;
+      const physical = standard as THREE.MeshPhysicalMaterial;
+      const metal = typeof standard.metalness === 'number' ? standard.metalness : 0;
+      const rough = typeof standard.roughness === 'number' ? standard.roughness : 0.5;
+      const wantsIbl = metal > 0.2 || rough < 0.45 || authoredShimmer(physical);
+      const intensity = typeof standard.envMapIntensity === 'number' ? standard.envMapIntensity : 0;
+      // Keep authored intensity; lift missing/zero so sheen and metal can shimmer.
+      if (wantsIbl && intensity <= 0.05) {
+        standard.envMapIntensity = metal > 0.45 || authoredShimmer(physical) ? 1.15 : 1;
+      }
+      // Sharper mip sampling so fine specular / anisotropy detail stays crisp.
+      for (const key of [
+        'map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap',
+        'clearcoatMap', 'clearcoatNormalMap', 'sheenColorMap', 'sheenRoughnessMap',
+        'specularIntensityMap', 'specularColorMap', 'anisotropyMap',
+        'iridescenceMap', 'iridescenceThicknessMap',
+      ] as const) {
+        const tex = (standard as unknown as Record<string, THREE.Texture | null>)[key];
+        if (tex?.isTexture && tex.anisotropy < 8) {
+          tex.anisotropy = 8;
+          tex.needsUpdate = true;
+        }
+      }
+      standard.needsUpdate = true;
+    }
+  });
+}

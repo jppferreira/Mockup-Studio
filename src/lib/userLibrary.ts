@@ -10,6 +10,7 @@ import { normalizeReflectionStyle } from './reflectionStyle';
 
 const SIZE_KEY = 'mockup-studio.saved-sizes';
 const ANGLE_KEY = 'mockup-studio.saved-angles';
+const CAMERA_ANGLE_KEY = 'mockup-studio.saved-camera-angles';
 const COMP_KEY = 'mockup-studio.saved-compositions';
 const MAX_ITEMS = 24;
 
@@ -29,6 +30,17 @@ export interface SavedAngle {
   rotation: Vec3;
 }
 
+/** Bookmarked camera orbit (offset from the framed device). */
+export interface SavedCameraAngle {
+  id: string;
+  label: string;
+  hint: string;
+  offset: Vec3;
+  lookOffset?: Vec3;
+  cameraView: CameraView;
+  cameraLens: CameraLens;
+}
+
 const CAMERA_VIEWS = new Set<CameraView>(['front', 'left', 'right', 'top']);
 const CAMERA_LENS_IDS = new Set<CameraLens>(CAMERA_LENSES.map((item) => item.id));
 const DEVICE_COLOR_IDS = new Set<DeviceColor>(DEVICE_COLORS.map((item) => item.id));
@@ -36,7 +48,7 @@ const PROP_KINDS = new Set<string>(SCENE_PROP_KINDS);
 const ANIM_PROPS = new Set<AnimProperty>([
   'rotation.x', 'rotation.y', 'rotation.z',
   'position.x', 'position.y', 'position.z',
-  'scale', 'camera.x', 'camera.y', 'camera.z',
+  'scale', 'lidOpen', 'camera.x', 'camera.y', 'camera.z',
 ]);
 
 function readList(key: string): unknown[] {
@@ -171,6 +183,93 @@ export function deleteSavedAngle(id: string): SavedAngle[] {
   return next;
 }
 
+/** Matches types.EYE_CAMERA_DISTANCE — kept local to avoid a circular import. */
+const EYE_CAMERA_DISTANCE_FALLBACK = 8.175;
+
+function cameraAngleHint(offset: Vec3, view: CameraView) {
+  const dist = Math.sqrt(offset.x * offset.x + offset.y * offset.y + offset.z * offset.z);
+  return `${view[0].toUpperCase()}${view.slice(1)} · ${dist.toFixed(1)}u`;
+}
+
+export function loadSavedCameraAngles(): SavedCameraAngle[] {
+  return readList(CAMERA_ANGLE_KEY).flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const entry = item as Partial<SavedCameraAngle>;
+    if (typeof entry.id !== 'string' || !entry.id.startsWith('cam-')) return [];
+    if (typeof entry.label !== 'string' || !entry.label.trim()) return [];
+    const offset = vec3(entry.offset, { x: 0, y: 0, z: EYE_CAMERA_DISTANCE_FALLBACK });
+    const cameraView = CAMERA_VIEWS.has(entry.cameraView as CameraView)
+      ? (entry.cameraView as CameraView)
+      : 'front';
+    const cameraLens = CAMERA_LENS_IDS.has(entry.cameraLens as CameraLens)
+      ? (entry.cameraLens as CameraLens)
+      : 'standard';
+    const lookOffset = entry.lookOffset ? vec3(entry.lookOffset) : undefined;
+    return [{
+      id: entry.id,
+      label: entry.label.trim().slice(0, 24),
+      hint: typeof entry.hint === 'string' && entry.hint.trim()
+        ? entry.hint.trim().slice(0, 80)
+        : cameraAngleHint(offset, cameraView),
+      offset: {
+        x: Number(offset.x.toFixed(4)),
+        y: Number(offset.y.toFixed(4)),
+        z: Number(offset.z.toFixed(4)),
+      },
+      lookOffset: lookOffset
+        ? {
+          x: Number(lookOffset.x.toFixed(4)),
+          y: Number(lookOffset.y.toFixed(4)),
+          z: Number(lookOffset.z.toFixed(4)),
+        }
+        : undefined,
+      cameraView,
+      cameraLens,
+    }];
+  }).slice(0, MAX_ITEMS);
+}
+
+export function saveCameraAngle(
+  label: string,
+  pose: {
+    offset: Vec3;
+    lookOffset?: Vec3;
+    cameraView: CameraView;
+    cameraLens: CameraLens;
+  },
+): SavedCameraAngle {
+  const angles = loadSavedCameraAngles();
+  const offset = {
+    x: Number(pose.offset.x.toFixed(4)),
+    y: Number(pose.offset.y.toFixed(4)),
+    z: Number(pose.offset.z.toFixed(4)),
+  };
+  const lookOffset = pose.lookOffset
+    ? {
+      x: Number(pose.lookOffset.x.toFixed(4)),
+      y: Number(pose.lookOffset.y.toFixed(4)),
+      z: Number(pose.lookOffset.z.toFixed(4)),
+    }
+    : undefined;
+  const saved: SavedCameraAngle = {
+    id: newId('cam'),
+    label: label.trim().slice(0, 24) || `Cam ${angles.length + 1}`,
+    hint: cameraAngleHint(offset, pose.cameraView),
+    offset,
+    lookOffset,
+    cameraView: pose.cameraView,
+    cameraLens: pose.cameraLens,
+  };
+  writeList(CAMERA_ANGLE_KEY, [saved, ...angles]);
+  return saved;
+}
+
+export function deleteSavedCameraAngle(id: string): SavedCameraAngle[] {
+  const next = loadSavedCameraAngles().filter((item) => item.id !== id);
+  writeList(CAMERA_ANGLE_KEY, next);
+  return next;
+}
+
 function cleanAnimation(clip: unknown, deviceCount: number): AnimationClip | undefined {
   if (!clip || typeof clip !== 'object') return undefined;
   const entry = clip as Partial<AnimationClip>;
@@ -267,6 +366,21 @@ export function normalizeCompositions(items: unknown[]): CompositionTemplate[] {
       fillIntensity: finite(entry.fillIntensity, 0.5),
       shadowOpacity: finite(entry.shadowOpacity, 0.35),
       shadowSoftness: finite(entry.shadowSoftness, 2),
+      shadowType: (['contact', 'soft', 'sharp', 'off'] as const).includes(entry.shadowType as never)
+        ? entry.shadowType
+        : undefined,
+      shadowContact: typeof entry.shadowContact === 'number'
+        ? clamp(finite(entry.shadowContact, 0.45), 0, 1)
+        : undefined,
+      shadowQuality: (['auto', 'high', 'ultra'] as const).includes(entry.shadowQuality as never)
+        ? entry.shadowQuality
+        : undefined,
+      ...(typeof entry.environmentIntensity === 'number'
+        ? { environmentIntensity: clamp(finite(entry.environmentIntensity, 1), 0, 4) }
+        : {}),
+      ...(typeof entry.toneMappingExposure === 'number'
+        ? { toneMappingExposure: clamp(finite(entry.toneMappingExposure, 1.45), 0.2, 4) }
+        : {}),
       showGroundBase: entry.showGroundBase !== false,
       linkSplitTransform: entry.linkSplitTransform !== false,
       cameraView: CAMERA_VIEWS.has(entry.cameraView as CameraView) ? entry.cameraView : undefined,
@@ -307,6 +421,8 @@ export function normalizeCompositions(items: unknown[]): CompositionTemplate[] {
       edgeBlurTop: entry.edgeBlurTop === true,
       edgeBlurBottom: entry.edgeBlurBottom === true,
       edgeBlurAmount: clamp(finite(entry.edgeBlurAmount, 0), 0, 80),
+      depthOfField: entry.depthOfField === true,
+      depthOfFieldAmount: clamp(finite(entry.depthOfFieldAmount, 0.48), 0.05, 1),
     };
     return [template];
   }).slice(0, MAX_ITEMS);
@@ -375,18 +491,59 @@ export function canonicalTemplatesJson(templates: CompositionTemplate[]): string
   return JSON.stringify(normalizeCompositions(templates));
 }
 
-export function saveComposition(label: string, project: MockupProject): CompositionTemplate {
-  const compositions = loadSavedCompositions();
+function slugifyCompositionId(label: string) {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return slug || 'composition';
+}
+
+function roundExportValue(value: unknown): unknown {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return 0;
+    const rounded = Math.round(value * 10000) / 10000;
+    return Object.is(rounded, -0) ? 0 : rounded;
+  }
+  if (Array.isArray(value)) return value.map(roundExportValue);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (nested === undefined) continue;
+      out[key] = roundExportValue(nested);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** Snapshot the open project as a composition template (does not persist). */
+export function compositionFromProject(
+  label: string,
+  project: MockupProject,
+  options?: {
+    id?: string;
+    category?: CompositionTemplate['category'];
+    description?: string;
+    badge?: string;
+    preview?: CompositionTemplate['preview'];
+  },
+): CompositionTemplate {
   const devices = project.devices.slice(0, 6);
   const mode = project.compositionMode === 'split' ? 'split' as const : 'single' as const;
   const indexById = new Map(devices.map((device, index) => [device.id, index]));
-  const saved: CompositionTemplate = {
-    id: newId('comp'),
-    label: label.trim().slice(0, 40) || project.name.trim().slice(0, 40) || `Composition ${compositions.length + 1}`,
-    description: `${devices.length} device${devices.length === 1 ? '' : 's'} · ${mode === 'split' ? 'Split' : 'Single'}`,
-    badge: 'Template',
-    category: 'saved',
-    preview: previewForCount(devices.length, mode),
+  const resolvedLabel = label.trim().slice(0, 40)
+    || project.name.trim().slice(0, 40)
+    || `Composition ${devices.length}`;
+  return {
+    id: options?.id ?? newId('comp'),
+    label: resolvedLabel,
+    description: options?.description
+      ?? `${devices.length} device${devices.length === 1 ? '' : 's'} · ${mode === 'split' ? 'Split' : 'Single'}`,
+    badge: options?.badge ?? 'Template',
+    category: options?.category ?? 'saved',
+    preview: options?.preview ?? previewForCount(devices.length, mode),
     background: project.background,
     gradient: { ...project.gradientColors },
     compositionMode: mode,
@@ -403,6 +560,13 @@ export function saveComposition(label: string, project: MockupProject): Composit
       lidOpen: device.lidOpen,
       deviceColor: device.deviceColor,
       clayMode: device.clayMode,
+      ...(device.materialTweaks
+        ? {
+          materialTweaks: Object.fromEntries(
+            Object.entries(device.materialTweaks).map(([name, tweak]) => [name, { ...tweak }]),
+          ),
+        }
+        : {}),
     })),
     sceneProps: (project.sceneProps ?? []).slice(0, 24).map((prop) => ({
       kind: prop.kind,
@@ -415,14 +579,32 @@ export function saveComposition(label: string, project: MockupProject): Composit
     fillIntensity: project.fillIntensity,
     shadowOpacity: project.shadowOpacity,
     shadowSoftness: project.shadowSoftness,
+    shadowType: project.shadowType,
+    shadowContact: project.shadowContact,
+    shadowQuality: project.shadowQuality,
     showGroundBase: project.showGroundBase !== false,
     lightPosition: { ...project.lightPosition },
     lightColor: project.lightColor,
+    // Extra luminaires ship with saved / built-in compositions when present.
+    ...(project.sceneLights?.length
+      ? { sceneLights: project.sceneLights.map((light) => ({ ...light, position: { ...light.position }, target: { ...light.target } })) }
+      : {}),
+    ...(project.environmentIntensity != null
+      ? { environmentIntensity: project.environmentIntensity }
+      : {}),
+    ...(project.toneMappingExposure != null
+      ? { toneMappingExposure: project.toneMappingExposure }
+      : {}),
+    ...(project.reflectionMap && project.reflectionMap !== 'custom'
+      ? { reflectionMap: project.reflectionMap }
+      : {}),
     cameraView: project.cameraView,
     cameraLens: project.cameraLens,
     edgeBlurTop: project.edgeBlurTop,
     edgeBlurBottom: project.edgeBlurBottom,
     edgeBlurAmount: project.edgeBlurAmount,
+    depthOfField: project.depthOfField,
+    depthOfFieldAmount: project.depthOfFieldAmount,
     overlays: (project.overlays ?? []).filter((overlay) => overlay.kind === 'text' || overlay.kind === 'comment').slice(0, 12).map((overlay) => ({
       ...overlay,
       imageData: null,
@@ -441,12 +623,85 @@ export function saveComposition(label: string, project: MockupProject): Composit
       }),
     },
   };
+}
+
+/**
+ * TypeScript object ready to paste into COMPOSITION_TEMPLATES in templates.ts
+ * so the shot ships with the app for every user.
+ */
+export function formatBuiltinCompositionSource(
+  label: string,
+  project: MockupProject,
+  options?: { category?: 'devices' | 'scenes'; id?: string },
+): string {
+  const category = options?.category ?? 'devices';
+  const template = compositionFromProject(label, project, {
+    id: options?.id ?? slugifyCompositionId(label.trim() || project.name || 'composition'),
+    category,
+    badge: category === 'scenes' ? 'Scene' : 'Layout',
+  });
+  const body = JSON.stringify(roundExportValue(template), null, 2)
+    .replace(/^(\s*)"([^"]+)":/gm, '$1$2:')
+    .replace(/"/g, "'");
+  return `  ${body.replace(/\n/g, '\n  ')},\n`;
+}
+
+export function saveComposition(label: string, project: MockupProject): CompositionTemplate {
+  const compositions = loadSavedCompositions();
+  const saved = compositionFromProject(label, project, {
+    id: newId('comp'),
+    category: 'saved',
+    badge: 'Template',
+  });
+  if (!label.trim() && !project.name.trim()) {
+    saved.label = `Composition ${compositions.length + 1}`;
+  }
   writeList(COMP_KEY, [saved, ...compositions]);
   return saved;
 }
 
 export function deleteSavedComposition(id: string): CompositionTemplate[] {
   const next = loadSavedCompositions().filter((item) => item.id !== id);
+  writeList(COMP_KEY, next);
+  return next;
+}
+
+/** Clone a saved template into Yours with a new id. */
+export function duplicateSavedComposition(id: string): CompositionTemplate | null {
+  const compositions = loadSavedCompositions();
+  const source = compositions.find((item) => item.id === id);
+  if (!source) return null;
+  const copy: CompositionTemplate = {
+    ...source,
+    id: newId('comp'),
+    label: `${source.label} copy`.slice(0, 40),
+    category: 'saved',
+    badge: source.badge || 'Template',
+  };
+  writeList(COMP_KEY, [copy, ...compositions]);
+  return copy;
+}
+
+/** Copy any Devices/Scenes layout into the personal Yours library. */
+export function copyTemplateToSaved(template: CompositionTemplate): CompositionTemplate {
+  const compositions = loadSavedCompositions();
+  const copy: CompositionTemplate = {
+    ...template,
+    id: newId('comp'),
+    label: `${template.label} copy`.slice(0, 40),
+    category: 'saved',
+    badge: 'Template',
+  };
+  writeList(COMP_KEY, [copy, ...compositions]);
+  return copy;
+}
+
+export function renameSavedComposition(id: string, label: string): CompositionTemplate[] {
+  const nextLabel = label.trim().slice(0, 40);
+  if (!nextLabel) return loadSavedCompositions();
+  const next = loadSavedCompositions().map((item) => (
+    item.id === id ? { ...item, label: nextLabel } : item
+  ));
   writeList(COMP_KEY, next);
   return next;
 }

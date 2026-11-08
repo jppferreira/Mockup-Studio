@@ -1,5 +1,6 @@
 import { isPlaceholderScreenshot, placeholderForDevice, placeholderForSplitDevice } from './demo';
 import { getDevice, type DevicePlatform } from './devices';
+import { STUDIO_START_POSITION, STUDIO_START_ROTATION } from './studioEnvironment';
 import {
   ANDROID_DEVICE_ID, IOS_DEVICE_ID, createDeviceInstance, getSelectedDevice,
   syncProjectFromSelected,
@@ -271,16 +272,29 @@ export function applyDeviceToPlatform(
     // Finish stays on this pane — remembered across publish-target switches.
     deviceColor: env.deviceColor ?? project.deviceColor,
     clayMode: env.clayMode ?? project.clayMode ?? false,
+    // New model always opens front-facing above the studio floor.
+    rotation: { ...STUDIO_START_ROTATION },
+    position: project.compositionMode === 'split' ? { ...env.position } : { ...STUDIO_START_POSITION },
   };
   const devices = project.devices.map((device) => (device.id === env.id ? updated : device));
   const active = resolvePublishTarget(project);
   if (active === platform) {
-    return syncProjectFromSelected({ ...project, devices, publishTarget: platform }, updated);
+    return syncProjectFromSelected({
+      ...project,
+      devices,
+      publishTarget: platform,
+      cameraView: 'front',
+    }, updated);
   }
   // Inactive pane: persist model on its instance; keep mirrored fields on the publish env.
   const publishEnv = devices.find((d) => platformOfDevice(d) === active)
     ?? getSelectedDevice({ ...project, devices });
-  return syncProjectFromSelected({ ...project, devices, publishTarget: active }, publishEnv);
+  return syncProjectFromSelected({
+    ...project,
+    devices,
+    publishTarget: active,
+    cameraView: 'front',
+  }, publishEnv);
 }
 
 /** Patch finish onto one platform pane; mirror top-level only if that pane is the publish target. */

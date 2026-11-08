@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-/** How a laptop lid opens in model space. */
+/** How a laptop lid / foldable hinge opens in model space. */
 export type DeviceLidConfig =
   | {
       /** Rotate named nodes around local X between closed (0) and openAngle. */
@@ -28,6 +28,28 @@ export type DeviceLidConfig =
       hingeZ?: 'min' | 'max';
       /** Reparent screenMat meshes onto the hinge (default false). */
       includeScreen?: boolean;
+    }
+  | {
+      /**
+       * Book-style foldable: one wing swings around the spine.
+       * Authored open/flat; lidOpen 1 = open, 0 = closed.
+       */
+      mode: 'fold';
+      /** Moving wing parts (half of the device). */
+      wing: string[];
+      /**
+       * Meshes that span the hinge (inner screen / glass). Split at the
+       * plane so each half can ride with its wing.
+       */
+      splitSpans?: string[];
+      /** Which side of the fold plane moves. Default: min (negative axis). */
+      wingSide?: 'min' | 'max';
+      /** Fold axis in model space. Default: y (book hinge). */
+      axis?: 'x' | 'y' | 'z';
+      /** Wing rotation when fully closed (radians). */
+      closeAngle: number;
+      /** Override hinge plane along the fold axis. Default: model center. */
+      plane?: number;
     };
 
 export type LidRig =
@@ -39,9 +61,21 @@ export type LidRig =
       mode: 'hinge';
       hinge: THREE.Group;
       closeAngle: number;
+    }
+  | {
+      mode: 'fold';
+      hinge: THREE.Group;
+      closeAngle: number;
+      axis: 'x' | 'y' | 'z';
     };
 
 const HINGE_NAME = '__lidHinge';
+const FOLD_HINGE_NAME = '__foldHinge';
+
+export function lidControlLabel(config: DeviceLidConfig | undefined): string {
+  if (!config) return 'Lid';
+  return config.mode === 'fold' ? 'Fold' : 'Lid';
+}
 
 function collectAutoLidParents(root: THREE.Object3D, autoAbove: number): THREE.Object3D[] {
   root.updateMatrixWorld(true);
@@ -118,7 +152,196 @@ function collectScreenMeshes(root: THREE.Object3D, screenMat: string, lidRoots: 
   return extras;
 }
 
-/** Build a lid rig once after cloning a GLB. */
+function axisIndex(axis: 'x' | 'y' | 'z'): 0 | 1 | 2 {
+  return axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+}
+
+/** Planar UVs in local XY so a later split keeps continuous screenshot mapping. */
+function bakePlanarUvXY(mesh: THREE.Mesh) {
+  const geo = mesh.geometry;
+  const pos = geo.getAttribute('position');
+  if (!pos) return;
+  let uv = geo.getAttribute('uv') as THREE.BufferAttribute | null;
+  if (!uv || uv.count !== pos.count) {
+    uv = new THREE.BufferAttribute(new Float32Array(pos.count * 2), 2);
+    geo.setAttribute('uv', uv);
+  }
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < pos.count; i += 1) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  }
+  const spanX = maxX - minX || 1;
+  const spanY = maxY - minY || 1;
+  for (let i = 0; i < pos.count; i += 1) {
+    uv.setXY(i, (pos.getX(i) - minX) / spanX, (pos.getY(i) - minY) / spanY);
+  }
+  uv.needsUpdate = true;
+  mesh.userData.foldPreserveUv = true;
+}
+
+function extractHalfGeometry(
+  source: THREE.BufferGeometry,
+  axis: 'x' | 'y' | 'z',
+  plane: number,
+  keep: 'min' | 'max',
+): THREE.BufferGeometry | null {
+  const pos = source.getAttribute('position');
+  if (!pos) return null;
+  const ax = axisIndex(axis);
+  const index = source.getIndex();
+  const triCount = index ? index.count / 3 : pos.count / 3;
+  const vert = (tri: number, corner: number) => (
+    index ? index.getX(tri * 3 + corner) : tri * 3 + corner
+  );
+
+  const keptTris: number[] = [];
+  for (let tri = 0; tri < triCount; tri += 1) {
+    const i0 = vert(tri, 0);
+    const i1 = vert(tri, 1);
+    const i2 = vert(tri, 2);
+    const cx = (pos.getComponent(i0, ax) + pos.getComponent(i1, ax) + pos.getComponent(i2, ax)) / 3;
+    const onMin = cx < plane;
+    if ((keep === 'min' && onMin) || (keep === 'max' && !onMin)) {
+      keptTris.push(i0, i1, i2);
+    }
+  }
+  if (!keptTris.length) return null;
+
+  const remap = new Map<number, number>();
+  const nextIndex: number[] = [];
+  for (const src of keptTris) {
+    let dst = remap.get(src);
+    if (dst === undefined) {
+      dst = remap.size;
+      remap.set(src, dst);
+    }
+    nextIndex.push(dst);
+  }
+
+  const out = new THREE.BufferGeometry();
+  const attrNames = Object.keys(source.attributes);
+  for (const name of attrNames) {
+    const attr = source.getAttribute(name);
+    if (!attr) continue;
+    const itemSize = attr.itemSize;
+    const array = new Float32Array(remap.size * itemSize);
+    for (const [src, dst] of remap) {
+      for (let k = 0; k < itemSize; k += 1) {
+        array[dst * itemSize + k] = attr.getComponent(src, k);
+      }
+    }
+    out.setAttribute(name, new THREE.BufferAttribute(array, itemSize));
+  }
+  out.setIndex(nextIndex);
+  out.computeVertexNormals();
+  return out;
+}
+
+/**
+ * Split a spanning mesh at the fold plane. Returns the wing-side half
+ * (attached to the hinge) and leaves the fixed half in place.
+ */
+function splitSpanForWing(
+  mesh: THREE.Mesh,
+  axis: 'x' | 'y' | 'z',
+  plane: number,
+  wingSide: 'min' | 'max',
+): THREE.Mesh | null {
+  bakePlanarUvXY(mesh);
+  const fixedSide = wingSide === 'min' ? 'max' : 'min';
+  const wingGeo = extractHalfGeometry(mesh.geometry, axis, plane, wingSide);
+  const fixedGeo = extractHalfGeometry(mesh.geometry, axis, plane, fixedSide);
+  if (!wingGeo || !fixedGeo) {
+    wingGeo?.dispose();
+    fixedGeo?.dispose();
+    return null;
+  }
+
+  const wingMesh = mesh.clone();
+  wingMesh.geometry = wingGeo;
+  wingMesh.name = `${mesh.name}__fold_${wingSide}`;
+  wingMesh.userData.foldPreserveUv = true;
+  wingMesh.material = mesh.material;
+  mesh.geometry.dispose();
+  mesh.geometry = fixedGeo;
+  mesh.name = `${mesh.name}__fold_${fixedSide}`;
+  mesh.userData.foldPreserveUv = true;
+  mesh.parent?.add(wingMesh);
+  wingMesh.position.copy(mesh.position);
+  wingMesh.quaternion.copy(mesh.quaternion);
+  wingMesh.scale.copy(mesh.scale);
+  return wingMesh;
+}
+
+function setupFoldRig(root: THREE.Object3D, config: Extract<DeviceLidConfig, { mode: 'fold' }>): LidRig | null {
+  const axis = config.axis ?? 'y';
+  const wingSide = config.wingSide ?? 'min';
+  const ax = axisIndex(axis);
+
+  const wingParts = config.wing
+    .map((name) => root.getObjectByName(name))
+    .filter((obj): obj is THREE.Object3D => Boolean(obj));
+  if (!wingParts.length) return null;
+
+  root.updateMatrixWorld(true);
+  const whole = new THREE.Box3().setFromObject(root);
+  if (whole.isEmpty()) return null;
+  const plane = typeof config.plane === 'number'
+    ? config.plane
+    : (whole.min.getComponent(ax) + whole.max.getComponent(ax)) * 0.5;
+
+  const wingExtras: THREE.Object3D[] = [];
+  for (const name of config.splitSpans ?? []) {
+    const obj = root.getObjectByName(name);
+    const mesh = obj as THREE.Mesh | null;
+    if (!mesh?.isMesh) continue;
+    const wingHalf = splitSpanForWing(mesh, axis, plane, wingSide);
+    if (wingHalf) wingExtras.push(wingHalf);
+  }
+
+  const attach = pruneLidRoots([...wingParts, ...wingExtras]);
+  const hingeParent = root;
+  const existing = hingeParent.children.find((child) => child.name === FOLD_HINGE_NAME);
+  if (existing) existing.removeFromParent();
+
+  const hinge = new THREE.Group();
+  hinge.name = FOLD_HINGE_NAME;
+  hingeParent.add(hinge);
+  hingeParent.updateMatrixWorld(true);
+
+  const hingeWorld = new THREE.Vector3().copy(whole.getCenter(new THREE.Vector3()));
+  hingeWorld.setComponent(ax, plane);
+  // Keep the hinge on the mid-thickness of the device along Z for book folds.
+  if (axis === 'y') {
+    hingeWorld.z = (whole.min.z + whole.max.z) * 0.5;
+  }
+  const inv = new THREE.Matrix4().copy(hingeParent.matrixWorld).invert();
+  hinge.position.copy(hingeWorld).applyMatrix4(inv);
+  hinge.updateMatrixWorld(true);
+
+  for (const obj of attach) {
+    if (obj === hinge || obj === hingeParent) continue;
+    if (isAncestorOf(obj, hinge)) continue;
+    hinge.attach(obj);
+  }
+
+  return {
+    mode: 'fold',
+    hinge,
+    closeAngle: config.closeAngle,
+    axis,
+  };
+}
+
+/** Build a lid / fold rig once after cloning a GLB. */
 export function setupLidRig(
   root: THREE.Object3D,
   config: DeviceLidConfig,
@@ -136,6 +359,10 @@ export function setupLidRig(
       parts.push({ object, openAngle });
     }
     return parts.length ? { mode: 'node', parts } : null;
+  }
+
+  if (config.mode === 'fold') {
+    return setupFoldRig(root, config);
   }
 
   const named = (config.nodes ?? [])
@@ -203,5 +430,15 @@ export function applyLidOpen(rig: LidRig, lidOpen: number) {
     }
     return;
   }
-  rig.hinge.rotation.x = rig.closeAngle * (1 - open);
+  const angle = rig.closeAngle * (1 - open);
+  if (rig.mode === 'fold') {
+    rig.hinge.rotation.x = 0;
+    rig.hinge.rotation.y = 0;
+    rig.hinge.rotation.z = 0;
+    if (rig.axis === 'x') rig.hinge.rotation.x = angle;
+    else if (rig.axis === 'y') rig.hinge.rotation.y = angle;
+    else rig.hinge.rotation.z = angle;
+    return;
+  }
+  rig.hinge.rotation.x = angle;
 }

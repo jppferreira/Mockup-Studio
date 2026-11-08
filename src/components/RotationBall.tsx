@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react';
 import { TransformControls } from '@react-three/drei';
-import { useThree } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { Vec3 } from '../types';
 
@@ -36,6 +36,11 @@ type ControlsHandle = THREE.Object3D & {
 export type GizmoControl = {
   /** Imperatively enable or disable both gizmos (body-drag must win on the same click). */
   setEnabled: (enabled: boolean) => void;
+  /**
+   * Empty-canvas / floor taps: kill any in-flight handle drag before
+   * TransformControls can teleport the device from a fat picker behind the hit.
+   */
+  suppressGesture: () => void;
 };
 
 const ROTATE_DROP = new Set(['XYZE']);
@@ -81,43 +86,15 @@ function thickenTorus(geometry: THREE.BufferGeometry, major: number, tube: numbe
   geometry.computeBoundingSphere();
 }
 
-function markGizmoHandles(root: THREE.Object3D | undefined) {
+function markGizmoHandles(root: THREE.Object3D | undefined, tool: Tool) {
   root?.traverse((child) => {
     const mesh = child as THREE.Mesh;
     const line = child as THREE.Line;
-    if (mesh.isMesh || line.isLine) child.userData.isGizmoHandle = true;
+    if (mesh.isMesh || line.isLine) {
+      child.userData.isGizmoHandle = true;
+      child.userData.gizmoTool = tool;
+    }
   });
-}
-
-function addVisibleRing(
-  root: THREE.Object3D,
-  name: string,
-  radius: number,
-  tube: number,
-  color: number,
-  rotation: [number, number, number] | null,
-) {
-  const geometry = new THREE.TorusGeometry(radius, tube, 10, 64);
-  if (rotation) {
-    geometry.applyMatrix4(new THREE.Matrix4().makeRotationFromEuler(
-      new THREE.Euler(rotation[0], rotation[1], rotation[2]),
-    ));
-  }
-  const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
-    color,
-    depthTest: false,
-    depthWrite: false,
-    transparent: true,
-    opacity: 0.95,
-    toneMapped: false,
-    side: THREE.DoubleSide,
-    fog: false,
-  }));
-  mesh.name = name;
-  mesh.renderOrder = 1000;
-  mesh.userData.isGizmoHandle = true;
-  mesh.userData.customRing = true;
-  root.add(mesh);
 }
 
 function gizmoGroups(controls: ControlsHandle | null) {
@@ -132,51 +109,50 @@ function gizmoGroups(controls: ControlsHandle | null) {
 }
 
 /**
- * The stock gizmo hides a grab sphere in the middle and thin 1px rings.
- * Drop the center ball and translate planes so the device body can be dragged,
- * and draw rings fat enough to hit.
+ * Keep stock TransformControls ring Lines (correct camera-facing bake) and only
+ * thicken invisible pickers for hit area. Earlier custom full tori used picker
+ * orientations under TC's line quaternions, so rings floated beside the device.
  */
 function prepareGizmos(rotate: ControlsHandle | null, translate: ControlsHandle | null) {
   const rotateGroups = gizmoGroups(rotate);
   const rotateRoot = rotateGroups.gizmo?.rotate;
   const rotatePicker = rotateGroups.picker?.rotate;
-  if (rotate && rotateRoot && rotatePicker && !rotate.userData.gizmoPrepared) {
+  // Versioned so HMR clears leftover custom torus meshes / picker sizes.
+  const PREP = 'stock-arcs-v4';
+  if (rotate && rotateRoot && rotatePicker && rotate.userData.gizmoPrepared !== PREP) {
+    for (const child of [...rotateRoot.children]) {
+      if (child.userData.customRing) child.removeFromParent();
+    }
     dropHandles(rotateRoot, ROTATE_DROP);
     dropHandles(rotatePicker, ROTATE_DROP);
     for (const child of rotatePicker.children) {
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh) continue;
-      // Wide enough to grab, still a band so the arrow tips stay reachable.
-      const major = child.name === 'E' ? 1.2 : 1;
-      const tube = child.name === 'E' ? 0.11 : 0.16;
-      thickenTorus(mesh.geometry, major, tube);
-      mesh.userData.isGizmoHandle = true;
+      // Keep pickers tight — fat tubes steal empty-canvas / floor taps and
+      // make the gimbal jump when TransformControls still wins the raycast.
+      const major = child.name === 'E' ? 1.15 : 1;
+      const tube = child.name === 'E' ? 0.04 : 0.05;
+      if (!mesh.userData.torusThickened) {
+        thickenTorus(mesh.geometry, major, tube);
+        mesh.userData.torusThickened = true;
+      }
     }
-    // Match the picker tori. The gizmo rewrites each handle's quaternion
-    // every frame, so a ring stays under the cursor only when its baked
-    // shape matches the invisible picker of the same name.
-    addVisibleRing(rotateRoot, 'X', 1, 0.04, 0xff3355, [0, -Math.PI / 2, -Math.PI / 2]);
-    addVisibleRing(rotateRoot, 'Y', 1, 0.04, 0x35d36a, [Math.PI / 2, 0, 0]);
-    addVisibleRing(rotateRoot, 'Z', 1, 0.04, 0x3c7dff, [0, 0, -Math.PI / 2]);
-    addVisibleRing(rotateRoot, 'E', 1.25, 0.026, 0xf0c84b, null);
-    for (const child of [...rotateRoot.children]) {
-      if (!child.userData.customRing) child.removeFromParent();
-    }
-    markGizmoHandles(rotateRoot);
-    rotate.userData.gizmoPrepared = true;
+    markGizmoHandles(rotatePicker, 'rotate');
+    markGizmoHandles(rotateRoot, 'rotate');
+    rotate.userData.gizmoPrepared = PREP;
   }
 
   const translateGroups = gizmoGroups(translate);
   const translateRoot = translateGroups.gizmo?.translate;
   const translatePicker = translateGroups.picker?.translate;
-  if (translate && translateRoot && translatePicker && !translate.userData.gizmoPrepared) {
+  if (translate && translateRoot && translatePicker && translate.userData.gizmoPrepared !== PREP) {
     dropHandles(translateRoot, TRANSLATE_DROP);
     dropHandles(translatePicker, TRANSLATE_DROP);
-    for (const child of translatePicker.children) {
-      child.userData.isGizmoHandle = true;
-    }
-    markGizmoHandles(translateRoot);
-    translate.userData.gizmoPrepared = true;
+    // Mark the whole picker tree (handle groups + cylinder meshes) so scene
+    // raycasts classify arrow grabs as gizmo hits, not empty canvas / body.
+    markGizmoHandles(translatePicker, 'translate');
+    markGizmoHandles(translateRoot, 'translate');
+    translate.userData.gizmoPrepared = PREP;
   }
 }
 
@@ -206,18 +182,32 @@ function styleGizmo(controls: ControlsHandle | null | undefined, kind: Tool) {
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       for (const mat of mats) {
         if (!mat) continue;
-        const m = mat as THREE.MeshBasicMaterial;
+        const m = mat as THREE.MeshBasicMaterial & { tempOpacity?: number; userData: { gimbalBaseOpacity?: number } };
         m.depthTest = false;
         m.transparent = true;
-        if ((m.opacity ?? 1) < 0.4) {
+        m.toneMapped = false;
+        // TransformControls fades rings that are not under the pointer. Remember
+        // the authored opacity so that fade cannot permanently hide the gimbal.
+        const sample = Math.max(m.tempOpacity ?? 0, m.opacity ?? 0);
+        if (m.userData.gimbalBaseOpacity == null && sample >= 0.4) {
+          m.userData.gimbalBaseOpacity = sample;
+        }
+        const base = m.userData.gimbalBaseOpacity ?? sample;
+        if (base < 0.4) {
           m.opacity = 0;
           m.visible = false;
         } else {
-          m.opacity = Math.min(1, Math.max(m.opacity ?? 1, 0.95));
+          m.visible = true;
         }
-        m.toneMapped = false;
         m.needsUpdate = true;
       }
+    }
+
+    // Stock helper AXIS lines are 1e6 units long — with depthTest off they read
+    // as red/blue streaks shooting off the device ("gizmo left the center").
+    if (child.tag === 'helper' || child.name === 'AXIS') {
+      child.visible = false;
+      return;
     }
 
     const line = child as THREE.LineSegments;
@@ -237,6 +227,50 @@ function styleGizmo(controls: ControlsHandle | null | undefined, kind: Tool) {
 function setControlsEnabled(controls: ControlsHandle | null, enabled: boolean) {
   if (!controls) return;
   controls.enabled = enabled;
+}
+
+/**
+ * Dual TransformControls on one canvas: both can start a drag on the same
+ * pointerdown before beginDrag disables the loser. The disabled control then
+ * skips pointerup (enabled gate), leaving dragging=true + a document move
+ * listener. Re-enable later and the next move teleports the device.
+ *
+ * @param restoreStart When true, snap the object back to the drag-start pose
+ * (cancel / fat-picker false start). When false, only clear listeners — used
+ * after a real endDrag commit so we do not wipe the rotation the user just made.
+ */
+function abortControlsDrag(controls: ControlsHandle | null, restoreStart = true) {
+  if (!controls) return;
+  const rig = controls as RotateRig & {
+    onPointerMove?: (event: PointerEvent) => void;
+    onPointerUp?: (event: PointerEvent) => void;
+    domElement?: HTMLElement | null;
+    positionStart?: THREE.Vector3;
+    quaternionStart?: THREE.Quaternion;
+    scaleStart?: THREE.Vector3;
+  };
+  // Empty-canvas taps that grazed a fat picker must not leave the device
+  // teleported — but a finished axis drag already wrote the pose to React;
+  // restoring here snaps the phone back to front and the layout sync skips
+  // re-applying because rotation deps did not change.
+  if (
+    restoreStart
+    && rig.dragging
+    && rig.object
+    && rig.positionStart
+    && rig.quaternionStart
+    && rig.scaleStart
+  ) {
+    rig.object.position.copy(rig.positionStart);
+    rig.object.quaternion.copy(rig.quaternionStart);
+    rig.object.scale.copy(rig.scaleStart);
+  }
+  rig.dragging = false;
+  rig.axis = null;
+  const doc = rig.domElement?.ownerDocument;
+  if (doc && rig.onPointerMove) {
+    doc.removeEventListener('pointermove', rig.onPointerMove);
+  }
 }
 
 type RotateRig = ControlsHandle & {
@@ -266,9 +300,8 @@ const arcEnd = new THREE.Vector3();
 
 /**
  * Stock axis rings spin from a fixed gain (20 / camera distance), so a short
- * drag whips the device. Scale that gain down to about one radian per
- * ring-radius of travel, and fall back to the pointer's arc when the axis
- * faces the camera (the linear gain blows up there).
+ * drag whips the device. Prefer the pointer's arc around the ring (Spline-like
+ * 1:1), and only scale the linear gain when the arc is unavailable.
  */
 function easeGimbalRotation(controls: RotateRig | null) {
   if (!controls?.pointerMove || controls.userData.gimbalEased) return;
@@ -280,27 +313,23 @@ function easeGimbalRotation(controls: RotateRig | null) {
     const object = controls.object;
     if (controls.mode !== 'rotate' || !controls.dragging || !object) return;
     if (axis !== 'X' && axis !== 'Y' && axis !== 'Z') return;
-    if (controls.space !== 'local') return;
     const unit = controls.unit?.[axis];
     const quatStart = controls.quaternionStart;
     const worldQuat = controls.worldQuaternionStart;
-    const eye = controls.eye;
-    if (!unit || !quatStart || !worldQuat || !eye) return;
+    if (!unit || !quatStart || !worldQuat) return;
 
     worldAxis.copy(unit).applyQuaternion(worldQuat);
-    const facing = Math.abs(worldAxis.dot(eye));
     const raw = controls.rotationAngle ?? 0;
     let angle = raw;
 
     const start = controls.pointStart;
     const end = controls.pointEnd;
-    const linearBroken = !Number.isFinite(raw) || facing > 0.99;
-    if (linearBroken && start && end && start.lengthSq() > 1e-6 && end.lengthSq() > 1e-6) {
+    if (start && end && start.lengthSq() > 1e-6 && end.lengthSq() > 1e-6) {
       const arc = start.angleTo(end);
       arcStart.copy(start);
       arcEnd.copy(end);
       const sign = arcStart.cross(arcEnd).dot(worldAxis) >= 0 ? 1 : -1;
-      angle = Number.isFinite(arc) ? sign * arc : 0;
+      if (Number.isFinite(arc)) angle = sign * arc;
     } else if (Number.isFinite(raw) && raw !== 0) {
       const distance = controls.worldPosition && controls.cameraPosition
         ? Math.max(0.5, controls.worldPosition.distanceTo(controls.cameraPosition))
@@ -309,10 +338,8 @@ function easeGimbalRotation(controls: RotateRig | null) {
       const zoom = (controls.camera as THREE.PerspectiveCamera | undefined)?.zoom || 1;
       const k = 1.9 * Math.tan(THREE.MathUtils.degToRad(fov) / 2);
       const factor = distance * Math.min(k / zoom, 7);
-      // three-stdlib scales rotate handles by factor * size / 7.
       const ringRadius = Math.max(0.2, factor * (controls.size ?? 1) / 7);
-      // Current angle is offset * 20 / distance. Want about offset / ringRadius.
-      const scale = THREE.MathUtils.clamp(distance / (20 * ringRadius), 0.2, 0.6);
+      const scale = THREE.MathUtils.clamp(distance / (20 * ringRadius), 0.35, 0.85);
       angle = raw * scale;
     } else {
       return;
@@ -363,8 +390,10 @@ export default function RotationBall({
   const [ready, setReady] = useState(false);
   const [dragTool, setDragTool] = useState<Tool | null>(null);
   const [listening, setListening] = useState(true);
+  const [suppressed, setSuppressed] = useState(false);
   const dragToolRef = useRef<Tool | null>(null);
   const listeningRef = useRef(true);
+  const suppressedRef = useRef(false);
   const orbit = controls as unknown as { enabled: boolean } | null;
   const orbitRef = useRef(orbit);
   orbitRef.current = orbit;
@@ -400,6 +429,39 @@ export default function RotationBall({
     return () => cancelAnimationFrame(id);
   }, [ready, mode, targets, dragTool, listening]);
 
+  // Keep the rotate pivot glued to the translate origin every frame so a
+  // leftover local offset cannot park the rings beside the device.
+  useFrame(() => {
+    if (!rotationObject) return;
+    if (rotationObject.position.lengthSq() > 1e-12) {
+      rotationObject.position.set(0, 0, 0);
+    }
+  });
+
+  // Keep OrbitControls off for the whole gimbal drag — beginDrag alone can lose
+  // the race to OrbitControls on the same pointerdown.
+  useEffect(() => {
+    if (!ready) return undefined;
+    const lockOrbit = (event: { value?: boolean }) => {
+      if (orbitRef.current) orbitRef.current.enabled = !event.value;
+    };
+    const rotate = rotateRef.current as (ControlsHandle & {
+      addEventListener?: (type: string, fn: (e: { value?: boolean }) => void) => void;
+      removeEventListener?: (type: string, fn: (e: { value?: boolean }) => void) => void;
+    }) | null;
+    const translate = translateRef.current as (ControlsHandle & {
+      addEventListener?: (type: string, fn: (e: { value?: boolean }) => void) => void;
+      removeEventListener?: (type: string, fn: (e: { value?: boolean }) => void) => void;
+    }) | null;
+    rotate?.addEventListener?.('dragging-changed', lockOrbit);
+    translate?.addEventListener?.('dragging-changed', lockOrbit);
+    return () => {
+      rotate?.removeEventListener?.('dragging-changed', lockOrbit);
+      translate?.removeEventListener?.('dragging-changed', lockOrbit);
+      if (orbitRef.current) orbitRef.current.enabled = true;
+    };
+  }, [ready, targets]);
+
   useEffect(() => {
     if (!controlRef) return undefined;
     controlRef.current = {
@@ -410,25 +472,61 @@ export default function RotationBall({
         setControlsEnabled(translateRef.current, enabled);
         setControlsEnabled(rotateRef.current, enabled);
       },
+      suppressGesture() {
+        const wasDragging = Boolean(dragToolRef.current);
+        abortControlsDrag(translateRef.current);
+        abortControlsDrag(rotateRef.current);
+        dragToolRef.current = null;
+        setDragTool(null);
+        suppressedRef.current = true;
+        setSuppressed(true);
+        setControlsEnabled(translateRef.current, false);
+        setControlsEnabled(rotateRef.current, false);
+        if (wasDragging) {
+          onDraggingChange?.(false);
+          if (orbitRef.current) orbitRef.current.enabled = true;
+        }
+        // Re-arm after this pointer finishes so the next handle grab works.
+        const rearm = () => {
+          window.removeEventListener('pointerup', rearm, true);
+          window.removeEventListener('pointercancel', rearm, true);
+          suppressedRef.current = false;
+          setSuppressed(false);
+          if (!listeningRef.current || dragToolRef.current) return;
+          setControlsEnabled(translateRef.current, true);
+          setControlsEnabled(rotateRef.current, true);
+        };
+        window.addEventListener('pointerup', rearm, true);
+        window.addEventListener('pointercancel', rearm, true);
+      },
     };
     return () => {
       controlRef.current = null;
     };
-  }, [controlRef]);
+  }, [controlRef, onDraggingChange]);
 
   if (!ready || !positionObject || !rotationObject) return null;
 
   const beginDrag = (tool: Tool) => {
-    if (dragToolRef.current && dragToolRef.current !== tool) return;
+    // Axis arrows share space with the rings. Prefer translate when both fire
+    // on the same click — otherwise rotate wins the listener race and the
+    // arrows feel dead for left/right/up/down moves.
+    if (dragToolRef.current && dragToolRef.current !== tool) {
+      if (!(tool === 'translate' && dragToolRef.current === 'rotate')) return;
+      abortControlsDrag(rotateRef.current);
+      setControlsEnabled(rotateRef.current, false);
+    }
     dragToolRef.current = tool;
     setDragTool(tool);
     onDraggingChange?.(true);
     if (orbitRef.current) orbitRef.current.enabled = false;
 
     if (tool === 'translate') {
+      abortControlsDrag(rotateRef.current);
       setControlsEnabled(rotateRef.current, false);
       setControlsEnabled(translateRef.current, true);
     } else {
+      abortControlsDrag(translateRef.current);
       setControlsEnabled(translateRef.current, false);
       setControlsEnabled(rotateRef.current, true);
     }
@@ -440,41 +538,33 @@ export default function RotationBall({
       onMove(readPosition(positionObject), { recordKeys: true });
     } else {
       onRotate(readRotation(rotationObject), { recordKeys: true });
+      // Rings must not leave a local offset on the rotate pivot.
+      rotationObject.position.set(0, 0, 0);
     }
     dragToolRef.current = null;
     setDragTool(null);
+    // Pose already committed — clear TC listeners without restoring drag-start.
+    abortControlsDrag(translateRef.current, false);
+    abortControlsDrag(rotateRef.current, false);
     setControlsEnabled(translateRef.current, true);
     setControlsEnabled(rotateRef.current, true);
     onDraggingChange?.(false);
     if (orbitRef.current) orbitRef.current.enabled = true;
   };
 
-  const translateEnabled = listening && (dragTool === null || dragTool === 'translate');
-  const rotateEnabled = listening && (dragTool === null || dragTool === 'rotate');
+  const translateEnabled = listening && !suppressed && (dragTool === null || dragTool === 'translate');
+  const rotateEnabled = listening && !suppressed && (dragTool === null || dragTool === 'rotate');
 
-  // Arrow tips stay just past the rings so a move and a turn are different grabs.
-  const translateSize = mode === 'translate' || dragTool === 'translate' ? 1.38 : 1.26;
-  const rotateSize = mode === 'rotate' || dragTool === 'rotate' ? 1.18 : 1.08;
+  // Keep sizes stable during a drag — resizing mid-gesture breaks TC's plane math
+  // and makes axis arrows feel like they stopped working.
+  const translateSize = mode === 'translate' ? 1.15 : 1.0;
+  const rotateSize = mode === 'rotate' ? 0.48 : 0.42;
 
   return (
     <>
-      <TransformControls
-        ref={rotateRef as never}
-        object={rotationObject}
-        mode="rotate"
-        size={rotateSize}
-        space="local"
-        showX
-        showY
-        showZ
-        enabled={rotateEnabled}
-        onMouseDown={() => beginDrag('rotate')}
-        onMouseUp={() => endDrag('rotate')}
-        onObjectChange={() => {
-          if (dragToolRef.current !== 'rotate') return;
-          onRotate(readRotation(rotationObject), { recordKeys: false });
-        }}
-      />
+      {/* Translate mounts first so its pointerdown runs before rotate when an
+          arrow shaft crosses a ring — otherwise rotate disables translate and
+          the coloured arrows never get the gesture. */}
       <TransformControls
         ref={translateRef as never}
         object={positionObject}
@@ -488,8 +578,47 @@ export default function RotationBall({
         onMouseDown={() => beginDrag('translate')}
         onMouseUp={() => endDrag('translate')}
         onObjectChange={() => {
-          if (dragToolRef.current !== 'translate') return;
+          const rig = translateRef.current as (ControlsHandle & { dragging?: boolean }) | null;
+          // Trust the control's own drag flag — snapping back whenever
+          // dragToolRef lagged killed real arrow moves mid-gesture.
+          if (rig?.dragging) {
+            if (dragToolRef.current !== 'translate') beginDrag('translate');
+            onMove(readPosition(positionObject), { recordKeys: false });
+            return;
+          }
+          if (dragToolRef.current !== 'translate') {
+            abortControlsDrag(translateRef.current);
+            return;
+          }
           onMove(readPosition(positionObject), { recordKeys: false });
+        }}
+      />
+      <TransformControls
+        ref={rotateRef as never}
+        object={rotationObject}
+        mode="rotate"
+        size={rotateSize}
+        space="local"
+        showX
+        showY
+        showZ
+        enabled={rotateEnabled}
+        onMouseDown={() => beginDrag('rotate')}
+        onMouseUp={() => endDrag('rotate')}
+        onObjectChange={() => {
+          const rig = rotateRef.current as (ControlsHandle & { dragging?: boolean }) | null;
+          if (rig?.dragging) {
+            if (dragToolRef.current !== 'rotate') beginDrag('rotate');
+            onRotate(readRotation(rotationObject), { recordKeys: false });
+            return;
+          }
+          // Spurious dual-control / fat-picker drags move the pivot without
+          // beginDrag — snap back so the gimbal cannot teleport off-body.
+          if (dragToolRef.current !== 'rotate') {
+            abortControlsDrag(rotateRef.current);
+            return;
+          }
+          onRotate(readRotation(rotationObject), { recordKeys: false });
         }}
       />
     </>

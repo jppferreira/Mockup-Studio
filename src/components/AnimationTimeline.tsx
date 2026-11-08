@@ -315,7 +315,7 @@ export default function AnimationTimeline({
 
   const visibleTracks = useMemo(() => {
     const lanes: AnimProperty[] = [
-      'rotation.x', 'rotation.y', 'rotation.z', 'scale',
+      'rotation.x', 'rotation.y', 'rotation.z', 'scale', 'lidOpen',
       ...CAMERA_ANIM_PROPERTIES,
     ];
     return lanes.map((property) => {
@@ -495,7 +495,7 @@ export default function AnimationTimeline({
   const addKeyframeAtPlayhead = (property?: AnimProperty) => {
     const props = property
       ? [property]
-      : (['rotation.x', 'rotation.y', 'rotation.z', 'scale', ...CAMERA_ANIM_PROPERTIES] as AnimProperty[]);
+      : (['rotation.x', 'rotation.y', 'rotation.z', 'scale', 'lidOpen', ...CAMERA_ANIM_PROPERTIES] as AnimProperty[]);
     let tracks = [...clip.tracks];
     for (const prop of props) {
       const targetId = targetFor(prop);

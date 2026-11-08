@@ -175,6 +175,7 @@ export function readProperty(device: DeviceInstance, property: AnimProperty): nu
     case 'position.y': return device.position.y;
     case 'position.z': return device.position.z;
     case 'scale': return device.scale;
+    case 'lidOpen': return device.lidOpen ?? 1;
     case 'camera.x':
     case 'camera.y':
     case 'camera.z':
@@ -198,6 +199,7 @@ export function writeProperty(device: DeviceInstance, property: AnimProperty, va
     case 'position.y': next.position.y = value; break;
     case 'position.z': next.position.z = value; break;
     case 'scale': next.scale = value; break;
+    case 'lidOpen': next.lidOpen = Math.min(1, Math.max(0, value)); break;
     default: break;
   }
   return next;

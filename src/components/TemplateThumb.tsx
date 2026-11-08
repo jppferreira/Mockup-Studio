@@ -4,7 +4,7 @@ import { useGLTF } from '@react-three/drei';
 import DeviceCanvas, { type CaptureApi } from './DeviceCanvas';
 import TemplatePreview from './TemplatePreview';
 import { ThumbStage, useThumbCapture } from './thumbStage';
-import { getDevice } from '../lib/devices';
+import { DEVICE_MODELS, getDevice } from '../lib/devices';
 import { projectFromTemplate, type CompositionTemplate } from '../lib/templates';
 import type { MockupProject, Vec3 } from '../types';
 
@@ -17,7 +17,7 @@ type ThumbJob = {
   attempt: number;
 };
 
-const THUMB_REV = 'frame11';
+const THUMB_REV = 'frame13-dark-nobg';
 const cache = new Map<string, string>();
 const listeners = new Set<() => void>();
 let queue: ThumbJob[] = [];
@@ -46,6 +46,22 @@ export function layoutForThumb(project: MockupProject): MockupProject {
   return { ...project, compositionMode: 'single', devices };
 }
 
+/**
+ * Card shots keep the authored pose / props, but force a dark transparent studio:
+ * no cyclorama, no ground disc, no DoF (DoF blanks the tiny WebGL pass).
+ */
+function projectForThumb(project: MockupProject): MockupProject {
+  const framed = layoutForThumb(project);
+  return {
+    ...framed,
+    background: 'transparent',
+    depthOfField: false,
+    depthOfFieldAmount: 0,
+    showGroundBase: false,
+    sceneProps: (framed.sceneProps ?? []).filter((prop) => prop.kind !== 'studio_backdrop'),
+  };
+}
+
 function compositionFocus(project: MockupProject): Vec3 {
   const devices = project.devices;
   if (!devices.length) return { x: 0, y: 0, z: 0 };
@@ -61,26 +77,51 @@ function cacheId(id: string) {
   return `${THUMB_REV}:${id}`;
 }
 
-function warmProject(project: MockupProject) {
+function projectModelUrls(project: MockupProject): string[] {
+  const urls: string[] = [];
   for (const device of project.devices) {
     const url = getDevice(device.deviceId).url;
-    if (url) useGLTF.preload(url);
+    if (url && !urls.includes(url)) urls.push(url);
   }
+  return urls;
+}
+
+function warmProject(project: MockupProject) {
+  for (const url of projectModelUrls(project)) {
+    useGLTF.preload(url);
+  }
+}
+
+/** Failed loads stick in drei's cache; without this, every retry keeps failing. */
+function clearProjectModels(project: MockupProject) {
+  for (const url of projectModelUrls(project)) {
+    try {
+      useGLTF.clear(url);
+    } catch {
+      // Cache miss is fine.
+    }
+  }
+}
+
+function advanceQueue() {
+  active = queue.shift() ?? null;
+  if (active) warmProject(active.project);
 }
 
 const viewers = new Map<string, number>();
 
 function requestThumb(id: string, project: MockupProject) {
+  healPoisonedModelCache();
   viewers.set(id, (viewers.get(id) ?? 0) + 1);
   if ((viewers.get(id) ?? 0) > 1) return;
-  warmProject(project);
+  // Only preload the active baker. Warming every card at once aborts large GLB
+  // fetches in Electron and poisons useGLTF with permanent Failed to fetch errors.
   if (cache.has(cacheId(id))) return;
   if (active?.id === id) return;
   if (queue.some((item) => item.id === id)) return;
   queue = [...queue, { id, project, attempt: 0 }];
   if (!active) {
-    active = queue.shift() ?? null;
-    if (active) warmProject(active.project);
+    advanceQueue();
     emit();
   }
 }
@@ -94,8 +135,7 @@ function releaseThumb(id: string) {
   viewers.delete(id);
   queue = queue.filter((item) => item.id !== id);
   if (active?.id === id) {
-    active = queue.shift() ?? null;
-    if (active) warmProject(active.project);
+    advanceQueue();
     emit();
   }
 }
@@ -103,12 +143,12 @@ function releaseThumb(id: string) {
 function finishThumb(id: string, url: string) {
   const job = active?.id === id ? active : null;
   if (url) cache.set(cacheId(id), url);
-  else if (job && job.attempt < 2) {
+  else if (job && job.attempt < 3) {
+    clearProjectModels(job.project);
     queue = [...queue, { ...job, attempt: job.attempt + 1 }];
   }
   if (active?.id === id) {
-    active = queue.shift() ?? null;
-    if (active) warmProject(active.project);
+    advanceQueue();
   }
   emit();
 }
@@ -153,6 +193,7 @@ function TemplateBakerBody({ job }: { job: ThumbJob }) {
         captureRef={captureRef}
         canvasId={`template-thumb-${job.id}-${job.attempt}`}
         gizmoActive={false}
+        freezeFraming
         pixelRatio={[1, 1]}
         onSceneReady={markReady}
       />
@@ -162,12 +203,31 @@ function TemplateBakerBody({ job }: { job: ThumbJob }) {
 }
 
 function TemplateBaker({ job }: { job: ThumbJob }) {
-  const fail = useCallback(() => finishThumb(job.id, ''), [job.id]);
+  const fail = useCallback(() => {
+    clearProjectModels(job.project);
+    finishThumb(job.id, '');
+  }, [job.id, job.project]);
   return (
     <ThumbStage onError={fail}>
       <TemplateBakerBody job={job} />
     </ThumbStage>
   );
+}
+
+let healedModelCache = false;
+
+/** Drop any Failed-to-fetch entries left from an earlier burst of preloads. */
+function healPoisonedModelCache() {
+  if (healedModelCache) return;
+  healedModelCache = true;
+  for (const device of DEVICE_MODELS) {
+    if (!device.url) continue;
+    try {
+      useGLTF.clear(device.url);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 export function TemplateThumbHost() {
@@ -177,7 +237,7 @@ export function TemplateThumbHost() {
 }
 
 export function ProjectThumb({ project, cacheKey }: { project: MockupProject; cacheKey: string }) {
-  const framed = useMemo(() => layoutForThumb(project), [project]);
+  const framed = useMemo(() => projectForThumb(project), [project]);
   const src = useSyncExternalStore(
     subscribe,
     () => cache.get(cacheId(cacheKey)) ?? null,
@@ -194,7 +254,10 @@ export function ProjectThumb({ project, cacheKey }: { project: MockupProject; ca
 }
 
 export default function TemplateThumb({ template }: { template: CompositionTemplate }) {
-  const project = useMemo(() => layoutForThumb(projectFromTemplate(template)), [template]);
+  const project = useMemo(
+    () => projectForThumb(projectFromTemplate(template)),
+    [template],
+  );
   const src = useSyncExternalStore(
     subscribe,
     () => cache.get(cacheId(template.id)) ?? null,

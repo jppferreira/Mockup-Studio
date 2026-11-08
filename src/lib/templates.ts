@@ -1,17 +1,39 @@
 import { applyAnimationPreset, getAnimationPreset } from './animationPresets';
 import { placeholderForDevice } from './demo';
+import { syncProjectLayers } from './layers';
 import {
-  ANDROID_DEVICE_ID, BUILTIN_GRADIENTS, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT, IOS_DEVICE_ID,
-  commitActiveScene, createCompositionScene, createDefaultAnimation, createDeviceInstance, createSceneProp,
+  getRuntimePromotedTemplates,
+  getRuntimeRemovedTemplateIds,
+  loadShippedPackTemplates,
+  loadShippedRemovedIds,
+  mergeShippedTemplates,
+} from './shippedTemplates';
+import {
+  ANDROID_DEVICE_ID, CAMERA_TARGET_ID, DEFAULT_PROJECT, IOS_DEVICE_ID,
+  commitActiveScene, createCompositionScene, createDefaultAnimation, createDeviceInstance, createSceneLight,
+  createSceneProp, syncProjectFromSelected,
   type AnimationClip, type BackgroundPreset, type CameraLens, type CameraView, type DeviceColor,
-  type DeviceInstance, type GradientColors, type MockupProject, type ReflectionMapId,
-  type SceneProp, type Vec3,
+  type DeviceInstance, type GradientColors, type MaterialTweak, type MockupProject, type ReflectionMapId,
+  type SceneLight, type SceneProp, type ShadowQuality, type ShadowType, type Vec3,
 } from '../types';
 import type { SceneOverlay } from './overlays';
 import { normalizeReflectionStyle, type ReflectionStyle } from './reflectionStyle';
 import { getDevice, type DeviceId } from './devices';
 
 export type TemplateCategory = 'devices' | 'scenes' | 'saved';
+
+/**
+ * Soft white cyclorama — Apple product-studio falloff so depth of field
+ * has wall / cove / floor stops to read against the sharp subject.
+ */
+export const TEMPLATE_BACKDROP: GradientColors = {
+  center: '#ffffff',
+  mid: '#f4f4f6',
+  edge: '#e6e6ea',
+};
+
+/** Default shallow DoF for every shipped / applied composition. */
+export const TEMPLATE_DEPTH_OF_FIELD_AMOUNT = 0.48;
 
 export interface CompositionTemplate {
   id: string;
@@ -37,6 +59,15 @@ export interface CompositionTemplate {
   fillIntensity?: number;
   shadowOpacity?: number;
   shadowSoftness?: number;
+  shadowType?: ShadowType;
+  shadowContact?: number;
+  shadowQuality?: ShadowQuality;
+  /** Extra luminaires for realistic / Spline-like setups */
+  sceneLights?: SceneLight[];
+  /** HDRI strength override; omit to keep the studio preset */
+  environmentIntensity?: number | null;
+  /** ACES exposure override; omit to keep the studio preset */
+  toneMappingExposure?: number | null;
   /** Soft ground disc under devices; omit/true keeps the default plate. */
   showGroundBase?: boolean;
   /** Motion preset applied from each device’s studio angle. `clear` leaves the shot still. */
@@ -52,12 +83,15 @@ export interface CompositionTemplate {
   edgeBlurTop?: boolean;
   edgeBlurBottom?: boolean;
   edgeBlurAmount?: number;
+  depthOfField?: boolean;
+  depthOfFieldAmount?: number;
   deviceExtras?: Array<{
     glassReflection?: number;
     reflectionStyle?: ReflectionStyle;
     lidOpen?: number;
     deviceColor?: DeviceColor;
     clayMode?: boolean;
+    materialTweaks?: Record<string, MaterialTweak>;
   }>;
   overlays?: SceneOverlay[];
   /** Tracks target `slot-0`… and `__camera__`. Present on user-saved compositions. */
@@ -72,7 +106,24 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Turntable',
     category: 'devices',
     preview: 'solo',
-    background: 'midnight',
+    background: 'studio',
+    compositionMode: 'single',
+    motion: 'turntable',
+    devices: [{
+      deviceId: 'iphone_15_pro_max',
+      rotation: { x: -8, y: 22, z: 0 },
+      position: { x: 0, y: 0.06, z: 0 },
+      scale: 1,
+    }],
+  },
+  {
+    id: 'product-rotate',
+    label: 'Product Rotate',
+    description: 'One device, one scene, soft turntable spin',
+    badge: 'Turntable',
+    category: 'devices',
+    preview: 'solo',
+    background: 'studio',
     compositionMode: 'single',
     motion: 'turntable',
     devices: [{
@@ -90,7 +141,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'devices',
     preview: 'split',
     background: 'studio',
-    gradient: { ...BUILTIN_GRADIENTS.studio },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'split',
     motion: 'turntable',
     devices: [
@@ -115,8 +166,8 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Orbit',
     category: 'devices',
     preview: 'stack',
-    background: 'mint',
-    gradient: { ...BUILTIN_GRADIENTS.mint },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
     motion: 'orbit',
     devices: [
@@ -141,8 +192,8 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Fan',
     category: 'devices',
     preview: 'fan',
-    background: 'sunset',
-    gradient: { ...BUILTIN_GRADIENTS.sunset },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
     motion: 'fan',
     devices: [
@@ -174,7 +225,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'devices',
     preview: 'trio',
     background: 'studio',
-    gradient: { ...BUILTIN_GRADIENTS.studio },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
     motion: 'turntable',
     devices: [
@@ -205,7 +256,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Orbit',
     category: 'devices',
     preview: 'depth',
-    background: 'midnight',
+    background: 'studio',
     compositionMode: 'single',
     motion: 'orbit',
     devices: [
@@ -236,8 +287,8 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Present',
     category: 'devices',
     preview: 'pair',
-    background: 'mint',
-    gradient: { ...BUILTIN_GRADIENTS.mint },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
     motion: 'present',
     devices: [
@@ -262,7 +313,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Still',
     category: 'devices',
     preview: 'solo',
-    background: 'midnight',
+    background: 'studio',
     compositionMode: 'single',
     motion: 'clear',
     devices: [{
@@ -282,10 +333,10 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Turntable',
     category: 'scenes',
     preview: 'pedestal',
-    background: 'midnight',
-    gradient: { center: '#2c333c', mid: '#14181e', edge: '#07090c' },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 3.2,
+    lightIntensity: 1.15,
     fillIntensity: 0.38,
     shadowOpacity: 0.52,
     shadowSoftness: 2.4,
@@ -314,9 +365,9 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'scenes',
     preview: 'studio',
     background: 'studio',
-    gradient: { center: '#ffffff', mid: '#f6f5f2', edge: '#e7e4de' },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.4,
+    lightIntensity: 0.86,
     fillIntensity: 1.05,
     shadowOpacity: 0.28,
     shadowSoftness: 4.4,
@@ -333,7 +384,7 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     }],
     deviceExtras: [{ lidOpen: 0.72, deviceColor: 'silver', glassReflection: 0.42 }],
     sceneProps: [
-      { id: 'cyclorama', kind: 'studio_backdrop', position: { x: 0, y: -1.55, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1, color: '#fbfaf7' },
+      { id: 'cyclorama', kind: 'studio_backdrop', position: { x: 0, y: -1.55, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: 1, color: '#ffffff' },
     ],
   },
   {
@@ -343,10 +394,10 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Turntable',
     category: 'scenes',
     preview: 'stage',
-    background: 'midnight',
-    gradient: { center: '#3a342e', mid: '#1a1816', edge: '#0a0908' },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.8,
+    lightIntensity: 1.01,
     fillIntensity: 0.45,
     shadowOpacity: 0.4,
     shadowSoftness: 2.2,
@@ -374,9 +425,9 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'scenes',
     preview: 'pedestal',
     background: 'studio',
-    gradient: { center: '#f3efe8', mid: '#d9d2c6', edge: '#8f877c' },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.7,
+    lightIntensity: 0.97,
     fillIntensity: 0.7,
     shadowOpacity: 0.36,
     shadowSoftness: 3.2,
@@ -403,10 +454,10 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Orbit',
     category: 'scenes',
     preview: 'solo',
-    background: 'midnight',
-    gradient: { center: '#243044', mid: '#121820', edge: '#07090d' },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.6,
+    lightIntensity: 0.94,
     fillIntensity: 0.35,
     shadowOpacity: 0.2,
     shadowSoftness: 3.6,
@@ -434,10 +485,10 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Present',
     category: 'scenes',
     preview: 'stage',
-    background: 'midnight',
-    gradient: { center: '#2a2e36', mid: '#14161c', edge: '#08090c' },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.9,
+    lightIntensity: 1.04,
     fillIntensity: 0.4,
     shadowOpacity: 0.48,
     shadowSoftness: 2.8,
@@ -465,9 +516,9 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'scenes',
     preview: 'desk',
     background: 'studio',
-    gradient: { center: '#f7f3ec', mid: '#e4ddd2', edge: '#b7aea2' },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.5,
+    lightIntensity: 0.9,
     fillIntensity: 0.85,
     shadowOpacity: 0.34,
     shadowSoftness: 3.4,
@@ -507,9 +558,9 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'scenes',
     preview: 'clay',
     background: 'studio',
-    gradient: { center: '#f3ebe2', mid: '#d8cfc4', edge: '#b5aaa0' },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.2,
+    lightIntensity: 0.79,
     fillIntensity: 0.95,
     shadowOpacity: 0.38,
     shadowSoftness: 3.2,
@@ -536,9 +587,9 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'scenes',
     preview: 'concrete',
     background: 'studio',
-    gradient: { center: '#ebe7e0', mid: '#cfc9c0', edge: '#9e9890' },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.6,
+    lightIntensity: 0.94,
     fillIntensity: 0.65,
     shadowOpacity: 0.42,
     shadowSoftness: 2.4,
@@ -562,10 +613,10 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Turntable',
     category: 'scenes',
     preview: 'pedestal',
-    background: 'midnight',
-    gradient: { center: '#3a424c', mid: '#1e242c', edge: '#0c1016' },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.8,
+    lightIntensity: 1.01,
     fillIntensity: 0.55,
     shadowOpacity: 0.45,
     shadowSoftness: 2.8,
@@ -590,10 +641,10 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Orbit',
     category: 'scenes',
     preview: 'desk',
-    background: 'mint',
-    gradient: { center: '#5a8a78', mid: '#1f4a40', edge: '#0a1c18' },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.4,
+    lightIntensity: 0.86,
     fillIntensity: 0.8,
     shadowOpacity: 0.36,
     shadowSoftness: 3.0,
@@ -627,9 +678,9 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'scenes',
     preview: 'concrete',
     background: 'studio',
-    gradient: { center: '#e4dfd6', mid: '#bbb4aa', edge: '#8a847a' },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.5,
+    lightIntensity: 0.9,
     fillIntensity: 0.7,
     shadowOpacity: 0.4,
     shadowSoftness: 2.2,
@@ -655,10 +706,10 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     badge: 'Float',
     category: 'scenes',
     preview: 'clay',
-    background: 'sunset',
-    gradient: { center: '#c894a8', mid: '#5a4868', edge: '#181228' },
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'split',
-    lightIntensity: 2.3,
+    lightIntensity: 0.83,
     fillIntensity: 0.85,
     shadowOpacity: 0.35,
     shadowSoftness: 3.0,
@@ -692,9 +743,9 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'scenes',
     preview: 'studio',
     background: 'studio',
-    gradient: { center: '#ffffff', mid: '#fafafa', edge: '#f2f2f0' },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.6,
+    lightIntensity: 0.94,
     fillIntensity: 1.2,
     shadowOpacity: 0.38,
     shadowSoftness: 4.2,
@@ -725,9 +776,9 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'scenes',
     preview: 'rocks',
     background: 'studio',
-    gradient: { center: '#efe8dc', mid: '#c4b8a6', edge: '#6a6258' },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.5,
+    lightIntensity: 0.9,
     fillIntensity: 0.62,
     shadowOpacity: 0.46,
     shadowSoftness: 2.6,
@@ -755,9 +806,9 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     category: 'scenes',
     preview: 'stage',
     background: 'studio',
-    gradient: { center: '#f7f4ef', mid: '#ddd6cc', edge: '#9a9288' },
+    gradient: { ...TEMPLATE_BACKDROP },
     compositionMode: 'single',
-    lightIntensity: 2.8,
+    lightIntensity: 1.01,
     fillIntensity: 0.7,
     shadowOpacity: 0.42,
     shadowSoftness: 3.4,
@@ -774,13 +825,47 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
   },
 ];
 
+/** Soft white backdrop — Apple product-studio default for every layout. DoF only when the composition sets it. */
+export function withAppleStudioLook(template: CompositionTemplate): CompositionTemplate {
+  return {
+    ...template,
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
+    depthOfField: template.depthOfField === true,
+    depthOfFieldAmount: template.depthOfFieldAmount ?? TEMPLATE_DEPTH_OF_FIELD_AMOUNT,
+    sceneProps: template.sceneProps?.map((prop) => (
+      prop.kind === 'studio_backdrop' ? { ...prop, color: '#ffffff' } : prop
+    )),
+  };
+}
+
+/** Code defaults plus DEV-promoted pack (`src/data/shippedTemplates.json`) and live session promotions. */
+export function listShippedCompositionTemplates(): CompositionTemplate[] {
+  const defaults = COMPOSITION_TEMPLATES.map(withAppleStudioLook);
+  const fromDisk = mergeShippedTemplates(defaults, loadShippedPackTemplates());
+  const merged = mergeShippedTemplates(fromDisk, getRuntimePromotedTemplates())
+    .map(withAppleStudioLook);
+  const removed = new Set([...loadShippedRemovedIds(), ...getRuntimeRemovedTemplateIds()]);
+  if (!removed.size) return merged;
+  return merged.filter((item) => !removed.has(item.id));
+}
+
 export function getCompositionTemplate(id: string) {
-  return COMPOSITION_TEMPLATES.find((item) => item.id === id);
+  return listShippedCompositionTemplates().find((item) => item.id === id);
+}
+
+/**
+ * Builtin / shipped layouts that Dev can overwrite into `shippedTemplates.json`.
+ * User-saved `comp-*` templates are personal library only.
+ */
+export function isDevEditableTemplateId(id: string | null | undefined): boolean {
+  if (!id || id.startsWith('comp-')) return false;
+  return listShippedCompositionTemplates().some((item) => item.id === id);
 }
 
 export function templatesByCategory(category: TemplateCategory) {
   if (category === 'saved') return [];
-  return COMPOSITION_TEMPLATES.filter((item) => item.category === category);
+  return listShippedCompositionTemplates().filter((item) => item.category === category);
 }
 
 function remapStoredAnimation(clip: AnimationClip, devices: DeviceInstance[]): AnimationClip {
@@ -836,15 +921,15 @@ export function projectFromTemplate(
       lidOpen: extra?.lidOpen,
       deviceColor: extra?.deviceColor,
       clayMode: extra?.clayMode,
+      materialTweaks: extra?.materialTweaks
+        ? Object.fromEntries(
+          Object.entries(extra.materialTweaks).map(([name, tweak]) => [name, { ...tweak }]),
+        )
+        : undefined,
     });
   });
   const primary = devices[0];
-  const builtinKey = template.background as keyof typeof BUILTIN_GRADIENTS;
-  const gradient = template.gradient
-    ? { ...template.gradient }
-    : BUILTIN_GRADIENTS[builtinKey]
-      ? { ...BUILTIN_GRADIENTS[builtinKey] }
-      : { ...DEFAULT_GRADIENT };
+  const gradient = { ...TEMPLATE_BACKDROP };
 
   const sceneProps = (template.sceneProps ?? []).map((entry, index) => createSceneProp({
     ...entry,
@@ -856,12 +941,13 @@ export function projectFromTemplate(
       : entry.scale
         ? { ...entry.scale }
         : undefined,
+    color: entry.kind === 'studio_backdrop' ? '#ffffff' : entry.color,
   }));
 
   const scene = createCompositionScene({
     id: 'scene-main',
     name: 'Scene 1',
-    background: template.background,
+    background: 'studio',
     gradientColors: gradient,
   });
 
@@ -895,7 +981,13 @@ export function projectFromTemplate(
     fillIntensity: template.fillIntensity ?? DEFAULT_PROJECT.fillIntensity,
     shadowOpacity: template.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity,
     shadowSoftness: template.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness,
+    shadowType: template.shadowType ?? DEFAULT_PROJECT.shadowType,
+    shadowContact: template.shadowContact ?? DEFAULT_PROJECT.shadowContact,
+    shadowQuality: template.shadowQuality ?? DEFAULT_PROJECT.shadowQuality,
     showGroundBase: template.showGroundBase !== false,
+    sceneLights: (template.sceneLights ?? []).map((light) => createSceneLight(light)),
+    environmentIntensity: template.environmentIntensity ?? null,
+    toneMappingExposure: template.toneMappingExposure ?? null,
     compositionMode: template.compositionMode,
     devices,
     selectedDeviceId: primary.id,
@@ -911,6 +1003,9 @@ export function projectFromTemplate(
     ...(template.edgeBlurTop != null ? { edgeBlurTop: template.edgeBlurTop } : {}),
     ...(template.edgeBlurBottom != null ? { edgeBlurBottom: template.edgeBlurBottom } : {}),
     ...(template.edgeBlurAmount != null ? { edgeBlurAmount: template.edgeBlurAmount } : {}),
+    // DoF only when the composition explicitly enables it.
+    depthOfField: template.depthOfField === true,
+    depthOfFieldAmount: template.depthOfFieldAmount ?? TEMPLATE_DEPTH_OF_FIELD_AMOUNT,
     ...(template.overlays ? {
       overlays: template.overlays.map((overlay) => ({
         ...overlay,
@@ -919,6 +1014,88 @@ export function projectFromTemplate(
       })),
     } : {}),
   });
+}
+
+/**
+ * Restage the current shot with a composition’s set, light, and pose.
+ * Device models, screens, and finishes stay on the phones already in the scene.
+ */
+export function applyCompositionKeepingDevices(
+  project: MockupProject,
+  template: CompositionTemplate,
+): MockupProject {
+  const slots = template.devices;
+  const count = project.devices.length;
+  const fan = slots.length <= 1 && count > 1;
+  const devices = project.devices.map((device, index) => {
+    const slot = slots[Math.min(index, Math.max(0, slots.length - 1))];
+    if (!slot) return device;
+    const spread = fan ? (index - (count - 1) / 2) * 0.85 : 0;
+    return {
+      ...device,
+      rotation: slot.rotation ? { ...slot.rotation } : device.rotation,
+      scale: slot.scale ?? device.scale,
+      position: slot.position
+        ? { x: slot.position.x + spread, y: slot.position.y, z: slot.position.z }
+        : device.position,
+    };
+  });
+  const selected = devices.find((device) => device.id === project.selectedDeviceId) ?? devices[0];
+  if (!selected) return project;
+  const gradient = { ...TEMPLATE_BACKDROP };
+  const sceneProps = (template.sceneProps ?? []).map((entry, index) => createSceneProp({
+    ...entry,
+    id: entry.id ?? `prop-${index + 1}`,
+    position: entry.position ? { ...entry.position } : undefined,
+    rotation: entry.rotation ? { ...entry.rotation } : undefined,
+    scale: typeof entry.scale === 'number'
+      ? entry.scale
+      : entry.scale
+        ? { ...entry.scale }
+        : undefined,
+    color: entry.kind === 'studio_backdrop' ? '#ffffff' : entry.color,
+  }));
+  const motion = template.motion ? getAnimationPreset(template.motion) : undefined;
+  const animation = motion
+    ? applyAnimationPreset(project.animation, devices, motion)
+    : project.animation;
+
+  return syncProjectLayers(syncProjectFromSelected({
+    ...project,
+    background: 'studio',
+    gradientColors: gradient,
+    devices,
+    sceneProps,
+    animation,
+    lightIntensity: template.lightIntensity ?? project.lightIntensity,
+    fillIntensity: template.fillIntensity ?? project.fillIntensity,
+    shadowOpacity: template.shadowOpacity ?? project.shadowOpacity,
+    shadowSoftness: template.shadowSoftness ?? project.shadowSoftness,
+    shadowType: template.shadowType ?? project.shadowType ?? DEFAULT_PROJECT.shadowType,
+    shadowContact: template.shadowContact ?? project.shadowContact ?? DEFAULT_PROJECT.shadowContact,
+    shadowQuality: template.shadowQuality ?? project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality,
+    showGroundBase: template.showGroundBase ?? project.showGroundBase,
+    lightPosition: template.lightPosition ? { ...template.lightPosition } : project.lightPosition,
+    lightColor: template.lightColor ?? project.lightColor,
+    sceneLights: template.sceneLights
+      ? template.sceneLights.map((light) => createSceneLight(light))
+      : (project.sceneLights ?? []),
+    environmentIntensity: template.environmentIntensity !== undefined
+      ? template.environmentIntensity
+      : (project.environmentIntensity ?? null),
+    toneMappingExposure: template.toneMappingExposure !== undefined
+      ? template.toneMappingExposure
+      : (project.toneMappingExposure ?? null),
+    cameraView: template.cameraView ?? project.cameraView,
+    cameraLens: template.cameraLens ?? project.cameraLens,
+    reflectionMap: template.reflectionMap ?? project.reflectionMap,
+    reflectionMapImage: template.reflectionMap ? null : project.reflectionMapImage,
+    edgeBlurTop: template.edgeBlurTop ?? project.edgeBlurTop,
+    edgeBlurBottom: template.edgeBlurBottom ?? project.edgeBlurBottom,
+    edgeBlurAmount: template.edgeBlurAmount ?? project.edgeBlurAmount,
+    depthOfField: template.depthOfField === true,
+    depthOfFieldAmount: template.depthOfFieldAmount ?? TEMPLATE_DEPTH_OF_FIELD_AMOUNT,
+  }, selected));
 }
 
 /** Bake the template’s motion around each device’s studio angle. Frame 0 matches that angle. */

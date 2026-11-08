@@ -85,12 +85,15 @@ async function frameHasSubject(url: string): Promise<boolean> {
   let sum = 0;
   let sum2 = 0;
   let n = 0;
+  // Transparent card thumbs clear to alpha 0 — only score the subject.
   for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 16) continue;
     const y = (data[i] + data[i + 1] + data[i + 2]) / 3;
     sum += y;
     sum2 += y * y;
     n += 1;
   }
+  if (n < 8) return false;
   const mean = sum / n;
   const stdev = Math.sqrt(Math.max(0, sum2 / n - mean * mean));
   return stdev > 6 && mean > 4;

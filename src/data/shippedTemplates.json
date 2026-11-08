@@ -1,0 +1,926 @@
+{
+  "kind": "mockup-studio-templates",
+  "version": 1,
+  "updatedAt": 1794094807333,
+  "removedIds": [],
+  "templates": [
+    {
+      "id": "apple-homeview",
+      "label": "Apple HomeView",
+      "description": "1 device · Single",
+      "badge": "Layout",
+      "category": "devices",
+      "preview": "solo",
+      "background": "studio",
+      "gradient": {
+        "center": "#ffffff",
+        "mid": "#f4f4f6",
+        "edge": "#e6e6ea"
+      },
+      "compositionMode": "single",
+      "linkSplitTransform": true,
+      "devices": [
+        {
+          "deviceId": "apple_homeview",
+          "rotation": {
+            "x": -0.7,
+            "y": 0.6,
+            "z": 2.5
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 1.558
+          },
+          "scale": 1
+        }
+      ],
+      "deviceExtras": [
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy",
+          "deviceColor": "graphite",
+          "clayMode": false
+        }
+      ],
+      "sceneProps": [],
+      "lightIntensity": 3.9,
+      "fillIntensity": 0,
+      "shadowOpacity": 0.85,
+      "shadowSoftness": 4.8,
+      "shadowType": "soft",
+      "shadowContact": 0.01,
+      "shadowQuality": "ultra",
+      "showGroundBase": false,
+      "lightPosition": {
+        "x": 1.388,
+        "y": 3.848,
+        "z": 3.178
+      },
+      "lightColor": "#fff8f0",
+      "environmentIntensity": 3,
+      "toneMappingExposure": 1.72,
+      "reflectionMap": "studio",
+      "cameraView": "front",
+      "cameraLens": "standard",
+      "edgeBlurTop": false,
+      "edgeBlurBottom": false,
+      "edgeBlurAmount": 24,
+      "depthOfField": false,
+      "depthOfFieldAmount": 0.48,
+      "overlays": [],
+      "animation": {
+        "duration": 4,
+        "fps": 30,
+        "loop": true,
+        "tracks": [
+          {
+            "id": "track-device-main-rotation.y-fo35",
+            "targetId": "slot-0",
+            "property": "rotation.y",
+            "keyframes": [
+              {
+                "id": "kf-cgh3xlh",
+                "time": 0,
+                "value": 0
+              },
+              {
+                "id": "kf-5l6t3h5",
+                "time": 2,
+                "value": 28
+              },
+              {
+                "id": "kf-pk7k1zx",
+                "time": 4,
+                "value": 0
+              }
+            ]
+          },
+          {
+            "id": "track-device-main-rotation.x-qhbc",
+            "targetId": "slot-0",
+            "property": "rotation.x",
+            "keyframes": [
+              {
+                "id": "kf-wtfbwdk",
+                "time": 0,
+                "value": 0
+              },
+              {
+                "id": "kf-p1x4jjo",
+                "time": 2,
+                "value": -6
+              },
+              {
+                "id": "kf-raqytyf",
+                "time": 4,
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "untitled-composition",
+      "label": "Untitled composition",
+      "description": "2 devices · Single",
+      "badge": "Layout",
+      "category": "devices",
+      "preview": "pair",
+      "background": "studio",
+      "gradient": {
+        "center": "#ffffff",
+        "mid": "#f4f4f6",
+        "edge": "#e6e6ea"
+      },
+      "compositionMode": "single",
+      "linkSplitTransform": true,
+      "devices": [
+        {
+          "deviceId": "apple_homeview",
+          "rotation": {
+            "x": -34.5,
+            "y": -10.5,
+            "z": 121.8
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "scale": 1
+        },
+        {
+          "deviceId": "apple_homeview",
+          "rotation": {
+            "x": -34.5,
+            "y": -28.5,
+            "z": 121.8
+          },
+          "position": {
+            "x": 2.692,
+            "y": 0,
+            "z": -0.554
+          },
+          "scale": 1
+        }
+      ],
+      "deviceExtras": [
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy"
+        },
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy",
+          "deviceColor": "graphite",
+          "clayMode": false
+        }
+      ],
+      "sceneProps": [],
+      "lightIntensity": 1.35,
+      "fillIntensity": 1.05,
+      "shadowOpacity": 0.28,
+      "shadowSoftness": 4.2,
+      "showGroundBase": true,
+      "lightPosition": {
+        "x": 4,
+        "y": 5,
+        "z": 7
+      },
+      "lightColor": "#fff8f0",
+      "reflectionMap": "softbox",
+      "cameraView": "front",
+      "cameraLens": "standard",
+      "edgeBlurTop": false,
+      "edgeBlurBottom": false,
+      "edgeBlurAmount": 24,
+      "depthOfField": true,
+      "depthOfFieldAmount": 0.48,
+      "overlays": [],
+      "animation": {
+        "duration": 4,
+        "fps": 30,
+        "loop": true,
+        "tracks": [
+          {
+            "id": "track-device-main-rotation.y-44du",
+            "targetId": "slot-0",
+            "property": "rotation.y",
+            "keyframes": [
+              {
+                "id": "kf-0otg6q9",
+                "time": 0,
+                "value": 0
+              },
+              {
+                "id": "kf-hcsy65r",
+                "time": 2,
+                "value": 28
+              },
+              {
+                "id": "kf-m3xdlty",
+                "time": 4,
+                "value": 0
+              }
+            ]
+          },
+          {
+            "id": "track-device-main-rotation.x-h94i",
+            "targetId": "slot-0",
+            "property": "rotation.x",
+            "keyframes": [
+              {
+                "id": "kf-2iuke0f",
+                "time": 0,
+                "value": 0
+              },
+              {
+                "id": "kf-l7d184z",
+                "time": 2,
+                "value": -6
+              },
+              {
+                "id": "kf-ciahs17",
+                "time": 4,
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "iphone-15-pro-max",
+      "label": "iPhone 15 Pro Max",
+      "description": "1 device · Single",
+      "badge": "Layout",
+      "category": "devices",
+      "preview": "solo",
+      "background": "studio",
+      "gradient": {
+        "center": "#ffffff",
+        "mid": "#f4f4f6",
+        "edge": "#e6e6ea"
+      },
+      "compositionMode": "single",
+      "linkSplitTransform": true,
+      "devices": [
+        {
+          "deviceId": "apple_homeview",
+          "rotation": {
+            "x": -9.9,
+            "y": 26.7,
+            "z": -165.9
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "scale": 0.84
+        }
+      ],
+      "deviceExtras": [
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy",
+          "lidOpen": 1,
+          "deviceColor": "graphite",
+          "clayMode": false
+        }
+      ],
+      "sceneProps": [
+        {
+          "kind": "stone_plinth",
+          "position": {
+            "x": 0,
+            "y": -1.28,
+            "z": 0
+          },
+          "rotation": {
+            "x": 0,
+            "y": 16,
+            "z": 0
+          },
+          "scale": 1,
+          "color": "#6e6a62"
+        },
+        {
+          "kind": "metal_disc",
+          "position": {
+            "x": 1.42,
+            "y": -1.22,
+            "z": 0.15
+          },
+          "rotation": {
+            "x": 78,
+            "y": 24,
+            "z": 8
+          },
+          "scale": 0.38,
+          "color": "#c5ccd4"
+        }
+      ],
+      "lightIntensity": 1.15,
+      "fillIntensity": 0.38,
+      "shadowOpacity": 0.52,
+      "shadowSoftness": 2.4,
+      "showGroundBase": false,
+      "lightPosition": {
+        "x": -3.4,
+        "y": 6.2,
+        "z": 4.4
+      },
+      "lightColor": "#f6f1e8",
+      "reflectionMap": "softbox",
+      "cameraView": "front",
+      "cameraLens": "standard",
+      "edgeBlurTop": false,
+      "edgeBlurBottom": false,
+      "edgeBlurAmount": 24,
+      "depthOfField": true,
+      "depthOfFieldAmount": 0.48,
+      "overlays": [],
+      "animation": {
+        "duration": 5,
+        "fps": 30,
+        "loop": true,
+        "tracks": [
+          {
+            "id": "track-device-v9i2kuab-rotation.y-lqo4",
+            "targetId": "slot-0",
+            "property": "rotation.y",
+            "keyframes": [
+              {
+                "id": "kf-wgswwhz",
+                "time": 0,
+                "value": 24,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-odjak7k",
+                "time": 1.7,
+                "value": 50,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-nudgvwt",
+                "time": 3.4,
+                "value": 2,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-94xiv0a",
+                "time": 5,
+                "value": 24,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-v9i2kuab-rotation.x-dzeg",
+            "targetId": "slot-0",
+            "property": "rotation.x",
+            "keyframes": [
+              {
+                "id": "kf-b6uxl5z",
+                "time": 0,
+                "value": -8,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-9qa4q8r",
+                "time": 2.5,
+                "value": -14,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-5fklia1",
+                "time": 5,
+                "value": -8,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-v9i2kuab-rotation.z-kd3q",
+            "targetId": "slot-0",
+            "property": "rotation.z",
+            "keyframes": [
+              {
+                "id": "kf-mi0rlzf",
+                "time": 0,
+                "value": 0,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-ltvtm8t",
+                "time": 2.5,
+                "value": 1.5,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-yb8gxo7",
+                "time": 5,
+                "value": 0,
+                "ease": "easeInOut"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "new-composition",
+      "label": "New composition",
+      "description": "Blank composition",
+      "badge": "Scene",
+      "category": "scenes",
+      "preview": "solo",
+      "background": "studio",
+      "compositionMode": "single",
+      "linkSplitTransform": true,
+      "motion": "clear",
+      "devices": [
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "scale": 1
+        }
+      ],
+      "gradient": {
+        "center": "#ffffff",
+        "mid": "#f4f4f6",
+        "edge": "#e6e6ea"
+      },
+      "depthOfField": true,
+      "depthOfFieldAmount": 0.48
+    },
+    {
+      "id": "new-composition-2",
+      "label": "New composition 2",
+      "description": "Blank composition",
+      "badge": "Scene",
+      "category": "scenes",
+      "preview": "solo",
+      "background": "studio",
+      "compositionMode": "single",
+      "linkSplitTransform": true,
+      "motion": "clear",
+      "devices": [
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "scale": 1
+        }
+      ],
+      "gradient": {
+        "center": "#ffffff",
+        "mid": "#f4f4f6",
+        "edge": "#e6e6ea"
+      },
+      "depthOfField": true,
+      "depthOfFieldAmount": 0.48
+    },
+    {
+      "id": "depth-stage",
+      "label": "Depth Stage",
+      "description": "3 devices · Single",
+      "badge": "Layout",
+      "category": "devices",
+      "preview": "trio",
+      "background": "studio",
+      "gradient": {
+        "center": "#ffffff",
+        "mid": "#f4f4f6",
+        "edge": "#e6e6ea"
+      },
+      "compositionMode": "single",
+      "linkSplitTransform": true,
+      "devices": [
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": -8.3,
+            "y": 31.6,
+            "z": -5.2
+          },
+          "position": {
+            "x": -2.559,
+            "y": 1.338,
+            "z": -0.85
+          },
+          "scale": 0.7
+        },
+        {
+          "deviceId": "iphone_17_pro",
+          "rotation": {
+            "x": 171.4,
+            "y": -5.2,
+            "z": 154.3
+          },
+          "position": {
+            "x": 2.282,
+            "y": 1.107,
+            "z": 0.35
+          },
+          "scale": 0.95
+        },
+        {
+          "deviceId": "pixel_10_pro",
+          "rotation": {
+            "x": -2,
+            "y": -26,
+            "z": 8
+          },
+          "position": {
+            "x": 1.55,
+            "y": 0.1,
+            "z": -0.55
+          },
+          "scale": 0.68
+        }
+      ],
+      "deviceExtras": [
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy"
+        },
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy"
+        },
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy"
+        }
+      ],
+      "sceneProps": [],
+      "lightIntensity": 1.35,
+      "fillIntensity": 1.05,
+      "shadowOpacity": 0.28,
+      "shadowSoftness": 4.2,
+      "showGroundBase": true,
+      "lightPosition": {
+        "x": 4,
+        "y": 5,
+        "z": 7
+      },
+      "lightColor": "#fff8f0",
+      "reflectionMap": "softbox",
+      "cameraView": "front",
+      "cameraLens": "standard",
+      "edgeBlurTop": false,
+      "edgeBlurBottom": false,
+      "edgeBlurAmount": 24,
+      "depthOfField": true,
+      "depthOfFieldAmount": 0.48,
+      "overlays": [],
+      "animation": {
+        "duration": 4.5,
+        "fps": 30,
+        "loop": true,
+        "tracks": [
+          {
+            "id": "track-device-main-rotation.y-hlth",
+            "targetId": "slot-0",
+            "property": "rotation.y",
+            "keyframes": [
+              {
+                "id": "kf-8xvyf99",
+                "time": 0,
+                "value": 28,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-mepcv5f",
+                "time": 2.25,
+                "value": 62,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-iu9xomx",
+                "time": 4.5,
+                "value": 28,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-main-rotation.x-obnb",
+            "targetId": "slot-0",
+            "property": "rotation.x",
+            "keyframes": [
+              {
+                "id": "kf-hja4nyd",
+                "time": 0,
+                "value": -4,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-svb2jmp",
+                "time": 1.2,
+                "value": -14,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-fq9935e",
+                "time": 2.25,
+                "value": 2,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-odmb95b",
+                "time": 3.4,
+                "value": -8,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-n58p93n",
+                "time": 4.5,
+                "value": -4,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-main-rotation.z-dn0j",
+            "targetId": "slot-0",
+            "property": "rotation.z",
+            "keyframes": [
+              {
+                "id": "kf-q259nj1",
+                "time": 0,
+                "value": -6,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-fja67rx",
+                "time": 2.25,
+                "value": -12,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-28vekzb",
+                "time": 4.5,
+                "value": -6,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-2-rotation.y-smdb",
+            "targetId": "slot-1",
+            "property": "rotation.y",
+            "keyframes": [
+              {
+                "id": "kf-rglbl60",
+                "time": 0,
+                "value": -16,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-xn62247",
+                "time": 2.25,
+                "value": 18,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-g6v59jj",
+                "time": 4.5,
+                "value": -16,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-2-rotation.x-z99g",
+            "targetId": "slot-1",
+            "property": "rotation.x",
+            "keyframes": [
+              {
+                "id": "kf-srlyo67",
+                "time": 0,
+                "value": -12,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-15hwgwk",
+                "time": 1.2,
+                "value": -22,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-e51q7qq",
+                "time": 2.25,
+                "value": -6,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-4t73mmr",
+                "time": 3.4,
+                "value": -16,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-pij112k",
+                "time": 4.5,
+                "value": -12,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-2-rotation.z-zudc",
+            "targetId": "slot-1",
+            "property": "rotation.z",
+            "keyframes": [
+              {
+                "id": "kf-yd1y6m5",
+                "time": 0,
+                "value": 2,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-w110ssc",
+                "time": 2.25,
+                "value": -4,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-bfhjqkq",
+                "time": 4.5,
+                "value": 2,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-3-rotation.y-9hv7",
+            "targetId": "slot-2",
+            "property": "rotation.y",
+            "keyframes": [
+              {
+                "id": "kf-l36hcze",
+                "time": 0,
+                "value": -26,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-nuywzak",
+                "time": 2.25,
+                "value": 8,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-dslim8p",
+                "time": 4.5,
+                "value": -26,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-3-rotation.x-mjqb",
+            "targetId": "slot-2",
+            "property": "rotation.x",
+            "keyframes": [
+              {
+                "id": "kf-me0dptv",
+                "time": 0,
+                "value": -2,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-ekh4sco",
+                "time": 1.2,
+                "value": -12,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-dnkeuve",
+                "time": 2.25,
+                "value": 4,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-4d4i3dz",
+                "time": 3.4,
+                "value": -6,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-fd6benz",
+                "time": 4.5,
+                "value": -2,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-device-3-rotation.z-0r6l",
+            "targetId": "slot-2",
+            "property": "rotation.z",
+            "keyframes": [
+              {
+                "id": "kf-tzpro4n",
+                "time": 0,
+                "value": 8,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-dlzgubp",
+                "time": 2.25,
+                "value": 2,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-5z00eaj",
+                "time": 4.5,
+                "value": 8,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-camera-camera.x",
+            "targetId": "__camera__",
+            "property": "camera.x",
+            "keyframes": [
+              {
+                "id": "kf-6lftytt",
+                "time": 0,
+                "value": 4.278,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-jumntc9",
+                "time": 3.15,
+                "value": 14.1459,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-camera-camera.y",
+            "targetId": "__camera__",
+            "property": "camera.y",
+            "keyframes": [
+              {
+                "id": "kf-8oivs6q",
+                "time": 0,
+                "value": 5.2646,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-u6w80ka",
+                "time": 3.15,
+                "value": 1.3414,
+                "ease": "easeInOut"
+              }
+            ]
+          },
+          {
+            "id": "track-camera-camera.z",
+            "targetId": "__camera__",
+            "property": "camera.z",
+            "keyframes": [
+              {
+                "id": "kf-2qoo91p",
+                "time": 0,
+                "value": 16.0646,
+                "ease": "easeInOut"
+              },
+              {
+                "id": "kf-fm9fijv",
+                "time": 3.15,
+                "value": 14.0532,
+                "ease": "easeInOut"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

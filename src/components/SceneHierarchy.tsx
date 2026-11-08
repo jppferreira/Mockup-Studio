@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Search, Trash2, X } from 'lucide-react';
+import { Copy, Plus, Search, Trash2, X } from 'lucide-react';
 import iconDown from '../assets/scene-hierarchy/icon-down.svg';
 import iconDownSelected from '../assets/scene-hierarchy/icon-down-selected.svg';
 import iconCube from '../assets/scene-hierarchy/icon-cube.svg';
@@ -35,6 +35,7 @@ import {
   gradientCss,
   type CompositionScene,
   type DeviceInstance,
+  type GradientColors,
   type MockupProject,
   type ScenePreset,
 } from '../types';
@@ -43,12 +44,13 @@ export type SceneLayerSelection =
   | { kind: 'scene'; id: string }
   | { kind: 'device'; id: string }
   | { kind: 'screen'; deviceId: string }
-  | { kind: 'backdrop'; deviceId: string }
+  | { kind: 'backdrop' }
   | { kind: 'prop'; id: string }
   | { kind: 'overlay'; id: string }
   | { kind: 'camera' }
   | { kind: 'reflection' }
   | { kind: 'key-light' }
+  | { kind: 'scene-light'; id: string }
   | { kind: 'rim-light' }
   | { kind: 'shadow' };
 
@@ -68,18 +70,21 @@ type SceneHierarchyProps = {
   onRenameScene: (sceneId: string, name: string) => void;
   onRemoveScene: (sceneId: string) => void;
   onSelectDevice: (device: DeviceInstance) => void;
+  onRemoveDevice: (deviceId: string) => void;
   onChooseLook: (look: ScenePreset) => void;
   onDeleteLook: (lookId: string) => void;
+  onUpdateGradient: (key: keyof GradientColors, value: string) => void;
   onOpenSection: (sectionId: string) => void;
   onOpenAssets: () => void;
   onSelectOverlay: (overlayId: string) => void;
   onSelectProp: (propId: string) => void;
   onRemoveProp: (propId: string) => void;
   onFocusKeyLight: () => void;
+  onFocusSceneLight?: (lightId: string) => void;
   onSelectionChange: (selection: SceneLayerSelection) => void;
-  layerPin?: { kind: 'device' | 'prop' | 'overlay'; id: string; token: number } | null;
+  layerPin?: { kind: 'device' | 'prop' | 'overlay' | 'backdrop'; id: string; token: number } | null;
   onAddScene: () => void;
-  onDuplicateScene: () => void;
+  onDuplicateScene: (sceneId?: string) => void;
   canAddScene: boolean;
 };
 
@@ -126,14 +131,17 @@ export default function SceneHierarchy({
   onRenameScene,
   onRemoveScene,
   onSelectDevice,
+  onRemoveDevice,
   onChooseLook,
   onDeleteLook,
+  onUpdateGradient,
   onOpenSection,
   onOpenAssets,
   onSelectOverlay,
   onSelectProp,
   onRemoveProp,
   onFocusKeyLight,
+  onFocusSceneLight,
   onSelectionChange,
   layerPin = null,
   onAddScene,
@@ -188,9 +196,11 @@ export default function SceneHierarchy({
   }, [activeSceneId]);
 
   useEffect(() => {
-    setSelection((current) => (
-      current.kind === 'device' ? { kind: 'device', id: selectedDeviceId } : current
-    ));
+    setSelection((current) => {
+      if (current.kind !== 'device') return current;
+      const next: SceneLayerSelection = { kind: 'device', id: selectedDeviceId };
+      return sameLayerSelection(current, next) ? current : next;
+    });
   }, [selectedDeviceId]);
 
   useEffect(() => {
@@ -199,19 +209,21 @@ export default function SceneHierarchy({
 
   useEffect(() => {
     if (!layerPin) return;
-    setSelection(
-      layerPin.kind === 'device'
+    const next: SceneLayerSelection = layerPin.kind === 'backdrop'
+      ? { kind: 'backdrop' }
+      : layerPin.kind === 'device'
         ? { kind: 'device', id: layerPin.id }
         : layerPin.kind === 'prop'
           ? { kind: 'prop', id: layerPin.id }
-          : { kind: 'overlay', id: layerPin.id },
-    );
+          : { kind: 'overlay', id: layerPin.id };
+    setSelection((current) => (sameLayerSelection(current, next) ? current : next));
   }, [layerPin]);
 
   useEffect(() => {
     setSelection((current) => {
       if (current.kind === 'device' && !project.devices.some((device) => device.id === current.id)) {
-        return { kind: 'device', id: project.selectedDeviceId };
+        const next: SceneLayerSelection = { kind: 'device', id: project.selectedDeviceId };
+        return sameLayerSelection(current, next) ? current : next;
       }
       if (current.kind === 'prop' && !(project.sceneProps ?? []).some((prop) => prop.id === current.id)) {
         return { kind: 'device', id: project.selectedDeviceId };
@@ -219,7 +231,7 @@ export default function SceneHierarchy({
       if (current.kind === 'overlay' && !(project.overlays ?? []).some((overlay) => overlay.id === current.id)) {
         return { kind: 'device', id: project.selectedDeviceId };
       }
-      if ((current.kind === 'screen' || current.kind === 'backdrop') && !project.devices.some((device) => device.id === current.deviceId)) {
+      if (current.kind === 'screen' && !project.devices.some((device) => device.id === current.deviceId)) {
         return { kind: 'device', id: project.selectedDeviceId };
       }
       return current;
@@ -235,7 +247,8 @@ export default function SceneHierarchy({
     const devices = project.devices.filter((device) => isVisible('device', device.id));
     const props = (project.sceneProps ?? []).filter((prop) => isVisible('prop', prop.id));
     const overlays = (project.overlays ?? []).filter((overlay) => isVisible('overlay', overlay.id));
-    return devices.length * 3 + props.length + overlays.length + 5;
+    // Device + Screen per device, one shared Backdrop, studio rows.
+    return devices.length * 2 + 1 + props.length + overlays.length + 5;
   }, [project, layers]);
 
   const pinBranch = (attr: string, id: string) => {
@@ -422,17 +435,29 @@ export default function SceneHierarchy({
                   <img src={sceneSelected ? iconCubeSelected : iconCube} alt="" />
                   <span>{sceneLabel}</span>
                 </button>
-                {scenes.length > 1 && (
+                <div className="scene-tree-actions">
                   <button
                     type="button"
-                    className="scene-tree-remove"
-                    title={`Remove ${scene.name}`}
-                    aria-label={`Remove ${scene.name}`}
-                    onClick={() => onRemoveScene(scene.id)}
+                    className="scene-tree-action"
+                    title={`Duplicate ${scene.name}`}
+                    aria-label={`Duplicate ${scene.name}`}
+                    disabled={!canAddScene}
+                    onClick={() => onDuplicateScene(scene.id)}
                   >
-                    <X size={11} />
+                    <Copy size={11} />
                   </button>
-                )}
+                  {scenes.length > 1 && (
+                    <button
+                      type="button"
+                      className="scene-tree-action is-danger"
+                      title={`Delete ${scene.name}`}
+                      aria-label={`Delete ${scene.name}`}
+                      onClick={() => onRemoveScene(scene.id)}
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  )}
+                </div>
               </div>
 
               {open && active && (
@@ -443,8 +468,7 @@ export default function SceneHierarchy({
                     const label = getDevice(device.deviceId).label;
                     const hidden = !isVisible('device', device.id);
                     const showScreen = revealAll || textHit(label, needle) || textHit('Screen', needle);
-                    const showBackdrop = revealAll || textHit(label, needle) || textHit('Backdrop', needle);
-                    if (!showScreen && !showBackdrop && !textHit(label, needle)) return null;
+                    if (!showScreen && !textHit(label, needle)) return null;
                     return (
                       <div key={device.id} className={`scene-tree-branch ${hidden ? 'is-hidden' : ''}`} role="group" data-device-branch={device.id}>
                         <div className={`scene-tree-row is-device ${deviceSelected ? 'is-selected' : ''}`} role="treeitem" aria-expanded={deviceOpen}>
@@ -460,84 +484,126 @@ export default function SceneHierarchy({
                             <img src={deviceSelected ? iconCubeSelected : iconCube} alt="" />
                             <span>{label}</span>
                           </button>
+                          {project.devices.length > 1 && (
+                            <button
+                              type="button"
+                              className="scene-tree-remove"
+                              title={`Remove ${label}`}
+                              aria-label={`Remove ${label}`}
+                              onClick={() => onRemoveDevice(device.id)}
+                            >
+                              <X size={11} />
+                            </button>
+                          )}
                         </div>
-                        {deviceOpen && (
-                          <>
-                            {showScreen && (
-                            <button
-                              type="button"
-                              className={`scene-tree-row is-nested ${selection.kind === 'screen' && selection.deviceId === device.id ? 'is-selected' : ''}`}
-                              onClick={() => {
-                                onSelectDevice(device);
-                                setSelection({ kind: 'screen', deviceId: device.id });
-                                onOpenAssets();
-                              }}
-                            >
-                              <img src={iconPhone} alt="" />
-                              <span>Screen</span>
-                            </button>
-                            )}
-                            {showBackdrop && (
-                            <>
-                            <button
-                              type="button"
-                              className={`scene-tree-row is-nested ${selection.kind === 'backdrop' && selection.deviceId === device.id ? 'is-selected' : ''}`}
-                              onClick={() => {
-                                onSelectDevice(device);
-                                setSelection({ kind: 'backdrop', deviceId: device.id });
-                                onOpenSection('look');
-                              }}
-                            >
-                              <img src={iconImage} alt="" />
-                              <span>Backdrop</span>
-                            </button>
-                            {selection.kind === 'backdrop' && selection.deviceId === device.id && (
-                              <div className="scene-tree-looks">
-                                <div className="scene-grid scene-grid-compact">
-                                  {looks.map((item) => (
-                                    <div key={item.id} className={`scene-card-wrap ${project.background === item.id ? 'active' : ''}`}>
-                                      <button
-                                        type="button"
-                                        className={`scene-card ${project.background === item.id ? 'active' : ''}`}
-                                        onClick={() => onChooseLook(item)}
-                                        title={item.description}
-                                      >
-                                        <div className={`scene-thumb ${BACKGROUNDS.some((entry) => entry.id === item.id) ? `bg-${item.id}` : ''}`} style={lookThumbStyle(item)}>
-                                          <div className="scene-mini-device"><span /></div>
-                                        </div>
-                                        <strong>{item.label}</strong>
-                                      </button>
-                                      {item.id.startsWith('custom-') && (
-                                        <button
-                                          type="button"
-                                          className="scene-delete"
-                                          title="Delete preset"
-                                          aria-label={`Delete ${item.label}`}
-                                          onClick={() => onDeleteLook(item.id)}
-                                        >
-                                          <Trash2 size={12} />
-                                        </button>
-                                      )}
-                                    </div>
-                                  ))}
-                                  {project.background === 'custom' && (
-                                    <button type="button" className="scene-card active" title="Edited colours">
-                                      <div className="scene-thumb" style={{ background: gradientCss(project.gradientColors) }}>
-                                        <div className="scene-mini-device"><span /></div>
-                                      </div>
-                                      <strong>Custom</strong>
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                            </>
-                            )}
-                          </>
+                        {deviceOpen && showScreen && (
+                          <button
+                            type="button"
+                            className={`scene-tree-row is-nested ${selection.kind === 'screen' && selection.deviceId === device.id ? 'is-selected' : ''}`}
+                            onClick={() => {
+                              onSelectDevice(device);
+                              setSelection({ kind: 'screen', deviceId: device.id });
+                              onOpenAssets();
+                            }}
+                          >
+                            <img src={iconPhone} alt="" />
+                            <span>Screen</span>
+                          </button>
                         )}
                       </div>
                     );
                   })}
+
+                  {(revealAll || textHit('Backdrop', needle)) && (
+                    <div className="scene-tree-branch" role="group" data-backdrop-branch="">
+                      <button
+                        type="button"
+                        className={`scene-tree-row is-studio ${selection.kind === 'backdrop' ? 'is-selected' : ''}`}
+                        onClick={() => {
+                          setSelection({ kind: 'backdrop' });
+                          onOpenSection('look');
+                        }}
+                      >
+                        <img src={iconImage} alt="" />
+                        <span>Backdrop</span>
+                      </button>
+                      {selection.kind === 'backdrop' && (
+                        <div className="scene-tree-looks">
+                          <div className="scene-grid scene-grid-compact">
+                            {looks.map((item) => (
+                              <div key={item.id} className={`scene-card-wrap ${project.background === item.id ? 'active' : ''}`}>
+                                <button
+                                  type="button"
+                                  className={`scene-card ${project.background === item.id ? 'active' : ''}`}
+                                  onClick={() => onChooseLook(item)}
+                                  title={item.description}
+                                >
+                                  <div className={`scene-thumb ${BACKGROUNDS.some((entry) => entry.id === item.id) ? `bg-${item.id}` : ''}`} style={lookThumbStyle(item)}>
+                                    <div className="scene-mini-device"><span /></div>
+                                  </div>
+                                  <strong>{item.label}</strong>
+                                </button>
+                                {item.id.startsWith('custom-') && (
+                                  <button
+                                    type="button"
+                                    className="scene-delete"
+                                    title="Delete preset"
+                                    aria-label={`Delete ${item.label}`}
+                                    onClick={() => onDeleteLook(item.id)}
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                            {project.background === 'custom' && (
+                              <button type="button" className="scene-card active" title="Edited colours">
+                                <div className="scene-thumb" style={{ background: gradientCss(project.gradientColors) }}>
+                                  <div className="scene-mini-device"><span /></div>
+                                </div>
+                                <strong>Custom</strong>
+                              </button>
+                            )}
+                          </div>
+                          {project.background !== 'transparent' && (
+                            <div className="scene-tree-colors" aria-label="Backdrop, sky, and floor colours">
+                              <div className="field-caption scene-look-sub">Backdrop · Sky · Floor</div>
+                              <div className="gradient-color-grid is-separate-stops">
+                                {([
+                                  ['center', 'Backdrop'],
+                                  ['mid', 'Sky'],
+                                  ['edge', 'Floor'],
+                                ] as const).map(([key, label]) => (
+                                  <label key={key} className="gradient-color-field">
+                                    <span className="gradient-color-label">{label}</span>
+                                    <span className="gradient-color-input">
+                                      <input
+                                        type="color"
+                                        value={project.gradientColors[key]}
+                                        aria-label={`${label} colour`}
+                                        onChange={(e) => onUpdateGradient(key, e.target.value)}
+                                      />
+                                      <input
+                                        type="text"
+                                        defaultValue={project.gradientColors[key]}
+                                        key={`backdrop-${key}-${project.gradientColors[key]}`}
+                                        maxLength={7}
+                                        aria-label={`${label} hex`}
+                                        onBlur={(e) => onUpdateGradient(key, e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') e.currentTarget.blur();
+                                        }}
+                                      />
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {(project.sceneProps ?? []).map((prop) => {
                     const label = propLabel(prop.kind);
@@ -638,6 +704,25 @@ export default function SceneHierarchy({
                     <span>Key Light</span>
                   </button>
                   )}
+                  {(project.sceneLights ?? []).map((light) => {
+                    if (!revealAll && !textHit(light.label, needle)) return null;
+                    return (
+                      <button
+                        key={light.id}
+                        type="button"
+                        className={`scene-tree-row is-studio ${selection.kind === 'scene-light' && selection.id === light.id ? 'is-selected' : ''}`}
+                        title="Select to move with the translate gimbal"
+                        onClick={() => {
+                          setSelection({ kind: 'scene-light', id: light.id });
+                          onFocusSceneLight?.(light.id);
+                          onOpenSection('light');
+                        }}
+                      >
+                        <img src={iconSun} alt="" />
+                        <span>{light.label}</span>
+                      </button>
+                    );
+                  })}
                   {(revealAll || textHit('Rim Light', needle)) && (
                   <button
                     type="button"

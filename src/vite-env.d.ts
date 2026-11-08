@@ -48,6 +48,12 @@ interface Window {
       updatedAt: number;
       unchanged: boolean;
     }>;
+    /** DEV-only: write src/data/shippedTemplates.json so templates ship with the next build. */
+    devWriteShippedTemplates?: (contents: string) => Promise<{
+      ok: boolean;
+      path?: string;
+      reason?: string;
+    }>;
     onCloudChanged: (handler: () => void) => () => void;
     saveImage: (dataUrl: string, proposedName: string) => Promise<{ canceled: boolean; path?: string }>;
     saveMedia: (
@@ -57,6 +63,17 @@ interface Window {
       mimeType: string,
     ) => Promise<{ canceled: boolean; path?: string }>;
     openExternal: (url: string) => Promise<{ ok: boolean }>;
+    updateStatus?: () => Promise<{
+      state: 'idle' | 'downloading' | 'ready';
+      version?: string | null;
+      percent?: number;
+    }>;
+    installUpdate?: () => Promise<{ ok: boolean }>;
+    onUpdateStatus?: (handler: (status: {
+      state: 'idle' | 'downloading' | 'ready';
+      version?: string | null;
+      percent?: number;
+    }) => void) => () => void;
     readClipboardImage?: () => Promise<{ ok: boolean; dataUrl?: string; name?: string }>;
     ensureCameraAccess?: () => Promise<{ granted: boolean; status?: string; reason?: string }>;
     figmaRequest?: (apiPath: string, token: string) => Promise<{ status: number; body: string }>;
@@ -107,6 +124,14 @@ interface Window {
       sourceHeight: number;
     }) => void) => () => void;
     onAndroidMirrorError?: (handler: (payload: { serial: string; message: string }) => void) => () => void;
+    /** Desktop only: convert a .blend via local Blender into a packed GLB. */
+    convertBlend?: (payload: {
+      fileName: string;
+      dataBase64: string;
+    }) => Promise<
+      | { ok: true; dataBase64: string; fileName: string }
+      | { ok: false; error: string }
+    >;
   };
 }
 }

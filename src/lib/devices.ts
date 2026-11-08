@@ -31,12 +31,14 @@ export type BuiltinDeviceId =
   | 'macbook_air_13_2023'
   | 'iphone_18_pro_max'
   | 'iphone_18_pro'
+  | 'iphone_18'
   | 'iphone_17'
   | 'iphone_air'
   | 'galaxy_s26_ultra'
   | 'galaxy_s26_plus'
   | 'galaxy_s26'
   | 'galaxy_z_fold8'
+  | 'galaxy_z_fold8_ultra'
   | 'galaxy_z_flip8'
   | 'galaxy_watch'
   | 'galaxy_watch_ultra'
@@ -45,11 +47,17 @@ export type BuiltinDeviceId =
   | 'pixel_11_pro_xl'
   | 'pixel_fold'
   | 'pixel_watch'
+  | 'pixel_watch_7'
   | 'apple_watch_ultra_4'
   | 'apple_watch_se_3'
   | 'apple_watch_series_12'
   | 'apple_vision_pro'
-  | 'apple_watch_ultra_2';
+  | 'apple_watch_ultra_2'
+  | 'ipad_pro_m5'
+  | 'macbook_pro_m5'
+  | 'imac_24'
+  | 'imac_m4'
+  | 'apple_homeview';
 
 /** Built-in id, or a user-imported custom model id (`custom-…`). */
 export type DeviceId = BuiltinDeviceId | (string & {});
@@ -63,6 +71,7 @@ export type DeviceCategoryId =
   | 'phones'
   | 'tablets'
   | 'laptops'
+  | 'desktops'
   | 'watches'
   | 'headphones'
   | 'spatial';
@@ -74,6 +83,7 @@ export const DEVICE_CATEGORY_TABS: ReadonlyArray<{ id: DeviceCategoryFilter; lab
   { id: 'phones', label: 'Phones' },
   { id: 'tablets', label: 'Tablets' },
   { id: 'laptops', label: 'Laptops' },
+  { id: 'desktops', label: 'Desktops' },
   { id: 'watches', label: 'Watches' },
   { id: 'headphones', label: 'Headphones' },
   { id: 'spatial', label: 'Spatial' },
@@ -85,6 +95,7 @@ export type DeviceCategoryIconKey =
   | 'smartphone'
   | 'tablet'
   | 'laptop'
+  | 'monitor'
   | 'watch'
   | 'headphones'
   | 'glasses';
@@ -94,6 +105,7 @@ export const DEVICE_CATEGORY_ICON: Record<DeviceCategoryFilter, DeviceCategoryIc
   phones: 'smartphone',
   tablets: 'tablet',
   laptops: 'laptop',
+  desktops: 'monitor',
   watches: 'watch',
   headphones: 'headphones',
   spatial: 'glasses',
@@ -106,6 +118,12 @@ export interface DeviceUv {
   repeat?: [number, number];
   offset?: [number, number];
   clamp?: boolean;
+  /**
+   * Rebuild the screen mesh UVs from the fitted front plane.
+   * Use when the glTF unwrap splits the display into rotated islands
+   * so a single texture matrix cannot keep the screenshot upright.
+   */
+  planar?: boolean;
 }
 
 export interface ScreenSize {
@@ -139,8 +157,20 @@ export interface DeviceModel {
   tweaks?: Record<string, Record<string, number | boolean | string>>;
   /** Extra material names treated as glass for reflection control */
   glassMats?: string[];
+  /**
+   * @deprecated GLB materials are always kept as authored now.
+   * Clay mode is the only studio override. Kept for older project JSON.
+   */
+  lockMaterials?: boolean;
+  /**
+   * When false, skip the phone-screen emissive pipeline (headphones, cases, etc.).
+   * Defaults to true for devices that show a screenshot.
+   */
+  hasScreen?: boolean;
   /** Node names to hide — stray plates that aren't part of the device */
   hideNodes?: string[];
+  /** Drop meshes whose names include these strings before fitting. Used to discard extra colorways that would stretch the bounding box. */
+  dropNameIncludes?: string[];
   /** Optional laptop lid open/close rig */
   lid?: DeviceLidConfig;
 }
@@ -149,6 +179,7 @@ export function categoryOfDevice(device: Pick<DeviceModel, 'id' | 'category'>): 
   if (device.category) return device.category;
   const id = String(device.id);
   if (/ipad|tablet|\btab_/.test(id)) return 'tablets';
+  if (/imac|desktop|studio_display/.test(id)) return 'desktops';
   if (/macbook|laptop/.test(id)) return 'laptops';
   if (/watch|chronograph|rolex/.test(id)) return 'watches';
   if (/airpods|mdr_|skullcandy|jbl_|headphone/.test(id)) return 'headphones';
@@ -195,8 +226,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/iphone_16_pro_max.glb',
     screenMat: 'screen.001',
     screenSize: { width: 1320, height: 2868 },
-    rot: [0, Math.PI / 2, Math.PI],
-    uv: {},
+    rot: [0, Math.PI / 2, 0],
+    uv: { repeat: [1, -1] },
     glassMats: ['glass.002', 'lensinglass'],
     // Metal squares glued to the bottom edge of the Sketchfab mesh.
     hideNodes: ['Plane.013_metaL.001_0', 'Plane.014_metaL.001_0'],
@@ -234,13 +265,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/iphone_17_pro_max.glb',
     screenMat: 'screen.001',
     screenSize: { width: 1320, height: 2868 },
-    rot: [0, Math.PI / 2, Math.PI],
-    uv: {
-      repeat: [-1.028278, -1],
-      offset: [0.020257, 1.0019],
-      clamp: true,
-      flipY: true,
-    },
+    rot: [0, Math.PI / 2, 0],
+    uv: { repeat: [-1, -1] },
     screenInset: { border: 26, radius: 162 },
     glassMats: ['glass.002', 'lensinglass'],
     tweaks: {
@@ -272,8 +298,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/pixel_9.glb',
     screenMat: 'Screen',
     screenSize: { width: 1080, height: 2424 },
-    rot: [Math.PI / 2, Math.PI / 2, Math.PI / 2],
-    uv: { mirrorX: true },
+    rot: [Math.PI / 2, -Math.PI / 2, Math.PI / 2],
+    uv: { flipY: true, clamp: true, planar: true },
     glassMats: ['Glass', 'LEDGlass', 'Lens'],
     tweaks: {
       Glass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.04, transparent: true },
@@ -412,7 +438,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenSize: { width: 396, height: 484 },
     rot: [0, 0, 0],
     uv: { flipY: true },
-    glassMats: ['Glass_Clear2', 'Black_Glossy', 'Black_Glossy2', 'Black_Glossy_TEXT'],
+    glassMats: ['Glass_Clear2'],
+    lockMaterials: true,
   },
   {
     id: 'chronograph_watch',
@@ -426,6 +453,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [Math.PI / 2, 0, 0],
     uv: {},
     glassMats: ['Glass Face'],
+    lockMaterials: true,
   },
   {
     id: 'rolex_watch',
@@ -438,6 +466,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenSize: { width: 512, height: 512 },
     rot: [0, 0, -Math.PI / 2],
     uv: {},
+    hasScreen: false,
+    lockMaterials: true,
   },
   {
     id: 'airpods_pro',
@@ -445,12 +475,43 @@ export const DEVICE_MODELS: DeviceModel[] = [
     subtitle: 'Audio · SceneView',
     platform: 'ios',
     kind: 'gltf',
+    category: 'headphones',
     url: './models/airpods_pro.glb',
     screenMat: 'cEVcwrpGKjNUrED',
     screenSize: { width: 1024, height: 1024 },
     rot: [0, Math.PI / 2, -Math.PI / 2],
     uv: {},
     glassMats: ['czaVLhHNccVShhr', 'OXPzgZBrHvcYhRk'],
+    // Authored white plastic + glossy case — never paint finish swatches / fake a screen.
+    hasScreen: false,
+    lockMaterials: true,
+    // Soft gloss + clearcoat so the case picks up studio softboxes (stock GLB is too matte).
+    tweaks: {
+      DrEQLAPBkLNlpSM: {
+        roughness: 0.28, metalness: 0, envMapIntensity: 1.15,
+        clearcoat: 0.62, clearcoatRoughness: 0.22,
+      },
+      FJixwyYXpYmTghW: {
+        roughness: 0.32, metalness: 0.08, envMapIntensity: 1.05,
+        clearcoat: 0.48, clearcoatRoughness: 0.26,
+      },
+      BQKMNbgpcCWqzPH: {
+        roughness: 0.2, metalness: 0, envMapIntensity: 1.2,
+        clearcoat: 0.72, clearcoatRoughness: 0.16,
+      },
+      EGgayDtrTMexFep: {
+        roughness: 0.36, metalness: 0, envMapIntensity: 0.95,
+        clearcoat: 0.4, clearcoatRoughness: 0.3,
+      },
+      czaVLhHNccVShhr: {
+        roughness: 0.06, metalness: 0.15, envMapIntensity: 1.85,
+        clearcoat: 1, clearcoatRoughness: 0.04,
+      },
+      OXPzgZBrHvcYhRk: {
+        roughness: 0.02, metalness: 0.05, envMapIntensity: 2.0,
+        clearcoat: 1, clearcoatRoughness: 0.03,
+      },
+    },
   },
   {
     id: 'sony_mdr_7506',
@@ -458,12 +519,15 @@ export const DEVICE_MODELS: DeviceModel[] = [
     subtitle: 'Audio · CC BY',
     platform: 'android',
     kind: 'gltf',
+    category: 'headphones',
     url: './models/sony_mdr_7506.glb',
     screenMat: 'pasted__headphones1',
     screenSize: { width: 1024, height: 1024 },
     // Authored upright: tall Y, thin Z (front silhouette)
     rot: [0, 0, 0],
     uv: {},
+    hasScreen: false,
+    lockMaterials: true,
   },
   {
     id: 'skullcandy_crusher',
@@ -471,11 +535,14 @@ export const DEVICE_MODELS: DeviceModel[] = [
     subtitle: 'Audio · CC BY',
     platform: 'android',
     kind: 'gltf',
+    category: 'headphones',
     url: './models/skullcandy_crusher.glb',
     screenMat: 'M_Skullcandy_Crusher',
     screenSize: { width: 1024, height: 1024 },
     rot: [0, 0, 0],
     uv: {},
+    hasScreen: false,
+    lockMaterials: true,
   },
   {
     id: 'jbl_tour_one_m3',
@@ -483,12 +550,15 @@ export const DEVICE_MODELS: DeviceModel[] = [
     subtitle: 'Audio · CC BY',
     platform: 'android',
     kind: 'gltf',
+    category: 'headphones',
     url: './models/jbl_tour_one_m3.glb',
     screenMat: 'Black',
     screenSize: { width: 1024, height: 1024 },
     rot: [0, 0, 0],
     uv: {},
     glassMats: ['Button_Glossy', 'Ring', 'Icons', 'JBL_Logo_Outer'],
+    hasScreen: false,
+    lockMaterials: true,
   },
   {
     id: 'macbook_pro_m3_16',
@@ -590,10 +660,35 @@ export const DEVICE_MODELS: DeviceModel[] = [
     // Material.013 is camera housing — display panels use Material.020 (+ color variants)
     screenMat: 'Material.020',
     screenSize: { width: 1206, height: 2622 },
-    rot: [Math.PI / 2, Math.PI, Math.PI / 2],
-    uv: { flipY: true },
+    rot: [0, -Math.PI / 2, 0],
+    uv: { rot: -Math.PI / 2, repeat: [4, 4], offset: [0.5, 0], flipY: true, clamp: true },
+    dropNameIncludes: ['001', '002', '003'],
     // No dedicated glass sheets — lens / flash discs get glossy treatment
     glassMats: ['Material.021', 'Material.012', 'Material.014', 'Material.022'],
+  },
+  {
+    id: 'iphone_18',
+    label: 'iPhone 18',
+    subtitle: 'iOS · Ranguel',
+    platform: 'ios',
+    kind: 'gltf',
+    url: './models/iphone_18.glb',
+    screenMat: 'OLED',
+    screenSize: { width: 1206, height: 2622 },
+    // Height is Y. Turn it so the OLED faces the front camera.
+    rot: [0, Math.PI, 0],
+    uv: {},
+    glassMats: ['Glass', 'Tinted glass', 'Frosted glass', 'Camera sapphire miror', 'Camera Lens'],
+    tweaks: {
+      'Display Frame': {
+        color: 0x000000, emissive: 0x0d0d0f, emissiveIntensity: 1,
+        metalness: 0, roughness: 1, envMapIntensity: 0, toneMapped: false,
+      },
+      'OLED off': {
+        color: 0x000000, emissive: 0x0d0d0f, emissiveIntensity: 1,
+        metalness: 0, roughness: 1, envMapIntensity: 0, toneMapped: false,
+      },
+    },
   },
   {
     id: 'galaxy_s26_ultra',
@@ -624,6 +719,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [0, Math.PI, Math.PI / 2],
     uv: {},
     glassMats: ['NLAQCwOxsrAPIlV', 'LlnrRvRtBSKKJtZ', 'FOugkDgsmvxAjLB', 'nctcFIvFhZfKDLQ'],
+    lockMaterials: true,
   },
   {
     id: 'apple_watch_ultra_2',
@@ -637,6 +733,231 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [Math.PI, Math.PI, 0],
     uv: { mirrorX: true },
     glassMats: ['VJcIxaYCeMHzzAJ', 'EbFYvXZFEOELnji', 'IsuszdatyklnjoT', 'JlRKetQcktLwJwa'],
+    lockMaterials: true,
+  },
+  {
+    id: 'pixel_watch',
+    label: 'Pixel Watch 5',
+    subtitle: 'Wear OS · 41mm',
+    platform: 'android',
+    kind: 'gltf',
+    category: 'watches',
+    url: './models/pixel_watch.glb',
+    screenMat: 'Screen',
+    screenSize: { width: 450, height: 450 },
+    rot: [0, 0, 0],
+    uv: {},
+    glassMats: ['Screen Glass'],
+    lockMaterials: true,
+  },
+  {
+    id: 'galaxy_z_flip8',
+    label: 'Galaxy Z Flip 8',
+    subtitle: 'Android · Graphite',
+    platform: 'android',
+    kind: 'gltf',
+    category: 'phones',
+    url: './models/galaxy_z_flip8.glb',
+    screenMat: 'Screen',
+    screenSize: { width: 1080, height: 2640 },
+    // Authored upright, screen already faces +Z.
+    rot: [0, 0, 0],
+    uv: { planar: true },
+    glassMats: ['Glass'],
+    lockMaterials: true,
+  },
+  {
+    id: 'galaxy_z_fold8',
+    label: 'Galaxy Z Fold 8',
+    subtitle: 'Android · Graphite',
+    platform: 'android',
+    kind: 'gltf',
+    category: 'phones',
+    url: './models/galaxy_z_fold8.glb',
+    screenMat: 'Screen',
+    screenSize: { width: 1968, height: 2184 },
+    // Open book: roll upright and yaw so the inner screen faces +Z.
+    rot: [0, Math.PI, Math.PI / 2],
+    uv: { planar: true },
+    glassMats: ['Glass', 'Glass.001'],
+    lockMaterials: true,
+    // Left cover + half of the spanning inner screen swing closed around Y.
+    lid: {
+      mode: 'fold',
+      wing: ['Base_L', 'Screen_02', 'Glass_Screen_02', 'Lens_02'],
+      splitSpans: ['Screen_01', 'Glass_Screen_01'],
+      wingSide: 'min',
+      axis: 'y',
+      closeAngle: Math.PI,
+    },
+  },
+  {
+    id: 'galaxy_z_fold8_ultra',
+    label: 'Galaxy Z Fold 8 Ultra',
+    subtitle: 'Android · Graphite',
+    platform: 'android',
+    kind: 'gltf',
+    category: 'phones',
+    url: './models/galaxy_z_fold8_ultra.glb',
+    screenMat: 'Screen',
+    screenSize: { width: 1920, height: 2160 },
+    // Authored upright, screen already faces +Z.
+    rot: [0, 0, 0],
+    uv: { planar: true },
+    glassMats: ['Glass', 'Glass.001'],
+    lockMaterials: true,
+    lid: {
+      mode: 'fold',
+      wing: ['Base_L', 'Screen_02', 'Glass_Screen_02', 'Lens_02'],
+      splitSpans: ['Screen_01', 'Glass_Screen_01'],
+      wingSide: 'min',
+      axis: 'y',
+      closeAngle: Math.PI,
+    },
+  },
+  {
+    id: 'apple_homeview',
+    label: 'Apple HomeView',
+    subtitle: 'HomeOS · Concept',
+    platform: 'ios',
+    kind: 'gltf',
+    category: 'desktops',
+    url: './models/apple_homeview.glb',
+    screenMat: 'screen',
+    screenSize: { width: 1920, height: 1440 },
+    // Blender glTF: tip so the pad sits on -Y and the hinged display faces +Z.
+    rot: [-Math.PI / 2, 0, 0],
+    uv: { planar: true },
+    glassMats: ['Camera:0:0:0 #1', 'Camera:0:0:0 #2', 'Camera:0:0:0 #3'],
+    lockMaterials: true,
+  },
+  {
+    id: 'apple_watch_series_12',
+    label: 'Apple Watch Series 12',
+    subtitle: 'watchOS · 46mm',
+    platform: 'ios',
+    kind: 'gltf',
+    category: 'watches',
+    url: './models/apple_watch_series_12.glb',
+    screenMat: 'screen',
+    screenSize: { width: 422, height: 514 },
+    rot: [0, 0, 0],
+    uv: {},
+    glassMats: ['frame gold', 'crown ring gold'],
+    lockMaterials: true,
+  },
+  {
+    id: 'pixel_fold',
+    label: 'Pixel 11 Pro Fold',
+    subtitle: 'Android · Obsidian',
+    platform: 'android',
+    kind: 'gltf',
+    category: 'phones',
+    url: './models/pixel_fold.glb',
+    screenMat: 'Screen',
+    screenSize: { width: 2076, height: 2152 },
+    rot: [0, 0, 0],
+    uv: {},
+    glassMats: ['Glass'],
+    lockMaterials: true,
+    lid: {
+      mode: 'fold',
+      wing: [
+        'Fold_Base_02',
+        'Fold_Screen_02',
+        'Fold_Glass_Screen_02',
+        'Fold_Lens_02',
+        'Fold_Plastic_02',
+        'Fold_iron_02',
+      ],
+      splitSpans: ['Fold_Screen_01', 'Fold_Glass_Screen_01'],
+      wingSide: 'min',
+      axis: 'y',
+      closeAngle: Math.PI,
+    },
+  },
+  {
+    id: 'pixel_watch_7',
+    label: 'Pixel Watch 7',
+    subtitle: 'Wear OS',
+    platform: 'android',
+    kind: 'gltf',
+    category: 'watches',
+    url: './models/pixel_watch_7.glb',
+    screenMat: 'screen',
+    screenSize: { width: 450, height: 450 },
+    rot: [0, 0, 0],
+    uv: {},
+    glassMats: ['glass'],
+    lockMaterials: true,
+    // Source pack used a vivid blue rubber placeholder + chrome metals.
+    tweaks: {
+      Brass: { metalness: 1, roughness: 0.35, envMapIntensity: 0.55 },
+      rubber: { color: 0x121214, metalness: 0, roughness: 0.8, envMapIntensity: 0.25 },
+      shiny: { color: 0x95989c, metalness: 0.45, roughness: 0.42, envMapIntensity: 0.4 },
+      'shiny.001': { color: 0x95989c, metalness: 0.45, roughness: 0.42, envMapIntensity: 0.4 },
+      shine2: { color: 0x8e9196, metalness: 0.4, roughness: 0.45, envMapIntensity: 0.35 },
+    },
+  },
+  {
+    id: 'ipad_pro_m5',
+    label: 'iPad Pro M5',
+    subtitle: 'iPadOS · 13″',
+    platform: 'ios',
+    kind: 'gltf',
+    category: 'tablets',
+    url: './models/ipad_pro_m5.glb',
+    screenMat: 'Display',
+    screenSize: { width: 2064, height: 2752 },
+    rot: [0, 0, 0],
+    uv: {},
+    glassMats: ['transparent glass', 'foggy glass', 'camera lens'],
+    lockMaterials: true,
+  },
+  {
+    id: 'macbook_pro_m5',
+    label: 'MacBook Pro M5 14″',
+    subtitle: 'macOS',
+    platform: 'ios',
+    kind: 'gltf',
+    category: 'laptops',
+    url: './models/macbook_pro_m5.glb',
+    screenMat: 'screen',
+    screenSize: { width: 3024, height: 1964 },
+    rot: [Math.PI / 2, 0, Math.PI],
+    uv: {},
+    glassMats: ['glass transparent', 'pearly glass', 'pearly glass cyan'],
+    lockMaterials: true,
+  },
+  {
+    id: 'imac_24',
+    label: 'iMac 24″',
+    subtitle: 'macOS · 2021',
+    platform: 'ios',
+    kind: 'gltf',
+    category: 'desktops',
+    url: './models/imac_24.glb',
+    screenMat: 'Screen',
+    screenSize: { width: 4480, height: 2520 },
+    rot: [0, 0, 0],
+    uv: {},
+    glassMats: ['Glass', 'Lens'],
+    lockMaterials: true,
+  },
+  {
+    id: 'imac_m4',
+    label: 'iMac M4',
+    subtitle: 'macOS · 24″',
+    platform: 'ios',
+    kind: 'gltf',
+    category: 'desktops',
+    url: './models/imac_m4.glb',
+    screenMat: 'screen',
+    screenSize: { width: 4480, height: 2520 },
+    rot: [0, 0, 0],
+    uv: {},
+    glassMats: ['pearly glass cyan'],
+    lockMaterials: true,
   },
 ];
 
@@ -670,18 +991,13 @@ DEVICE_MODELS.push(
   listedVariant('iphone_18_pro', 'iphone_air', 'iPhone Air', 'iOS'),
   listedVariant('galaxy_s26_ultra', 'galaxy_s26_plus', 'Galaxy S26+', 'Android', 'phones', 'android'),
   listedVariant('galaxy_s26_ultra', 'galaxy_s26', 'Galaxy S26', 'Android', 'phones', 'android'),
-  listedVariant('iphone_duo', 'galaxy_z_fold8', 'Galaxy Z Fold 8', 'Android', 'phones', 'android'),
-  listedVariant('galaxy_s26_ultra', 'galaxy_z_flip8', 'Galaxy Z Flip 8', 'Android', 'phones', 'android'),
   listedVariant('chronograph_watch', 'galaxy_watch', 'Galaxy Watch', 'Android', 'watches', 'android'),
   listedVariant('chronograph_watch', 'galaxy_watch_ultra', 'Galaxy Watch Ultra', 'Android', 'watches', 'android'),
   listedVariant('pixel_9', 'pixel_11', 'Pixel 11', 'Android', 'phones', 'android'),
   listedVariant('pixel_10_pro', 'pixel_11_pro', 'Pixel 11 Pro', 'Android', 'phones', 'android'),
   listedVariant('pixel_9_pro_xl', 'pixel_11_pro_xl', 'Pixel 11 Pro XL', 'Android', 'phones', 'android'),
-  listedVariant('iphone_duo', 'pixel_fold', 'Pixel Fold', 'Android', 'phones', 'android'),
-  listedVariant('chronograph_watch', 'pixel_watch', 'Pixel Watch', 'Android', 'watches', 'android'),
   listedVariant('apple_watch_ultra_2', 'apple_watch_ultra_4', 'Apple Watch Ultra 4', 'watchOS', 'watches'),
   listedVariant('apple_watch_series_7', 'apple_watch_se_3', 'Apple Watch SE 3', 'watchOS', 'watches'),
-  listedVariant('apple_watch_series_7', 'apple_watch_series_12', 'Apple Watch Series 12', 'watchOS', 'watches'),
 );
 
 import {

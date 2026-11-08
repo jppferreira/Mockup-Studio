@@ -182,11 +182,18 @@ export function describeProjectChange(before: MockupProject, after: MockupProjec
     || !numClose(before.fillIntensity, after.fillIntensity)
     || !numClose(before.shadowOpacity, after.shadowOpacity)
     || !numClose(before.shadowSoftness, after.shadowSoftness)
+    || !numClose(before.shadowContact, after.shadowContact)
+    || (before.shadowType ?? 'soft') !== (after.shadowType ?? 'soft')
+    || (before.shadowQuality ?? 'auto') !== (after.shadowQuality ?? 'auto')
     || before.lightColor !== after.lightColor
     || !vecClose(before.lightPosition, after.lightPosition, 0.01);
   if (lighting) push('Adjusted the lighting');
 
   if (before.cameraView !== after.cameraView || before.cameraLens !== after.cameraLens) push('Changed the camera');
+  if (
+    (before.depthOfField === true) !== (after.depthOfField === true)
+    || !numClose(before.depthOfFieldAmount, after.depthOfFieldAmount)
+  ) push('Adjusted depth of field');
   if (before.compositionMode !== after.compositionMode) {
     push(after.compositionMode === 'split' ? 'Split the composition' : 'Switched to a single device');
   }

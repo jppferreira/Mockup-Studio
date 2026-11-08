@@ -1,10 +1,70 @@
-const { app, BrowserWindow, clipboard, ipcMain, dialog, nativeImage, shell, session, systemPreferences } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, ipcMain, dialog, nativeImage, shell, session, systemPreferences } = require('electron');
 const fs = require('node:fs/promises');
 const { existsSync } = require('node:fs');
 const path = require('node:path');
 
-const APP_NAME = 'Mockup Studio';
+const APP_NAME = 'Mockup Studio 3D';
 app.setName(APP_NAME);
+
+function installAppMenu() {
+  const isMac = process.platform === 'darwin';
+  const template = [
+    ...(isMac
+      ? [{
+          label: APP_NAME,
+          submenu: [
+            { role: 'about' },
+            { type: 'separator' },
+            { role: 'services' },
+            { type: 'separator' },
+            { role: 'hide' },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            { role: 'quit' },
+          ],
+        }]
+      : []),
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        ...(isMac ? [{ role: 'pasteAndMatchStyle' }, { role: 'delete' }, { role: 'selectAll' }] : [
+          { role: 'delete' },
+          { type: 'separator' },
+          { role: 'selectAll' },
+        ]),
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        ...(isMac ? [{ type: 'separator' }, { role: 'front' }] : [{ role: 'close' }]),
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
 
 function appIconFile() {
   const candidates = [
@@ -14,7 +74,10 @@ function appIconFile() {
   return candidates.find((candidate) => existsSync(candidate)) || '';
 }
 const { registerAndroidMirrorIpc, stopAndroidMirrorSession } = require('./androidMirror.cjs');
+const { registerBlendConvertIpc } = require('./blendConvert.cjs');
 const { registerCloudLibraryIpc, getLibraryDir } = require('./cloudLibrary.cjs');
+const { decodeProjectFile, encodeProjectFile } = require('./projectFile.cjs');
+const { setupAutoUpdater } = require('./updater.cjs');
 
 function createWindow() {
   const iconFile = appIconFile();
@@ -60,6 +123,7 @@ function allowMediaPermission(permission) {
 }
 
 app.whenReady().then(() => {
+  installAppMenu();
   const iconFile = appIconFile();
   if (iconFile) {
     const image = nativeImage.createFromPath(iconFile);
@@ -109,14 +173,24 @@ app.whenReady().then(() => {
   ipcMain.handle('project:save', async (_event, { contents, proposedName }) => {
     if (typeof contents !== 'string' || contents.length > 45_000_000) throw new Error('Invalid project size');
     const libraryDir = await getLibraryDir();
-    const baseName = `${sanitizeName(proposedName)}.mockup.json`;
+    const baseName = `${sanitizeName(proposedName)}.mockup`;
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: 'Save Mockup Studio project',
       defaultPath: libraryDir ? path.join(libraryDir, baseName) : baseName,
-      filters: [{ name: 'Mockup Studio Project', extensions: ['json'] }],
+      filters: [
+        { name: 'Mockup Studio Project', extensions: ['mockup'] },
+        { name: 'Legacy JSON', extensions: ['json'] },
+      ],
     });
     if (canceled || !filePath) return { canceled: true };
-    await fs.writeFile(filePath, contents, 'utf8');
+    const lower = filePath.toLowerCase();
+    if (lower.endsWith('.mockup.json') || (lower.endsWith('.json') && !lower.endsWith('.mockup'))) {
+      await fs.writeFile(filePath, contents, 'utf8');
+    } else {
+      const target = lower.endsWith('.mockup') ? filePath : `${filePath}.mockup`;
+      await fs.writeFile(target, encodeProjectFile(contents));
+      return { canceled: false, path: target };
+    }
     return { canceled: false, path: filePath };
   });
 
@@ -126,12 +200,16 @@ app.whenReady().then(() => {
       title: 'Open Mockup Studio project',
       defaultPath: libraryDir || undefined,
       properties: ['openFile'],
-      filters: [{ name: 'Mockup Studio Project', extensions: ['json'] }],
+      filters: [
+        { name: 'Mockup Studio Project', extensions: ['mockup', 'json'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
     });
     if (canceled || !filePaths[0]) return { canceled: true };
     const stat = await fs.stat(filePaths[0]);
     if (stat.size > 45_000_000) throw new Error('Project exceeds maximum file size');
-    const contents = await fs.readFile(filePaths[0], 'utf8');
+    const raw = await fs.readFile(filePaths[0]);
+    const contents = decodeProjectFile(raw);
     return { canceled: false, contents, path: filePaths[0] };
   });
 
@@ -214,7 +292,28 @@ app.whenReady().then(() => {
   });
 
   registerAndroidMirrorIpc(ipcMain);
+  registerBlendConvertIpc(ipcMain);
   registerCloudLibraryIpc(ipcMain);
+  setupAutoUpdater();
+
+  /** DEV-only: promote compositions into src/data/shippedTemplates.json for the next build. */
+  ipcMain.handle('dev:writeShippedTemplates', async (_event, contents) => {
+    if (app.isPackaged) {
+      return { ok: false, reason: 'Modeling promote is only available in development builds' };
+    }
+    if (typeof contents !== 'string' || contents.length > 8_000_000) {
+      return { ok: false, reason: 'Invalid template pack' };
+    }
+    try {
+      JSON.parse(contents);
+    } catch {
+      return { ok: false, reason: 'Template pack is not valid JSON' };
+    }
+    const target = path.join(__dirname, '../src/data/shippedTemplates.json');
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, contents, 'utf8');
+    return { ok: true, path: target };
+  });
 
   ipcMain.handle('figma:fetchImage', async (_event, { imageUrl, token }) => {
     if (typeof imageUrl !== 'string' || imageUrl.length > 4096) {

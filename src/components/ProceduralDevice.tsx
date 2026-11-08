@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useRef } from 'react';
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { RoundedBox } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -10,6 +10,7 @@ import {
   surfaceLook,
 } from '../lib/reflectionStyle';
 import { useScreenEmissiveMap } from '../lib/useScreenTexture';
+import { STUDIO_DEVICE_HEIGHT } from '../lib/studioEnvironment';
 
 function useSurfaceLook(kind: 'screen' | 'glass') {
   const drive = useContext(ReflectionDriveContext);
@@ -184,12 +185,11 @@ function TitaniumMaterial({ color, clayMode }: { color: string; clayMode?: boole
   return (
     <meshPhysicalMaterial
       color={color}
-      metalness={0.72}
-      roughness={0.32}
-      clearcoat={0.55}
-      clearcoatRoughness={0.2}
-      envMapIntensity={1.55}
-      reflectivity={1}
+      metalness={0.14}
+      roughness={0.42}
+      clearcoat={0.46}
+      clearcoatRoughness={0.32}
+      envMapIntensity={0.92}
     />
   );
 }
@@ -413,17 +413,55 @@ export default function ProceduralDevice({
 }) {
   const group = useRef<THREE.Group>(null);
 
-  useEffect(() => {
-    if (!group.current) return;
-    group.current.scale.setScalar(1);
-    group.current.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(group.current);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    if (size.y > 0) group.current.scale.setScalar(3.0 / size.y);
-    group.current.updateMatrixWorld(true);
-    const center = new THREE.Box3().setFromObject(group.current).getCenter(new THREE.Vector3());
-    group.current.position.sub(center);
+  useLayoutEffect(() => {
+    const root = group.current;
+    if (!root) return;
+    // Same parent-pose trap as GLB fit: world-space centering while the
+    // translate/rotate pivots are offset pulls the mesh off the gimbal.
+    // Mutating parent TRS does not refresh matrixWorld — rebuild from the
+    // top neutralized ancestor or bounds still include the old pose.
+    const saved: { obj: THREE.Object3D; position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 }[] = [];
+    let top: THREE.Object3D | null = null;
+    for (let p = root.parent; p; p = p.parent) {
+      saved.push({
+        obj: p,
+        position: p.position.clone(),
+        quaternion: p.quaternion.clone(),
+        scale: p.scale.clone(),
+      });
+      p.position.set(0, 0, 0);
+      p.quaternion.identity();
+      p.scale.set(1, 1, 1);
+      top = p;
+    }
+    const refreshWorld = () => {
+      if (top) top.updateMatrixWorld(true);
+      else root.updateMatrixWorld(true);
+    };
+    try {
+      refreshWorld();
+      root.scale.setScalar(1);
+      root.position.set(0, 0, 0);
+      root.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(root);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      if (size.y > 0) {
+        root.scale.setScalar(STUDIO_DEVICE_HEIGHT / size.y);
+      }
+      root.updateMatrixWorld(true);
+      const center = new THREE.Box3().setFromObject(root).getCenter(new THREE.Vector3());
+      root.position.sub(center);
+      root.updateMatrixWorld(true);
+    } finally {
+      for (let i = saved.length - 1; i >= 0; i -= 1) {
+        const entry = saved[i];
+        entry.obj.position.copy(entry.position);
+        entry.obj.quaternion.copy(entry.quaternion);
+        entry.obj.scale.copy(entry.scale);
+      }
+      refreshWorld();
+    }
   }, [device.id]);
 
   return (

@@ -3,6 +3,9 @@ const fsSync = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { app, dialog, BrowserWindow } = require('electron');
+const {
+  decodeProjectFile, encodeProjectFile, isProjectFileName, stripProjectExtension,
+} = require('./projectFile.cjs');
 
 const LIBRARY_FOLDER_NAME = 'Mockup Studio';
 const CONFIG_NAME = 'cloud-library.json';
@@ -243,7 +246,7 @@ async function resolveInside(libraryDir, target) {
   const root = await fs.realpath(libraryDir);
   const file = path.resolve(target);
   const base = path.basename(file);
-  if (!base.endsWith('.mockup.json') || base.includes('..')) {
+  if (!isProjectFileName(base) || base.includes('..')) {
     throw new Error('Invalid project file');
   }
   let parentReal;
@@ -269,16 +272,21 @@ async function resolveInside(libraryDir, target) {
 
 async function allocatePath(dir, name) {
   const base = sanitizeName(name);
-  let candidate = path.join(dir, `${base}.mockup.json`);
+  let candidate = path.join(dir, `${base}.mockup`);
   for (let i = 2; i < 200; i += 1) {
     try {
       await fs.stat(candidate);
-      candidate = path.join(dir, `${base}-${i}.mockup.json`);
+      candidate = path.join(dir, `${base}-${i}.mockup`);
     } catch {
       return candidate;
     }
   }
-  return path.join(dir, `${base}-${Date.now()}.mockup.json`);
+  return path.join(dir, `${base}-${Date.now()}.mockup`);
+}
+
+async function readProjectText(filePath) {
+  const raw = await fs.readFile(filePath);
+  return decodeProjectFile(raw);
 }
 
 function shrinkMedia(value) {
@@ -319,7 +327,7 @@ async function listProjects() {
       continue;
     }
     if (name === TEMPLATES_FILE_NAME) continue;
-    if (!name.endsWith('.mockup.json') || name.startsWith('.')) continue;
+    if (!isProjectFileName(name) || name.startsWith('.')) continue;
     const filePath = path.join(config.dir, name);
     try {
       const stat = await fs.stat(filePath);
@@ -327,7 +335,7 @@ async function listProjects() {
       if (stat.size > 12_000_000) {
         entries.push({
           path: filePath,
-          name: name.replace(/\.mockup\.json$/i, ''),
+          name: stripProjectExtension(name),
           updatedAt: stat.mtimeMs,
           deviceId: 'iphone-17-pro',
           deviceCount: 1,
@@ -336,12 +344,12 @@ async function listProjects() {
         });
         continue;
       }
-      let projectName = name.replace(/\.mockup\.json$/i, '');
+      let projectName = stripProjectExtension(name);
       let deviceId = 'iphone-17-pro';
       let deviceCount = 1;
       let preview = null;
       let slim = null;
-      const text = await fs.readFile(filePath, 'utf8');
+      const text = await readProjectText(filePath);
       try {
         const json = JSON.parse(text);
         if (typeof json.name === 'string' && json.name.trim()) projectName = json.name.trim().slice(0, 100);
@@ -382,7 +390,7 @@ async function readProject(filePath) {
   const target = await resolveInside(config.dir, filePath);
   const stat = await fs.stat(target);
   if (!stat.isFile() || stat.size > MAX_BYTES) throw new Error('Project exceeds maximum file size');
-  const contents = await fs.readFile(target, 'utf8');
+  const contents = await readProjectText(target);
   return { path: target, contents, updatedAt: stat.mtimeMs };
 }
 
@@ -397,36 +405,59 @@ async function writeProject({ filePath, contents, name }) {
   let target = typeof filePath === 'string' && filePath
     ? await resolveInside(root, filePath)
     : null;
-  const preferred = path.join(root, `${sanitizeName(name)}.mockup.json`);
+  const preferred = path.join(root, `${sanitizeName(name)}.mockup`);
   if (!target) {
     target = await allocatePath(root, name);
-  } else if (path.resolve(target) !== path.resolve(preferred)) {
-    let taken = false;
-    try {
-      taken = (await fs.stat(preferred)).isFile();
-    } catch {
-      taken = false;
-    }
-    if (!taken) {
+  } else {
+    // Migrate legacy .mockup.json paths to .mockup when the preferred name is free.
+    if (/\.mockup\.json$/i.test(target)) {
+      const migrated = target.replace(/\.mockup\.json$/i, '.mockup');
+      let migratedTaken = false;
       try {
-        await fs.stat(target);
-        await fs.rename(target, preferred);
+        migratedTaken = (await fs.stat(migrated)).isFile();
       } catch {
-        /* previous file is already gone */
+        migratedTaken = false;
       }
-      target = preferred;
+      if (!migratedTaken || path.resolve(migrated) === path.resolve(target)) {
+        try {
+          if (path.resolve(migrated) !== path.resolve(target)) {
+            await fs.rename(target, migrated);
+          }
+        } catch {
+          /* keep legacy path if rename fails */
+        }
+        if (!migratedTaken) target = migrated;
+      }
+    }
+    if (path.resolve(target) !== path.resolve(preferred)) {
+      let taken = false;
+      try {
+        taken = (await fs.stat(preferred)).isFile();
+      } catch {
+        taken = false;
+      }
+      if (!taken) {
+        try {
+          await fs.stat(target);
+          await fs.rename(target, preferred);
+        } catch {
+          /* previous file is already gone */
+        }
+        target = preferred;
+      }
     }
   }
   target = await resolveInside(root, target);
   let unchanged = false;
   try {
-    unchanged = (await fs.readFile(target, 'utf8')) === contents;
+    unchanged = (await readProjectText(target)) === contents;
   } catch {
     unchanged = false;
   }
   if (!unchanged) {
+    const encoded = encodeProjectFile(contents);
     const tmp = path.join(root, `.${path.basename(target)}.${process.pid}.tmp`);
-    await fs.writeFile(tmp, contents, 'utf8');
+    await fs.writeFile(tmp, encoded);
     await fs.rename(tmp, target);
   }
   const stat = await fs.stat(target);

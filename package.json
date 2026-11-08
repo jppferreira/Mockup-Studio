@@ -4,7 +4,7 @@
   "version": "0.1.1",
   "license": "UNLICENSED",
   "description": "Local-first 3D device mockup studio for macOS",
-  "productName": "Mockup Studio",
+  "productName": "Mockup Studio 3D",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -23,6 +23,7 @@
   "dependencies": {
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.17.10",
+    "electron-updater": "^6.8.11",
     "gifenc": "^1.0.3",
     "lucide-react": "^0.468.0",
     "mediabunny": "^1.65.1",
@@ -50,9 +51,14 @@
   },
   "build": {
     "appId": "studio.mockup.desktop",
-    "productName": "Mockup Studio",
+    "productName": "Mockup Studio 3D",
     "directories": {
       "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "jppferreira",
+      "repo": "Mockup-Studio"
     },
     "files": [
       "dist/**/*",

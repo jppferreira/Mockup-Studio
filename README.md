@@ -34,7 +34,7 @@ The output will be under `release/`, including an Apple Silicon `.dmg` and a `.z
 - Android USB Mirror prototype via ADB screencap (Pixel & Samsung preferred) with full-res Snapshot
 - Four device finishes, five background presets, lighting adjustment
 - High-resolution WebGL PNG export: TikTok/Shorts, Reels, Instagram Feed, YouTube, Apple App Store, Google Play sizes
-- Save/open local `.mockup.json` project, including screenshot image data
+- Save/open local `.mockup` project files (gzip-compressed JSON; still opens legacy `.mockup.json`), including screenshot image data
 - Native macOS open/save dialogs in Electron; browser-download fallback
 - Keyboard shortcuts: Cmd/Ctrl+S, Cmd/Ctrl+O, Cmd/Ctrl+E
 

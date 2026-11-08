@@ -43,6 +43,8 @@ Third-party GLBs shipped with Mockup Studio. Prefer CC BY 4.0; keep attribution.
 | `iphone_18_pro_max.glb` | iPhone 18 Pro Max — Bundled from Sketchfab CC BY download. | Adreamyouvehadbefore | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/e6b0f5abdfd74de29f347805fb724e5b) |
 | `iphone_18_pro.glb` | iPhone 18 Pro — Bundled from Sketchfab CC BY download. | DUOPlyer | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/4a61ee52c29140449ee3d0a4368e5747) |
 | `galaxy_s26_ultra.glb` | Samsung Galaxy S26 Ultra — Bundled from Sketchfab CC BY download. | AbrasiveFowl4870 | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/8c7727ebe83f46d1878ada94863875ca) |
+| `iphone_18.glb` | iPhone 18 Concept — Bundled from Sketchfab CC BY download. Fan-made concept, used as the base iPhone 18. | Ranguel | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/iphone-18-concept-62432896ffb84ff29853fc896f42b355) |
+| `galaxy_z_flip3.glb` | Samsung Galaxy Z Flip 3 — Bundled from Sketchfab CC BY download. Kept as a library asset (Flip 8 now uses its own GLB). | DatSketch | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/samsung-galaxy-z-flip-3-112947cbab7a4f708d0d01adb7d3fa3d) |
 
 ## Vision Pro & Watch Ultra
 
@@ -50,3 +52,24 @@ Third-party GLBs shipped with Mockup Studio. Prefer CC BY 4.0; keep attribution.
 | --- | --- | --- | --- | --- |
 | `apple_vision_pro.glb` | Apple Vision Pro — Bundled from Sketchfab CC BY download. | DextonOfficial | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-vision-pro-3341d1f3f75e41b59fcedd1f46f03d56) |
 | `apple_watch_ultra_2.glb` | Apple Watch Ultra 2 — Bundled from Sketchfab CC BY download. | Polyman_3D | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-watch-ultra-2-f33263c457664b43909200c5ed5e6fa2) |
+| `apple_watch_series_9.glb` | Apple Watch Series 9 — Bundled from Sketchfab CC BY download. Kept as a library asset. | Polyman_3D | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-watch-series-9-b6d698e718bb425a97057767f0cede47) |
+
+## Licensed commercial packs (redistribution OK)
+
+Converted from licensed DCC packs (FBX/OBJ → GLB). Source archives live outside the repo.
+
+| File | Model | Notes |
+| --- | --- | --- |
+| `pixel_fold.glb` | Google Pixel 11 Pro Fold Obsidian | From pack `GLB.rar` |
+| `apple_watch_series_12.glb` | Apple Watch Series 12 46mm | From Element 3D / C4D pack FBX |
+| `pixel_watch_7.glb` | Google Pixel Watch 7 | From pack FBX |
+| `ipad_pro_m5.glb` | iPad Pro M5 13″ | From Apple Products 2026 pack FBX |
+| `macbook_pro_m5.glb` | MacBook Pro M5 14″ | From Apple Products 2026 pack FBX |
+| `imac_24.glb` | iMac 24″ (2021) | From iMac colors pack FBX |
+| `imac_m4.glb` | iMac M4 | From Apple Products 2026 pack FBX |
+| `galaxy_z_flip8.glb` | Samsung Galaxy Z Flip 8 Graphite | From pack `GLB.rar` |
+| `galaxy_z_fold8.glb` | Samsung Galaxy Z Fold 8 Graphite | From pack `GLB.rar` |
+| `galaxy_z_fold8_ultra.glb` | Samsung Galaxy Z Fold 8 Ultra Graphite | From pack `GLB.rar` |
+| `apple_homeview.glb` | Apple HomeView | From pack FBX + textures |
+
+Still C4D/Max/Maya-only (need GLB/FBX export before library replace): Galaxy Z Flip 8 cream/other colorways, iPhone 18 Pro / Pro Max / Duo packs.

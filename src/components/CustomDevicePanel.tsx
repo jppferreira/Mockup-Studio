@@ -2,18 +2,19 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type Chan
 import { Check, Trash2 } from 'lucide-react';
 import {
   deleteCustomDevice,
-  importCustomDevice,
+  importCustomDevices,
   listCustomDeviceMaterials,
   updateCustomDeviceMeta,
   type CustomDeviceMeta,
 } from '../lib/customDevices';
 import { isCustomDeviceId, screenSizeLabel, type DevicePlatform } from '../lib/devices';
+import { CUSTOM_MODEL_ACCEPT } from '../lib/meshBundle';
 
 interface Props {
   selectedDeviceId: string;
   customDevices: CustomDeviceMeta[];
   disabled?: boolean;
-  onImported: (meta: CustomDeviceMeta) => void;
+  onImported: (metas: CustomDeviceMeta[]) => void;
   onUpdated: (meta: CustomDeviceMeta) => void;
   onDeleted: (id: string) => void;
   onNotify: (message: string) => void;
@@ -21,6 +22,7 @@ interface Props {
 
 export type CustomDevicePanelHandle = {
   openImport: () => void;
+  openImportFolder: () => void;
 };
 
 const CustomDevicePanel = forwardRef<CustomDevicePanelHandle, Props>(function CustomDevicePanel({
@@ -33,10 +35,17 @@ const CustomDevicePanel = forwardRef<CustomDevicePanelHandle, Props>(function Cu
   onNotify,
 }, ref) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   useImperativeHandle(ref, () => ({
     openImport: () => {
       if (!disabled) fileRef.current?.click();
+    },
+    openImportFolder: () => {
+      const input = folderRef.current;
+      if (!input || disabled) return;
+      input.setAttribute('webkitdirectory', '');
+      input.click();
     },
   }), [disabled]);
   const [materials, setMaterials] = useState<string[]>([]);
@@ -59,14 +68,26 @@ const CustomDevicePanel = forwardRef<CustomDevicePanelHandle, Props>(function Cu
   }, [selected?.id]);
 
   const onFile = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files ?? []);
     event.target.value = '';
-    if (!file) return;
+    if (!files.length) return;
     setBusy(true);
     try {
-      const meta = await importCustomDevice({ file });
-      onImported(meta);
-      onNotify(`Imported “${meta.label}”`);
+      const { imported, skipped } = await importCustomDevices({ files });
+      onImported(imported);
+      if (imported.length === 1) {
+        onNotify(
+          skipped
+            ? `Imported “${imported[0].label}” · ${skipped} skipped (library full)`
+            : `Imported “${imported[0].label}”`,
+        );
+      } else {
+        onNotify(
+          skipped
+            ? `Imported ${imported.length} models · ${skipped} skipped (library full)`
+            : `Imported ${imported.length} models`,
+        );
+      }
     } catch (error) {
       onNotify(error instanceof Error ? error.message : 'Could not import model');
     } finally {
@@ -93,7 +114,16 @@ const CustomDevicePanel = forwardRef<CustomDevicePanelHandle, Props>(function Cu
       <input
         ref={fileRef}
         type="file"
-        accept=".glb,.gltf,model/gltf-binary,model/gltf+json"
+        accept={CUSTOM_MODEL_ACCEPT}
+        multiple
+        hidden
+        onChange={(e) => { void onFile(e); }}
+      />
+      <input
+        ref={folderRef}
+        type="file"
+        accept={CUSTOM_MODEL_ACCEPT}
+        multiple
         hidden
         onChange={(e) => { void onFile(e); }}
       />

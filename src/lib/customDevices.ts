@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import type { SceneLight } from '../types';
 import type { DeviceModel, DevicePlatform, DeviceUv, ScreenSize } from './devices';
+import { bundleMeshFiles, filesForMeshBundle, listMeshFiles } from './meshBundle';
 
 const META_KEY = 'mockup-studio.custom-devices.v1';
 const DB_NAME = 'mockup-studio-custom-devices';
@@ -21,6 +23,18 @@ export interface CustomDeviceMeta {
   /** Original filename for display */
   fileName: string;
   createdAt: number;
+  /**
+   * When false, treated as a scene set / prop mesh (no screenshot plate).
+   * Used by DEV modeling mode for Spline/Blender environment imports.
+   */
+  hasScreen?: boolean;
+  /**
+   * Keep authored PBR / glass / maps. Studio reflection sliders do not rewrite
+   * the material — only the HDRI is attached so reflections still light in-app.
+   */
+  lockMaterials?: boolean;
+  /** DEV material overrides keyed by material name. */
+  tweaks?: Record<string, Record<string, number | boolean | string | null>>;
 }
 
 type StoredMeta = CustomDeviceMeta;
@@ -77,6 +91,26 @@ function readMeta(): CustomDeviceMeta[] {
           : undefined,
         fileName: typeof entry.fileName === 'string' ? entry.fileName.slice(0, 120) : 'model.glb',
         createdAt: typeof entry.createdAt === 'number' ? entry.createdAt : Date.now(),
+        hasScreen: entry.hasScreen !== false,
+        // Default true for imports — older library entries omitted the flag.
+        lockMaterials: entry.lockMaterials !== false,
+        tweaks: entry.tweaks && typeof entry.tweaks === 'object'
+          ? Object.fromEntries(
+            Object.entries(entry.tweaks).slice(0, 64).map(([name, tweak]) => [
+              String(name).slice(0, 80),
+              (tweak && typeof tweak === 'object')
+                ? Object.fromEntries(
+                  Object.entries(tweak as Record<string, unknown>).slice(0, 32).flatMap(([key, value]) => {
+                    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string' || value === null) {
+                      return [[key, value]];
+                    }
+                    return [];
+                  }),
+                )
+                : {},
+            ]),
+          )
+          : undefined,
       }];
     }).slice(0, MAX_CUSTOM);
   } catch {
@@ -178,6 +212,9 @@ export function customMetaToDeviceModel(meta: CustomDeviceMeta, url?: string): D
     && cached.rot[1] === meta.rot[1]
     && cached.rot[2] === meta.rot[2]
     && cached.uv.mirrorX === meta.uv.mirrorX
+    && cached.hasScreen === (meta.hasScreen !== false)
+    && cached.lockMaterials === (meta.lockMaterials !== false)
+    && JSON.stringify(cached.tweaks ?? null) === JSON.stringify(meta.tweaks ?? null)
   ) {
     return cached;
   }
@@ -187,12 +224,25 @@ export function customMetaToDeviceModel(meta: CustomDeviceMeta, url?: string): D
     subtitle: meta.subtitle,
     platform: meta.platform,
     kind: 'gltf',
+    category: meta.hasScreen === false ? 'spatial' : undefined,
     url: resolvedUrl,
     screenMat: meta.screenMat,
     screenSize: { ...meta.screenSize },
     rot: [...meta.rot] as [number, number, number],
     uv: { ...meta.uv },
     glassMats: meta.glassMats ? [...meta.glassMats] : undefined,
+    hasScreen: meta.hasScreen !== false,
+    lockMaterials: meta.lockMaterials !== false,
+    tweaks: meta.tweaks
+      ? Object.fromEntries(
+        Object.entries(meta.tweaks).map(([name, tweak]) => [
+          name,
+          Object.fromEntries(
+            Object.entries(tweak).filter(([, value]) => value !== null) as [string, number | boolean | string][],
+          ),
+        ]),
+      )
+      : undefined,
   };
   modelCache.set(meta.id, model);
   return model;
@@ -228,7 +278,8 @@ export function getCustomDeviceObjectUrl(id: string): string | undefined {
 
 export interface InspectedModel {
   materialNames: string[];
-  suggestedScreenMat: string;
+  /** Real display slot when the GLB names one — null if none. */
+  suggestedScreenMat: string | null;
   suggestedGlassMats: string[];
 }
 
@@ -266,44 +317,64 @@ export async function inspectGltfBuffer(buffer: ArrayBuffer): Promise<InspectedM
     }
   });
   const materialNames = [...names].sort((a, b) => a.localeCompare(b));
+  // Only trust an explicit display slot — never fall back to the first material
+  // (that rewrote random body finishes into a black emissive "screen").
   const suggestedScreenMat =
     materialNames.find((n) => /screen|display|oled|lcd/i.test(n) && !/glass/i.test(n))
-    ?? materialNames.find((n) => /screen|display|oled|lcd/i.test(n))
-    ?? materialNames[0]
-    ?? 'Screen';
+    ?? materialNames.find((n) => /^(screen|display|oled|lcd)([._-]?\d+)?$/i.test(n))
+    ?? null;
   const suggestedGlassMats = materialNames.filter((n) => {
-    if (n === suggestedScreenMat) return false;
+    if (suggestedScreenMat && n === suggestedScreenMat) return false;
     return /glass|lens|sapphire|crystal|gloss/i.test(n);
   }).slice(0, 12);
   return { materialNames, suggestedScreenMat, suggestedGlassMats };
 }
 
 export interface ImportCustomDeviceInput {
-  file: File;
+  /** One mesh, or a mesh plus its textures and sidecar files. */
+  files?: File[];
+  file?: File;
   label?: string;
   platform?: DevicePlatform;
   screenSize?: Partial<ScreenSize>;
   screenMat?: string;
   rotY?: number;
   mirrorX?: boolean;
+  /** Import as environment / set piece (no screenshot plate). */
+  asSceneSet?: boolean;
 }
 
-export async function importCustomDevice(input: ImportCustomDeviceInput): Promise<CustomDeviceMeta> {
-  const { file } = input;
-  const name = file.name.toLowerCase();
-  if (!/\.(glb|gltf)$/.test(name) && file.type !== 'model/gltf-binary' && file.type !== 'model/gltf+json') {
-    throw new Error('Use a .glb or .gltf file.');
-  }
-  if (file.size > MAX_BYTES) {
-    throw new Error('Model is too large (max 80 MB).');
+export interface ImportedCustomDevice extends CustomDeviceMeta {
+  /** Lights captured from Spline / Blender scene sets. */
+  sceneLights?: SceneLight[];
+}
+
+export interface ImportCustomDevicesResult {
+  imported: ImportedCustomDevice[];
+  /** Models skipped because the custom library is full. */
+  skipped: number;
+}
+
+async function importOneCustomDevice(
+  files: File[],
+  input: Omit<ImportCustomDeviceInput, 'files' | 'file'>,
+): Promise<ImportedCustomDevice> {
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  if (totalBytes > MAX_BYTES) {
+    throw new Error('Model is too large (max 80 MB, including textures).');
   }
 
-  const buffer = await file.arrayBuffer();
+  const asSceneSet = input.asSceneSet === true;
+  const bundled = await bundleMeshFiles(files, { keepLights: asSceneSet });
+  if (bundled.buffer.byteLength > MAX_BYTES) {
+    throw new Error('Model is too large (max 80 MB, including textures).');
+  }
+  const buffer = bundled.buffer;
   let inspected: InspectedModel;
   try {
     inspected = await inspectGltfBuffer(buffer.slice(0));
   } catch {
-    inspected = { materialNames: [], suggestedScreenMat: 'Screen', suggestedGlassMats: [] };
+    inspected = { materialNames: [], suggestedScreenMat: null, suggestedGlassMats: [] };
   }
 
   const existing = readMeta();
@@ -312,22 +383,34 @@ export async function importCustomDevice(input: ImportCustomDeviceInput): Promis
   }
 
   const id = `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-  const baseLabel = (input.label?.trim() || file.name.replace(/\.(glb|gltf)$/i, '') || 'Custom device').slice(0, 48);
+  const baseLabel = (input.label?.trim() || bundled.sourceName.replace(/\.(glb|gltf|fbx|dae|obj|blend)$/i, '') || 'Custom device').slice(0, 48);
+  const lightCount = bundled.sceneLights?.length ?? 0;
+  const explicitScreen = input.screenMat?.trim() || inspected.suggestedScreenMat || null;
+  // Scene sets never get a screenshot plate. Device imports only do when the
+  // GLB actually names a display material — otherwise keep every surface intact.
+  const hasScreen = !asSceneSet && Boolean(explicitScreen);
   const meta: CustomDeviceMeta = {
     id,
     label: baseLabel,
-    subtitle: 'Your model',
+    subtitle: asSceneSet
+      ? (lightCount > 0 ? `Scene set · ${lightCount} light${lightCount === 1 ? '' : 's'}` : `Scene set · ${bundled.format}`)
+      : `Imported ${bundled.format}`,
     platform: input.platform === 'android' ? 'android' : 'ios',
-    screenMat: (input.screenMat?.trim() || inspected.suggestedScreenMat || 'Screen').slice(0, 80),
+    screenMat: (explicitScreen || 'Screen').slice(0, 80),
     screenSize: {
       width: Math.min(4096, Math.max(320, Math.round(input.screenSize?.width ?? 1170))),
       height: Math.min(4096, Math.max(320, Math.round(input.screenSize?.height ?? 2532))),
     },
-    rot: [0, typeof input.rotY === 'number' ? input.rotY : Math.PI, 0],
-    uv: { mirrorX: input.mirrorX !== false },
-    glassMats: inspected.suggestedGlassMats.length ? inspected.suggestedGlassMats : undefined,
-    fileName: file.name.slice(0, 120),
+    rot: [0, typeof input.rotY === 'number' ? input.rotY : (asSceneSet ? 0 : Math.PI), 0],
+    // Don't flip UVs by default — mirroring the shared atlas made packed
+    // textures read as random logos/shapes on the front of the phone.
+    uv: { mirrorX: input.mirrorX === true },
+    // Authored glass / PBR stays as exported — studio glass mats would rewrite them.
+    glassMats: undefined,
+    fileName: bundled.sourceName.slice(0, 120),
     createdAt: Date.now(),
+    hasScreen,
+    lockMaterials: true,
   };
 
   await idbPut(id, buffer);
@@ -335,12 +418,58 @@ export async function importCustomDevice(input: ImportCustomDeviceInput): Promis
   objectUrls.set(id, url);
   writeMeta([meta, ...existing].slice(0, MAX_CUSTOM));
   notify();
-  return meta;
+  return {
+    ...meta,
+    sceneLights: bundled.sceneLights?.length ? bundled.sceneLights : undefined,
+  };
+}
+
+export async function importCustomDevice(input: ImportCustomDeviceInput): Promise<ImportedCustomDevice> {
+  const files = input.files?.length ? [...input.files] : input.file ? [input.file] : [];
+  const meshes = listMeshFiles(files);
+  if (meshes.length !== 1) {
+    throw new Error('Import one model at a time. Texture images can be selected with it.');
+  }
+  return importOneCustomDevice(filesForMeshBundle(files, meshes[0]), input);
+}
+
+/** Import every distinct mesh in a selection (multi-GLB drops / file picks). */
+export async function importCustomDevices(input: ImportCustomDeviceInput): Promise<ImportCustomDevicesResult> {
+  const files = input.files?.length ? [...input.files] : input.file ? [input.file] : [];
+  const meshes = listMeshFiles(files);
+  const imported: ImportedCustomDevice[] = [];
+  let skipped = 0;
+  // No shared label — each file keeps its own stem name.
+  const perFile = {
+    platform: input.platform,
+    screenSize: input.screenSize,
+    screenMat: input.screenMat,
+    rotY: input.rotY,
+    mirrorX: input.mirrorX,
+    asSceneSet: input.asSceneSet,
+  };
+  for (const mesh of meshes) {
+    if (readMeta().length >= MAX_CUSTOM) {
+      skipped += meshes.length - imported.length;
+      break;
+    }
+    try {
+      imported.push(await importOneCustomDevice(filesForMeshBundle(files, mesh), perFile));
+    } catch (error) {
+      if (imported.length === 0) throw error;
+      skipped += 1;
+      console.warn('[custom device] skipped', mesh.name, error);
+    }
+  }
+  if (!imported.length) {
+    throw new Error(`You can save up to ${MAX_CUSTOM} custom models. Delete one first.`);
+  }
+  return { imported, skipped };
 }
 
 export async function updateCustomDeviceMeta(
   id: string,
-  patch: Partial<Pick<CustomDeviceMeta, 'label' | 'platform' | 'screenMat' | 'screenSize' | 'rot' | 'uv' | 'glassMats' | 'subtitle'>>,
+  patch: Partial<Pick<CustomDeviceMeta, 'label' | 'platform' | 'screenMat' | 'screenSize' | 'rot' | 'uv' | 'glassMats' | 'subtitle' | 'tweaks'>>,
 ): Promise<CustomDeviceMeta | null> {
   const list = readMeta();
   const index = list.findIndex((d) => d.id === id);
@@ -367,6 +496,11 @@ export async function updateCustomDeviceMeta(
     rot: patch.rot && patch.rot.length === 3 ? [...patch.rot] as [number, number, number] : current.rot,
     uv: patch.uv ? { ...patch.uv } : current.uv,
     glassMats: patch.glassMats ? [...patch.glassMats] : current.glassMats,
+    tweaks: patch.tweaks !== undefined
+      ? (patch.tweaks
+        ? Object.fromEntries(Object.entries(patch.tweaks).map(([name, tweak]) => [name, { ...tweak }]))
+        : undefined)
+      : current.tweaks,
   };
   list[index] = next;
   writeMeta(list);

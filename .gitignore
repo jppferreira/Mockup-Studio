@@ -13,3 +13,5 @@ signing/*.key
 signing/*.p12
 signing/*.cer
 signing/*.pem
+.tools/
+.model-import/
