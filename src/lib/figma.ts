@@ -1,3 +1,6 @@
+import { compileSchema, decodeBinarySchema } from 'kiwi-schema';
+import { inflateRaw } from 'pako';
+
 const TOKEN_KEY = 'mockup-studio.figma-token';
 const FIGMA_API = 'https://api.figma.com/v1';
 
@@ -353,6 +356,219 @@ function readBlobAsDataUrl(blob: Blob): Promise<string> {
     reader.onload = () => resolve(String(reader.result));
     reader.readAsDataURL(blob);
   });
+}
+
+/**
+ * If the clipboard text is a Figma design URL with a node-id, export that
+ * frame/component as PNG. Used for “copy link → paste onto device screen”.
+ */
+export async function exportFigmaUrlAsScreenPng(
+  rawUrl: string,
+  token = loadFigmaToken(),
+  scale = 2,
+): Promise<{ dataUrl: string; name: string } | null> {
+  const parsed = parseFigmaUrl(rawUrl);
+  if (!parsed?.fileKey || !parsed.nodeId) return null;
+  const trimmed = token.trim();
+  if (!trimmed) {
+    throw new Error('Add a Figma token in Assets → Open to paste Figma frame links.');
+  }
+  const { dataUrl, nameHint } = await exportFigmaNodeAsDataUrl(
+    parsed.fileKey,
+    parsed.nodeId,
+    trimmed,
+    scale,
+  );
+  return { dataUrl, name: nameHint };
+}
+
+/** True when the clipboard HTML is a Figma ⌘C selection (not Copy as PNG). */
+export function isFigmaClipboardHtml(html: string | null | undefined): boolean {
+  if (!html) return false;
+  return html.includes('(figmeta)') && html.includes('(figma)');
+}
+
+type FigmaClipboardGuid = { sessionID?: number; localID?: number };
+type FigmaClipboardMeta = {
+  fileKey?: string;
+  pasteID?: number;
+  dataType?: string;
+  /** Newer Figma ⌘C meta: `"180:43|4|0|0"` — node id is the first segment. */
+  selectedNodeData?: string;
+};
+type FigmaClipboardMessage = {
+  pasteFileKey?: string;
+  clipboardSelectionRegions?: Array<{ nodes?: FigmaClipboardGuid[] }>;
+  nodeChanges?: Array<{ guid?: FigmaClipboardGuid; type?: string; name?: string }>;
+};
+
+function decodeBase64Bytes(b64: string): Uint8Array {
+  const cleaned = b64.replace(/\s+/g, '');
+  const binary = atob(cleaned);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+/** Chromium sometimes entity-encodes the Figma markers inside attribute values. */
+function unescapeClipboardHtml(html: string): string {
+  return html
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, '&');
+}
+
+function extractFigmaClipboardParts(html: string): { metaB64: string; figB64: string | null } | null {
+  const raw = unescapeClipboardHtml(html);
+  const metaMatch = raw.match(/<!--\(figmeta\)([\s\S]*?)\(\/figmeta\)-->/);
+  if (!metaMatch?.[1]) return null;
+  const figMatch = raw.match(/<!--\(figma\)([\s\S]*?)\(\/figma\)-->/);
+  return { metaB64: metaMatch[1], figB64: figMatch?.[1] ?? null };
+}
+
+function guidToNodeId(guid: FigmaClipboardGuid | undefined): string | null {
+  if (guid == null || guid.sessionID == null || guid.localID == null) return null;
+  return `${guid.sessionID}:${guid.localID}`;
+}
+
+/** Parse `"180:43|4|0|0"` / `"12:34"` style selection hints from figmeta. */
+function nodeIdsFromSelectedNodeData(value: string | undefined): string[] {
+  if (!value) return [];
+  const ids: string[] = [];
+  for (const chunk of value.split(',')) {
+    const head = chunk.trim().split('|')[0]?.trim();
+    if (head && /^\d+:\d+$/.test(head) && !ids.includes(head)) ids.push(head);
+  }
+  return ids;
+}
+
+function parseFigKiwiArchive(data: Uint8Array): { schemaBytes: Uint8Array; messageBytes: Uint8Array } {
+  const prelude = 'fig-kiwi';
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let offset = 0;
+  let head = '';
+  for (let i = 0; i < prelude.length; i += 1) head += String.fromCharCode(data[i] ?? 0);
+  if (head !== prelude) throw new Error('Clipboard was not a Figma selection');
+  offset += prelude.length;
+  offset += 4; // version
+  const chunks: Uint8Array[] = [];
+  while (offset + 4 <= data.byteLength) {
+    const size = view.getUint32(offset, true);
+    offset += 4;
+    if (offset + size > data.byteLength) break;
+    chunks.push(data.subarray(offset, offset + size));
+    offset += size;
+  }
+  if (chunks.length < 2) throw new Error('Figma clipboard payload was incomplete');
+  return { schemaBytes: chunks[0], messageBytes: chunks[1] };
+}
+
+function nodeIdsFromKiwiMessage(message: FigmaClipboardMessage): { nodeIds: string[]; nameHint?: string } {
+  const selected: string[] = [];
+  for (const region of message.clipboardSelectionRegions ?? []) {
+    for (const node of region.nodes ?? []) {
+      const id = guidToNodeId(node);
+      if (id && !selected.includes(id)) selected.push(id);
+    }
+  }
+
+  if (!selected.length) {
+    for (const change of message.nodeChanges ?? []) {
+      const id = guidToNodeId(change.guid);
+      if (!id || selected.includes(id)) continue;
+      if (
+        change.type === 'FRAME'
+        || change.type === 'COMPONENT'
+        || change.type === 'INSTANCE'
+        || change.type === 'SECTION'
+        || change.type === 'GROUP'
+        || selected.length === 0
+      ) {
+        selected.push(id);
+        if (change.type === 'FRAME' || change.type === 'COMPONENT' || change.type === 'INSTANCE') break;
+      }
+    }
+  }
+
+  const named = (message.nodeChanges ?? []).find((change) => guidToNodeId(change.guid) === selected[0]);
+  return {
+    nodeIds: selected,
+    nameHint: named?.name ? `${named.name}.png` : undefined,
+  };
+}
+
+/**
+ * Decode a Figma ⌘C HTML paste into fileKey + selected node ids.
+ * Prefer figmeta.selectedNodeData (no binary parse). Fall back to fig-kiwi.
+ */
+export function parseFigmaClipboardHtml(html: string): { fileKey: string; nodeIds: string[]; nameHint?: string } | null {
+  if (!isFigmaClipboardHtml(html) && !html.includes('data-metadata')) return null;
+  const parts = extractFigmaClipboardParts(html);
+  if (!parts) return null;
+
+  let meta: FigmaClipboardMeta = {};
+  try {
+    meta = JSON.parse(new TextDecoder().decode(decodeBase64Bytes(parts.metaB64))) as FigmaClipboardMeta;
+  } catch {
+    return null;
+  }
+
+  const fileKey = (meta.fileKey || '').trim();
+  const fromMeta = nodeIdsFromSelectedNodeData(meta.selectedNodeData);
+  if (fileKey && fromMeta.length) {
+    return { fileKey, nodeIds: fromMeta };
+  }
+
+  if (!parts.figB64) {
+    if (!fileKey) return null;
+    throw new Error('Could not read that Figma selection. Try Copy as PNG (⇧⌘C).');
+  }
+
+  try {
+    const archive = parseFigKiwiArchive(decodeBase64Bytes(parts.figB64));
+    const schema = decodeBinarySchema(inflateRaw(archive.schemaBytes));
+    const compiled = compileSchema(schema) as {
+      decodeMessage: (data: Uint8Array) => FigmaClipboardMessage;
+    };
+    const message = compiled.decodeMessage(inflateRaw(archive.messageBytes));
+    const key = fileKey || (message.pasteFileKey || '').trim();
+    if (!key) return null;
+    const fromKiwi = nodeIdsFromKiwiMessage(message);
+    if (!fromKiwi.nodeIds.length) return null;
+    return { fileKey: key, nodeIds: fromKiwi.nodeIds, nameHint: fromKiwi.nameHint };
+  } catch (error) {
+    if (fileKey && fromMeta.length) return { fileKey, nodeIds: fromMeta };
+    if (error instanceof Error && error.message.startsWith('Could not read')) throw error;
+    throw new Error('Could not read that Figma selection. Try Copy as PNG (⇧⌘C), or update and paste again.');
+  }
+}
+
+/**
+ * Turn a Figma ⌘C HTML clipboard payload into a PNG for the device screen.
+ * Needs a personal access token (same as Assets → Open).
+ */
+export async function exportFigmaClipboardHtmlAsScreenPng(
+  html: string,
+  token = loadFigmaToken(),
+  scale = 2,
+): Promise<{ dataUrl: string; name: string } | null> {
+  const parsed = parseFigmaClipboardHtml(html);
+  if (!parsed) return null;
+  const trimmed = token.trim();
+  if (!trimmed) {
+    throw new Error('Add a Figma token in Assets → Open, then paste again (⌘C from Figma works).');
+  }
+  // One selected layer is the common case; if several are selected, export the first.
+  const nodeId = parsed.nodeIds[0];
+  const { dataUrl, nameHint } = await exportFigmaNodeAsDataUrl(
+    parsed.fileKey,
+    nodeId,
+    trimmed,
+    scale,
+  );
+  return { dataUrl, name: parsed.nameHint || nameHint };
 }
 
 /** Direct API base — used by Electron main process only. */

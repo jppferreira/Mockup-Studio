@@ -1,7 +1,7 @@
 {
   "kind": "mockup-studio-templates",
   "version": 1,
-  "updatedAt": 1794094807333,
+  "updatedAt": 1794139999254,
   "removedIds": [],
   "templates": [
     {
@@ -46,11 +46,6 @@
       "sceneProps": [],
       "lightIntensity": 3.9,
       "fillIntensity": 0,
-      "shadowOpacity": 0.85,
-      "shadowSoftness": 4.8,
-      "shadowType": "soft",
-      "shadowContact": 0.01,
-      "shadowQuality": "ultra",
       "showGroundBase": false,
       "lightPosition": {
         "x": 1.388,
@@ -181,8 +176,6 @@
       "sceneProps": [],
       "lightIntensity": 1.35,
       "fillIntensity": 1.05,
-      "shadowOpacity": 0.28,
-      "shadowSoftness": 4.2,
       "showGroundBase": true,
       "lightPosition": {
         "x": 4,
@@ -325,8 +318,6 @@
       ],
       "lightIntensity": 1.15,
       "fillIntensity": 0.38,
-      "shadowOpacity": 0.52,
-      "shadowSoftness": 2.4,
       "showGroundBase": false,
       "lightPosition": {
         "x": -3.4,
@@ -578,8 +569,6 @@
       "sceneProps": [],
       "lightIntensity": 1.35,
       "fillIntensity": 1.05,
-      "shadowOpacity": 0.28,
-      "shadowSoftness": 4.2,
       "showGroundBase": true,
       "lightPosition": {
         "x": 4,
@@ -921,6 +910,358 @@
           }
         ]
       }
+    },
+    {
+      "id": "trade-report",
+      "label": "Trade report 2",
+      "description": "3 devices · Single",
+      "badge": "Layout",
+      "category": "devices",
+      "preview": "trio",
+      "background": "studio",
+      "gradient": {
+        "center": "#ffffff",
+        "mid": "#f4f4f6",
+        "edge": "#e6e6ea"
+      },
+      "compositionMode": "single",
+      "linkSplitTransform": true,
+      "devices": [
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": -26.9,
+            "y": 15.6,
+            "z": 2.3
+          },
+          "position": {
+            "x": -1.476,
+            "y": 1.079,
+            "z": 0.955
+          },
+          "scale": 1
+        },
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": -19.8,
+            "y": -26,
+            "z": 1.5
+          },
+          "position": {
+            "x": 0.871,
+            "y": 1.079,
+            "z": 0.875
+          },
+          "scale": 1
+        },
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": -19.8,
+            "y": -8,
+            "z": 1.5
+          },
+          "position": {
+            "x": 2.862,
+            "y": 1.079,
+            "z": 0.715
+          },
+          "scale": 1
+        }
+      ],
+      "deviceExtras": [
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy",
+          "deviceColor": "graphite",
+          "clayMode": false
+        },
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy",
+          "deviceColor": "graphite",
+          "clayMode": false
+        },
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy",
+          "deviceColor": "graphite",
+          "clayMode": false
+        }
+      ],
+      "sceneProps": [],
+      "lightIntensity": 1.8,
+      "fillIntensity": 1.05,
+      "shadowOpacity": 0.79,
+      "shadowSoftness": 14,
+      "shadowType": "soft",
+      "shadowContact": 1,
+      "shadowQuality": "high",
+      "showGroundBase": true,
+      "lightPosition": {
+        "x": -4.817,
+        "y": 4.284,
+        "z": 1.764
+      },
+      "lightColor": "#e5fcf3",
+      "environmentIntensity": 2.75,
+      "toneMappingExposure": 1.48,
+      "reflectionMap": "softbox",
+      "cameraView": "front",
+      "cameraLens": "standard",
+      "edgeBlurTop": false,
+      "edgeBlurBottom": false,
+      "edgeBlurAmount": 24,
+      "depthOfField": false,
+      "depthOfFieldAmount": 0.48,
+      "overlays": [],
+      "animation": {
+        "duration": 4,
+        "fps": 30,
+        "loop": true,
+        "tracks": [
+          {
+            "id": "track-device-main-rotation.y-3fua",
+            "targetId": "slot-0",
+            "property": "rotation.y",
+            "keyframes": [
+              {
+                "id": "kf-bofeaw0",
+                "time": 0,
+                "value": 0
+              },
+              {
+                "id": "kf-c2fu99e",
+                "time": 2,
+                "value": 28
+              },
+              {
+                "id": "kf-cekbfh8",
+                "time": 4,
+                "value": 0
+              }
+            ]
+          },
+          {
+            "id": "track-device-main-rotation.x-zcaa",
+            "targetId": "slot-0",
+            "property": "rotation.x",
+            "keyframes": [
+              {
+                "id": "kf-krl8m0n",
+                "time": 0,
+                "value": 0
+              },
+              {
+                "id": "kf-76ksubo",
+                "time": 2,
+                "value": -6
+              },
+              {
+                "id": "kf-enqhrh5",
+                "time": 4,
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "trade-report-2-2",
+      "label": "Trade report 2 2",
+      "description": "3 devices · Single",
+      "badge": "Layout",
+      "category": "devices",
+      "preview": "trio",
+      "background": "studio",
+      "gradient": {
+        "center": "#ffffff",
+        "mid": "#f4f4f6",
+        "edge": "#e6e6ea"
+      },
+      "compositionMode": "single",
+      "linkSplitTransform": true,
+      "devices": [
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": -26.9,
+            "y": 15.6,
+            "z": 2.3
+          },
+          "position": {
+            "x": -1.476,
+            "y": 1.079,
+            "z": 0.955
+          },
+          "scale": 1
+        },
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": -19.8,
+            "y": -26,
+            "z": 1.5
+          },
+          "position": {
+            "x": 0.871,
+            "y": 1.079,
+            "z": 0.875
+          },
+          "scale": 1
+        },
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": -19.8,
+            "y": -8,
+            "z": 1.5
+          },
+          "position": {
+            "x": 2.862,
+            "y": 1.079,
+            "z": 0.715
+          },
+          "scale": 1
+        }
+      ],
+      "deviceExtras": [
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy",
+          "lidOpen": 1,
+          "deviceColor": "graphite",
+          "clayMode": false
+        },
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy",
+          "lidOpen": 1,
+          "deviceColor": "graphite",
+          "clayMode": false
+        },
+        {
+          "glassReflection": 0.55,
+          "reflectionStyle": "glossy",
+          "lidOpen": 1,
+          "deviceColor": "graphite",
+          "clayMode": false
+        }
+      ],
+      "sceneProps": [],
+      "lightIntensity": 1.8,
+      "fillIntensity": 1.05,
+      "shadowOpacity": 0.79,
+      "shadowSoftness": 14,
+      "shadowType": "soft",
+      "shadowContact": 1,
+      "shadowQuality": "high",
+      "showGroundBase": true,
+      "lightPosition": {
+        "x": -4.817,
+        "y": 4.284,
+        "z": 1.764
+      },
+      "lightColor": "#e5fcf3",
+      "environmentIntensity": 2.75,
+      "toneMappingExposure": 1.48,
+      "reflectionMap": "softbox",
+      "cameraView": "front",
+      "cameraLens": "standard",
+      "edgeBlurTop": false,
+      "edgeBlurBottom": false,
+      "edgeBlurAmount": 24,
+      "depthOfField": false,
+      "depthOfFieldAmount": 0.48,
+      "overlays": [],
+      "animation": {
+        "duration": 4,
+        "fps": 30,
+        "loop": true,
+        "tracks": [
+          {
+            "id": "track-device-main-rotation.y-sd40",
+            "targetId": "slot-0",
+            "property": "rotation.y",
+            "keyframes": [
+              {
+                "id": "kf-jwr0mvi",
+                "time": 0,
+                "value": 0
+              },
+              {
+                "id": "kf-uph3feg",
+                "time": 2,
+                "value": 28
+              },
+              {
+                "id": "kf-arlnsfj",
+                "time": 4,
+                "value": 0
+              }
+            ]
+          },
+          {
+            "id": "track-device-main-rotation.x-75s9",
+            "targetId": "slot-0",
+            "property": "rotation.x",
+            "keyframes": [
+              {
+                "id": "kf-qjnbulm",
+                "time": 0,
+                "value": 0
+              },
+              {
+                "id": "kf-hodrep7",
+                "time": 2,
+                "value": -6
+              },
+              {
+                "id": "kf-siji4u7",
+                "time": 4,
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "new-layout",
+      "label": "New layout",
+      "description": "Blank device layout",
+      "badge": "Layout",
+      "category": "devices",
+      "preview": "solo",
+      "background": "studio",
+      "gradient": {
+        "center": "#ffffff",
+        "mid": "#f4f4f6",
+        "edge": "#e6e6ea"
+      },
+      "compositionMode": "single",
+      "linkSplitTransform": true,
+      "motion": "clear",
+      "devices": [
+        {
+          "deviceId": "iphone_15_pro_max",
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "scale": 1
+        }
+      ],
+      "depthOfField": false,
+      "depthOfFieldAmount": 0.48
     }
   ]
 }

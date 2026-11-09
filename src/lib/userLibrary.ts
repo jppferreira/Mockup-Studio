@@ -1,12 +1,24 @@
 import type { CompositionTemplate } from './templates';
 import {
-  CAMERA_LENSES, CAMERA_TARGET_ID, DEVICE_COLORS, EXPORT_SIZE_LIMITS, SCENE_PROP_KINDS,
-  normalizeGradientColors,
+  CAMERA_LENSES, CAMERA_TARGET_ID, DEVICE_COLORS, EXPORT_SIZE_LIMITS, MAX_SCENE_LIGHTS,
+  SCENE_LIGHT_KINDS, SCENE_PROP_KINDS, createSceneLight, normalizeGradientColors,
   type AnimProperty, type AnimationClip, type CameraLens, type CameraView, type DeviceColor,
-  type GradientColors, type MockupProject, type Vec3,
+  type GradientColors, type MaterialTweak, type MockupProject, type SceneLightKind, type Vec3,
 } from '../types';
 import type { DeviceId } from './devices';
 import { normalizeReflectionStyle } from './reflectionStyle';
+import { REFLECTION_MAPS } from './reflectionMaps';
+import {
+  DEFAULT_SHADOW_COLOR,
+  isShadowColor,
+  SHADOW_DISTANCE_MAX,
+  SHADOW_DISTANCE_MIN,
+  SHADOW_SOFTNESS_MAX,
+  SHADOW_SOFTNESS_MIN,
+} from './studioShadows';
+
+const SCENE_LIGHT_KIND_SET = new Set<string>(SCENE_LIGHT_KINDS);
+const REFLECTION_MAP_IDS = new Set<string>(REFLECTION_MAPS.map((item) => item.id));
 
 const SIZE_KEY = 'mockup-studio.saved-sizes';
 const ANGLE_KEY = 'mockup-studio.saved-angles';
@@ -270,6 +282,62 @@ export function deleteSavedCameraAngle(id: string): SavedCameraAngle[] {
   return next;
 }
 
+function cleanCameraOrbit(value: unknown): CompositionTemplate['cameraOrbit'] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const entry = value as { offset?: unknown; lookOffset?: unknown };
+  const offset = vec3(entry.offset, { x: 0, y: 0, z: EYE_CAMERA_DISTANCE_FALLBACK });
+  const lookOffset = entry.lookOffset ? vec3(entry.lookOffset) : undefined;
+  return {
+    offset: {
+      x: Number(offset.x.toFixed(4)),
+      y: Number(offset.y.toFixed(4)),
+      z: Number(offset.z.toFixed(4)),
+    },
+    ...(lookOffset
+      ? {
+        lookOffset: {
+          x: Number(lookOffset.x.toFixed(4)),
+          y: Number(lookOffset.y.toFixed(4)),
+          z: Number(lookOffset.z.toFixed(4)),
+        },
+      }
+      : {}),
+  };
+}
+
+function cleanSceneLights(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const lights = value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const entry = item as { kind?: unknown; id?: unknown };
+    if (!SCENE_LIGHT_KIND_SET.has(String(entry.kind))) return [];
+    return [createSceneLight({
+      ...(item as object),
+      kind: entry.kind as SceneLightKind,
+      id: typeof entry.id === 'string' && entry.id.trim() ? entry.id : undefined,
+    })];
+  }).slice(0, MAX_SCENE_LIGHTS);
+  return lights;
+}
+
+function cleanMaterialTweaks(value: unknown): Record<string, MaterialTweak> | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const entries = Object.entries(value as Record<string, unknown>).flatMap(([name, tweak]) => {
+    if (!name.trim() || !tweak || typeof tweak !== 'object') return [];
+    return [[name, { ...(tweak as MaterialTweak) }] as const];
+  });
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function cleanHiddenMeshes(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const names = [...new Set(
+    value.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
+      .map((name) => name.trim().slice(0, 120)),
+  )];
+  return names.length ? names : undefined;
+}
+
 function cleanAnimation(clip: unknown, deviceCount: number): AnimationClip | undefined {
   if (!clip || typeof clip !== 'object') return undefined;
   const entry = clip as Partial<AnimationClip>;
@@ -365,12 +433,20 @@ export function normalizeCompositions(items: unknown[]): CompositionTemplate[] {
       lightIntensity: finite(entry.lightIntensity, 1),
       fillIntensity: finite(entry.fillIntensity, 0.5),
       shadowOpacity: clamp(finite(entry.shadowOpacity, 1), 0, 2),
-      shadowSoftness: clamp(finite(entry.shadowSoftness, 6.1), 0.2, 8),
+      shadowSoftness: clamp(finite(entry.shadowSoftness, 7.2), SHADOW_SOFTNESS_MIN, SHADOW_SOFTNESS_MAX),
       shadowType: (['contact', 'soft', 'sharp', 'off'] as const).includes(entry.shadowType as never)
         ? entry.shadowType
         : undefined,
       shadowContact: typeof entry.shadowContact === 'number'
-        ? clamp(finite(entry.shadowContact, 0), 0, 1)
+        ? clamp(finite(entry.shadowContact, 0.12), 0, 1)
+        : undefined,
+      shadowContactEnabled: entry.shadowContactEnabled !== false,
+      shadowDistance: typeof entry.shadowDistance === 'number'
+        ? clamp(finite(entry.shadowDistance, 3.6), SHADOW_DISTANCE_MIN, SHADOW_DISTANCE_MAX)
+        : undefined,
+      shadowColor: isShadowColor(entry.shadowColor) ? entry.shadowColor : undefined,
+      ambientOcclusion: typeof entry.ambientOcclusion === 'number'
+        ? clamp(finite(entry.ambientOcclusion, 0.28), 0, 1)
         : undefined,
       shadowQuality: (['auto', 'high', 'ultra'] as const).includes(entry.shadowQuality as never)
         ? entry.shadowQuality
@@ -387,18 +463,29 @@ export function normalizeCompositions(items: unknown[]): CompositionTemplate[] {
       cameraLens: CAMERA_LENS_IDS.has(entry.cameraLens as CameraLens) ? entry.cameraLens : undefined,
       lightPosition: entry.lightPosition ? vec3(entry.lightPosition) : undefined,
       lightColor: typeof entry.lightColor === 'string' ? entry.lightColor.slice(0, 16) : undefined,
+      cameraOrbit: cleanCameraOrbit(entry.cameraOrbit),
+      sceneLights: cleanSceneLights(entry.sceneLights),
+      ...(typeof entry.reflectionMap === 'string' && REFLECTION_MAP_IDS.has(entry.reflectionMap)
+        ? { reflectionMap: entry.reflectionMap as CompositionTemplate['reflectionMap'] }
+        : {}),
       deviceExtras: Array.isArray(entry.deviceExtras)
-        ? entry.deviceExtras.slice(0, devices.length).map((extra) => ({
-          glassReflection: extra && typeof extra.glassReflection === 'number'
-            ? clamp(extra.glassReflection, 0, 1)
-            : undefined,
-          reflectionStyle: normalizeReflectionStyle(extra?.reflectionStyle) ?? undefined,
-          lidOpen: extra && typeof extra.lidOpen === 'number' ? clamp(extra.lidOpen, 0, 1) : undefined,
-          deviceColor: extra && DEVICE_COLOR_IDS.has(extra.deviceColor as DeviceColor)
-            ? extra.deviceColor
-            : undefined,
-          clayMode: extra?.clayMode === true,
-        }))
+        ? entry.deviceExtras.slice(0, devices.length).map((extra) => {
+          const materialTweaks = cleanMaterialTweaks(extra?.materialTweaks);
+          const hiddenMeshes = cleanHiddenMeshes(extra?.hiddenMeshes);
+          return {
+            glassReflection: extra && typeof extra.glassReflection === 'number'
+              ? clamp(extra.glassReflection, 0, 1)
+              : undefined,
+            reflectionStyle: normalizeReflectionStyle(extra?.reflectionStyle) ?? undefined,
+            lidOpen: extra && typeof extra.lidOpen === 'number' ? clamp(extra.lidOpen, 0, 1) : undefined,
+            deviceColor: extra && DEVICE_COLOR_IDS.has(extra.deviceColor as DeviceColor)
+              ? extra.deviceColor
+              : undefined,
+            clayMode: extra?.clayMode === true,
+            ...(materialTweaks ? { materialTweaks } : {}),
+            ...(hiddenMeshes ? { hiddenMeshes } : {}),
+          };
+        })
         : undefined,
       overlays: Array.isArray(entry.overlays) ? entry.overlays.flatMap((overlay) => {
         if (!overlay || (overlay.kind !== 'text' && overlay.kind !== 'comment')) return [];
@@ -528,6 +615,7 @@ export function compositionFromProject(
     description?: string;
     badge?: string;
     preview?: CompositionTemplate['preview'];
+    cameraOrbit?: CompositionTemplate['cameraOrbit'] | null;
   },
 ): CompositionTemplate {
   const devices = project.devices.slice(0, 6);
@@ -536,6 +624,9 @@ export function compositionFromProject(
   const resolvedLabel = label.trim().slice(0, 40)
     || project.name.trim().slice(0, 40)
     || `Composition ${devices.length}`;
+  const cameraOrbit = options?.cameraOrbit
+    ? cleanCameraOrbit(options.cameraOrbit)
+    : undefined;
   return {
     id: options?.id ?? newId('comp'),
     label: resolvedLabel,
@@ -567,6 +658,7 @@ export function compositionFromProject(
           ),
         }
         : {}),
+      ...(device.hiddenMeshes?.length ? { hiddenMeshes: [...device.hiddenMeshes] } : {}),
     })),
     sceneProps: (project.sceneProps ?? []).slice(0, 24).map((prop) => ({
       kind: prop.kind,
@@ -581,14 +673,20 @@ export function compositionFromProject(
     shadowSoftness: project.shadowSoftness,
     shadowType: project.shadowType,
     shadowContact: project.shadowContact,
+    shadowContactEnabled: project.shadowContactEnabled !== false,
+    shadowDistance: project.shadowDistance,
+    shadowColor: isShadowColor(project.shadowColor) ? project.shadowColor : DEFAULT_SHADOW_COLOR,
+    ambientOcclusion: project.ambientOcclusion,
     shadowQuality: project.shadowQuality,
     showGroundBase: project.showGroundBase !== false,
     lightPosition: { ...project.lightPosition },
     lightColor: project.lightColor,
-    // Extra luminaires ship with saved / built-in compositions when present.
-    ...(project.sceneLights?.length
-      ? { sceneLights: project.sceneLights.map((light) => ({ ...light, position: { ...light.position }, target: { ...light.target } })) }
-      : {}),
+    // Always persist so apply/reload restores (or clears) authored lighting.
+    sceneLights: (project.sceneLights ?? []).slice(0, MAX_SCENE_LIGHTS).map((light) => ({
+      ...light,
+      position: { ...light.position },
+      target: { ...light.target },
+    })),
     ...(project.environmentIntensity != null
       ? { environmentIntensity: project.environmentIntensity }
       : {}),
@@ -600,6 +698,7 @@ export function compositionFromProject(
       : {}),
     cameraView: project.cameraView,
     cameraLens: project.cameraLens,
+    ...(cameraOrbit ? { cameraOrbit } : {}),
     edgeBlurTop: project.edgeBlurTop,
     edgeBlurBottom: project.edgeBlurBottom,
     edgeBlurAmount: project.edgeBlurAmount,
@@ -632,13 +731,18 @@ export function compositionFromProject(
 export function formatBuiltinCompositionSource(
   label: string,
   project: MockupProject,
-  options?: { category?: 'devices' | 'scenes'; id?: string },
+  options?: {
+    category?: 'devices' | 'scenes';
+    id?: string;
+    cameraOrbit?: CompositionTemplate['cameraOrbit'] | null;
+  },
 ): string {
   const category = options?.category ?? 'devices';
   const template = compositionFromProject(label, project, {
     id: options?.id ?? slugifyCompositionId(label.trim() || project.name || 'composition'),
     category,
     badge: category === 'scenes' ? 'Scene' : 'Layout',
+    cameraOrbit: options?.cameraOrbit,
   });
   const body = JSON.stringify(roundExportValue(template), null, 2)
     .replace(/^(\s*)"([^"]+)":/gm, '$1$2:')
@@ -646,12 +750,17 @@ export function formatBuiltinCompositionSource(
   return `  ${body.replace(/\n/g, '\n  ')},\n`;
 }
 
-export function saveComposition(label: string, project: MockupProject): CompositionTemplate {
+export function saveComposition(
+  label: string,
+  project: MockupProject,
+  options?: { cameraOrbit?: CompositionTemplate['cameraOrbit'] | null },
+): CompositionTemplate {
   const compositions = loadSavedCompositions();
   const saved = compositionFromProject(label, project, {
     id: newId('comp'),
     category: 'saved',
     badge: 'Template',
+    cameraOrbit: options?.cameraOrbit,
   });
   if (!label.trim() && !project.name.trim()) {
     saved.label = `Composition ${compositions.length + 1}`;

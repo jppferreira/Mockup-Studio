@@ -3,6 +3,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('mockupDesktop', {
   saveProject: (contents, proposedName) => ipcRenderer.invoke('project:save', { contents, proposedName }),
   openProject: () => ipcRenderer.invoke('project:open'),
+  openProjectPath: (filePath) => ipcRenderer.invoke('project:openPath', filePath),
+  takePendingOpen: () => ipcRenderer.invoke('project:takePendingOpen'),
+  onOpenFromOs: (handler) => {
+    const listener = (_event, filePath) => handler(filePath);
+    ipcRenderer.on('project:open-from-os', listener);
+    return () => ipcRenderer.removeListener('project:open-from-os', listener);
+  },
   cloudStatus: () => ipcRenderer.invoke('cloud:status'),
   cloudUse: (provider) => ipcRenderer.invoke('cloud:use', provider),
   cloudPick: () => ipcRenderer.invoke('cloud:pick'),
@@ -13,6 +20,7 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
   cloudRemove: (filePath) => ipcRenderer.invoke('cloud:remove', filePath),
   cloudTemplatesRead: () => ipcRenderer.invoke('cloud:templatesRead'),
   cloudTemplatesWrite: (contents) => ipcRenderer.invoke('cloud:templatesWrite', contents),
+  devReadShippedTemplates: () => ipcRenderer.invoke('dev:readShippedTemplates'),
   devWriteShippedTemplates: (contents) => ipcRenderer.invoke('dev:writeShippedTemplates', contents),
   onCloudChanged: (handler) => {
     const listener = () => handler();
@@ -32,6 +40,7 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
     return () => ipcRenderer.removeListener('updater:status', listener);
   },
   readClipboardImage: () => ipcRenderer.invoke('clipboard:readImage'),
+  readClipboardHtml: () => ipcRenderer.invoke('clipboard:readHtml'),
   ensureCameraAccess: () => ipcRenderer.invoke('media:ensureCameraAccess'),
   figmaRequest: (apiPath, token) => ipcRenderer.invoke('figma:request', { apiPath, token }),
   figmaFetchImage: (imageUrl, token) => ipcRenderer.invoke('figma:fetchImage', { imageUrl, token }),

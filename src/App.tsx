@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
-  Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Box, Camera, Check, ChevronDown, Circle, CircleOff, Cuboid,
+  Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Bot, Box, Camera, Check, ChevronDown, Circle, CircleOff, Cuboid,
   Cone, Cylinder, Disc, Disc3, Dna, Film, Frame, Hand, Landmark, MessageSquare, Mountain, MoveHorizontal, MousePointer2, PenTool, Pyramid,
   RectangleHorizontal, Square, Theater, Torus, Triangle, Type, ZoomIn,
   ClipboardPaste, Columns2, Command, Copy, Download, FileImage, FlipHorizontal2, Gauge, Glasses, Headphones,
@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import AccentThemePicker from './components/AccentThemePicker';
+import AgentChatPanel, { type AgentChatMessage } from './components/AgentChatPanel';
+import AnimationPresetsPanel from './components/AnimationPresetsPanel';
 import AnimationTimeline from './components/AnimationTimeline';
 import ViewAxisGizmo from './components/ViewAxisGizmo';
 import CloudSyncPanel, { type CloudTarget } from './components/CloudSyncPanel';
@@ -18,7 +20,8 @@ import ProjectsDashboard from './components/ProjectsDashboard';
 import ChangeLogPanel from './components/ChangeLogPanel';
 import CompositionSwitcher from './components/CompositionSwitcher';
 import SceneHierarchy, { sameLayerSelection, type SceneLayerSelection } from './components/SceneHierarchy';
-import TemplateThumb, { TemplateThumbHost } from './components/TemplateThumb';
+import TemplateThumb from './components/TemplateThumb';
+import DeviceModelThumb from './components/DeviceModelThumb';
 import CropFocusOverlay from './components/CropFocusOverlay';
 import CustomDevicePanel, { type CustomDevicePanelHandle } from './components/CustomDevicePanel';
 import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload, type MaterialPickPayload, type ViewGesture } from './components/DeviceCanvas';
@@ -30,7 +33,7 @@ import LicenseModal from './components/LicenseModal';
 import UpdateBanner from './components/UpdateBanner';
 import SvgExplodeModal from './components/SvgExplodeModal';
 import ProgressiveBlurOverlay from './components/ProgressiveBlurOverlay';
-import LightDirectionControl from './components/LightDirectionControl';
+import LightDirectionControl, { lightToSpherical, sphericalToLight } from './components/LightDirectionControl';
 import ModelingModePanel, { type PickedMaterial, type StudioSetFocus } from './components/ModelingModePanel';
 import {
   propExtrusion,
@@ -74,6 +77,17 @@ import {
 } from './lib/animation';
 import { applyAnimationPreset, getAnimationPreset, shiftDeviceRotation } from './lib/animationPresets';
 import { STUDIO_POSES, getStudioPose, studioPoseIdFor } from './lib/studioPoses';
+import {
+  DEFAULT_SHADOW_COLOR,
+  SHADOW_DISTANCE_MAX,
+  SHADOW_DISTANCE_MIN,
+  aoToPercent,
+  opacityToPercent,
+  percentToAo,
+  percentToOpacity,
+  percentToSoftness,
+  softnessToPercent,
+} from './lib/studioShadows';
 import { resolveStudioPreset, STUDIO_START_POSITION, STUDIO_START_ROTATION } from './lib/studioEnvironment';
 import {
   DEVICE_CATEGORY_ICON,
@@ -102,9 +116,13 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
 };
 import { createOverlay, drawOverlays, flatShapeOf, overlayVisibleAt, pathOffsets, type FlatShape, type SceneOverlay } from './lib/overlays';
 import {
-  isImageFile, isVideoFile, readFileAsDataUrl, readImageFromClipboard, readImageFromPasteEvent,
+  isImageFile, isVideoFile, readFileAsDataUrl, readHtmlFromClipboard, readHtmlFromPasteEvent,
+  readImageFromClipboard, readImageFromPasteEvent, readPlainTextFromPasteEvent,
   screenMediaKind, seekAllScreenMedia,
 } from './lib/screenMedia';
+import {
+  exportFigmaClipboardHtmlAsScreenPng, exportFigmaUrlAsScreenPng, isFigmaClipboardHtml, parseFigmaUrl,
+} from './lib/figma';
 import {
   isSvgFile, parseSvgDocument, readFileAsText, readSvgTextFromPasteEvent,
   type SvgDocumentModel,
@@ -170,7 +188,7 @@ import {
   type RecentProjectEntry,
 } from './lib/recentProjects';
 import {
-  isDocumentReload, loadSessionWorkspace, sanitizeSessionFrameSize, saveSessionWorkspace,
+  loadSessionWorkspace, sanitizeSessionFrameSize, saveSessionWorkspace,
   type SessionFrameSize,
 } from './lib/sessionWorkspace';
 import { PROMPT_SUGGESTIONS } from './lib/promptAnimate';
@@ -198,7 +216,7 @@ import {
   BACKGROUNDS, CAMERA_LENSES, CAMERA_TARGET_ID, DEFAULT_PROJECT, DEVICE_COLORS,
   EXPORT_ASPECTS, EXPORT_ASPECT_GROUPS, EXPORT_FPS_OPTIONS, EXPORT_RESOLUTIONS,
   EXPORT_SIZE_LIMITS, MAX_COMPOSITION_SCENES, MAX_DEVICES, MAX_SCENE_LIGHTS, SHADOW_QUALITIES,
-  exportAspectFixedSize, exportAspectHasFixed,
+  exportAspectFixedSize, exportAspectHasFixed, gradientCss,
   resolveExportDimensions, addCompositionScene, commitActiveScene, createDefaultAnimation,
   createDeviceInstance, createSceneLight, createSceneProp, duplicateCompositionScene, ensureCompositionScenes, getSelectedDevice,
   patchActiveCompositionScene, removeCompositionScene, renameCompositionScene,
@@ -209,8 +227,10 @@ import {
   type ShadowType, type Vec3,
 } from './types';
 
-/** Top-left pinned tabs: scene objects vs Assets library. */
+/** Top-left pinned tabs: Layer hierarchy vs Assets library (plus change log). */
 type LeftWorkspaceTab = 'scenes' | 'assets' | 'log';
+/** Right inspector: properties, preset motion cards, or agent chat. */
+type RightWorkspaceTab = 'inspect' | 'presets' | 'agent';
 type Workspace = { tabs: ProjectTab[]; activeId: string | null };
 type ExportScale = 0.5 | 1 | 2 | 3 | 4;
 type ExportMediaMode = 'static' | 'animated';
@@ -232,6 +252,9 @@ const VIEW_GESTURES: { id: ViewGesture; label: string; icon: LucideIcon }[] = [
   { id: 'longpress', label: 'Long-press', icon: MousePointer2 },
   { id: 'swipe', label: 'Swipe', icon: MoveHorizontal },
 ];
+
+/** Drag payload when pulling a library model from the Device panel onto the canvas. */
+const DEVICE_DRAG_MIME = 'application/x-mockup-device';
 
 const INSERT_SHAPES: { kind: ScenePropKind; label: string; icon: LucideIcon }[] = [
   { kind: 'clay_cube', label: 'Cube', icon: Box },
@@ -572,61 +595,93 @@ function FinishDots({
   );
 }
 
-function DeviceMenuOptions({
+type DeviceCardPreviewLayout = 'crop' | 'fit';
+
+function DeviceCardGrid({
   devices,
-  grouped,
   isSelected,
   isUnlocked,
   onPick,
+  onLibraryDragStart,
+  onLibraryDragEnd,
+  previewLayout = 'fit',
 }: {
   devices: DeviceModel[];
-  grouped: boolean;
   isSelected: (id: string) => boolean;
   isUnlocked: (id: string) => boolean;
   onPick: (device: DeviceModel, unlocked: boolean) => void;
+  onLibraryDragStart?: (deviceId: string) => void;
+  onLibraryDragEnd?: () => void;
+  previewLayout?: DeviceCardPreviewLayout;
 }) {
-  const renderOption = (device: DeviceModel) => {
-    const unlocked = isUnlocked(device.id);
-    const selected = isSelected(device.id);
-    return (
-      <button
-        key={device.id}
-        type="button"
-        role="option"
-        aria-selected={selected}
-        className={`device-dropdown-option ${selected ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
-        title={unlocked
-          ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)}`
-          : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
-        onClick={() => onPick(device, unlocked)}
-      >
-        <span className="device-dropdown-name">{device.label}</span>
-        {selected ? <Check size={13} /> : !unlocked ? <span className="device-dropdown-pro">Pro</span> : null}
-      </button>
-    );
-  };
+  const dragStarted = useRef(false);
 
-  if (!grouped) return <>{devices.map(renderOption)}</>;
-
-  const buckets = new Map<string, DeviceModel[]>();
-  for (const device of devices) {
-    const id = categoryOfDevice(device);
-    const list = buckets.get(id);
-    if (list) list.push(device);
-    else buckets.set(id, [device]);
+  if (devices.length === 0) {
+    return <div className="device-card-empty">No devices in this category</div>;
   }
-  const groups = DEVICE_CATEGORY_TABS.filter((tab) => tab.id !== 'all' && buckets.has(tab.id));
-  if (groups.length <= 1) return <>{devices.map(renderOption)}</>;
 
   return (
-    <>
-      {groups.map((tab) => (
-        <div key={tab.id} className="device-dropdown-group" role="group" aria-label={tab.label}>
-          <div className="device-dropdown-group-label">{tab.label}</div>
-          {buckets.get(tab.id)!.map(renderOption)}
-        </div>
-      ))}
-    </>
+    <div
+      className={`device-card-grid is-preview-${previewLayout}`}
+      role="listbox"
+      aria-label="Devices"
+      data-preview-layout={previewLayout}
+    >
+      {devices.map((device) => {
+        const unlocked = isUnlocked(device.id);
+        const selected = isSelected(device.id);
+        const category = categoryOfDevice(device);
+        return (
+          <button
+            key={device.id}
+            type="button"
+            role="option"
+            aria-selected={selected}
+            draggable={unlocked}
+            data-category={category}
+            className={`device-model-card ${selected ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
+            title={unlocked
+              ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)} · Drag onto the canvas to place`
+              : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
+            onDragStart={(event) => {
+              if (!unlocked) {
+                event.preventDefault();
+                return;
+              }
+              dragStarted.current = true;
+              event.dataTransfer.setData(DEVICE_DRAG_MIME, device.id);
+              event.dataTransfer.setData('text/plain', device.label);
+              event.dataTransfer.effectAllowed = 'copy';
+              onLibraryDragStart?.(device.id);
+              const thumb = event.currentTarget.querySelector('.device-model-card-thumb');
+              if (thumb instanceof HTMLElement) {
+                event.dataTransfer.setDragImage(thumb, thumb.clientWidth / 2, thumb.clientHeight / 2);
+              }
+            }}
+            onDragEnd={() => {
+              onLibraryDragEnd?.();
+              window.setTimeout(() => { dragStarted.current = false; }, 0);
+            }}
+            onClick={() => {
+              if (dragStarted.current) {
+                dragStarted.current = false;
+                return;
+              }
+              onPick(device, unlocked);
+            }}
+          >
+            <span className="device-model-card-thumb" aria-hidden>
+              <DeviceModelThumb deviceId={device.id} />
+            </span>
+            <span className="device-model-card-copy">
+              <strong>{device.label}</strong>
+              <span>{unlocked ? screenSizeLabel(device.screenSize) : 'Pro'}</span>
+            </span>
+            {selected ? <Check size={12} className="device-model-card-check" aria-hidden /> : null}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -655,6 +710,210 @@ function exportRatioThumbStyle(ratio: number, max = 34): CSSProperties {
     return { width: max, height: Math.max(10, Math.round(max / ratio)) };
   }
   return { width: Math.max(10, Math.round(max * ratio)), height: max };
+}
+
+function backdropLookThumbStyle(look: ScenePreset): CSSProperties | undefined {
+  if (!look.gradient) return undefined;
+  if (BACKGROUNDS.some((item) => item.id === look.id)) return undefined;
+  return { background: gradientCss(look.gradient) };
+}
+
+type BackdropMenuBox = {
+  top: number | 'auto';
+  bottom: number | 'auto';
+  left: number;
+  width: number;
+  maxHeight: number;
+};
+
+function measureBackdropMenu(anchor: HTMLElement): BackdropMenuBox {
+  const rect = anchor.getBoundingClientRect();
+  const gap = 6;
+  const margin = 12;
+  const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - gap - margin);
+  const spaceAbove = Math.max(0, rect.top - gap - margin);
+  const openBelow = spaceBelow >= 220 || spaceBelow >= spaceAbove;
+  const maxHeight = Math.max(180, Math.min(420, openBelow ? spaceBelow : spaceAbove));
+  if (openBelow) {
+    return { top: rect.bottom + gap, bottom: 'auto', left: rect.left, width: rect.width, maxHeight };
+  }
+  return {
+    top: 'auto',
+    bottom: window.innerHeight - rect.top + gap,
+    left: rect.left,
+    width: rect.width,
+    maxHeight,
+  };
+}
+
+/** Compact backdrop dropdown for the right inspector (Look & motion / colour dock). */
+function BackdropLooksPicker({
+  looks,
+  background,
+  gradientColors,
+  onChoose,
+  onDelete,
+}: {
+  looks: ScenePreset[];
+  background: string;
+  gradientColors: GradientColors;
+  onChoose: (look: ScenePreset) => void;
+  onDelete: (lookId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [box, setBox] = useState<BackdropMenuBox | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
+
+  const selected = looks.find((item) => item.id === background) ?? null;
+  const isCustom = background === 'custom';
+  const selectedLabel = selected?.label ?? (isCustom ? 'Custom' : 'Choose…');
+  const selectedThumbStyle = selected
+    ? backdropLookThumbStyle(selected)
+    : isCustom
+      ? { background: gradientCss(gradientColors) }
+      : undefined;
+  const selectedThumbClass = selected && BACKGROUNDS.some((entry) => entry.id === selected.id)
+    ? `bg-${selected.id}`
+    : '';
+
+  const place = () => {
+    const anchor = triggerRef.current;
+    if (!anchor) return;
+    setBox(measureBackdropMenu(anchor));
+  };
+
+  const openMenu = () => {
+    place();
+    setOpen(true);
+  };
+
+  const closeMenu = (restoreFocus = false) => {
+    setOpen(false);
+    if (restoreFocus) requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (rootRef.current?.contains(target)) return;
+      const menu = document.getElementById(menuId);
+      if (menu?.contains(target)) return;
+      closeMenu();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeMenu(true);
+      }
+    };
+    const onReposition = () => place();
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    window.addEventListener('resize', onReposition);
+    window.addEventListener('scroll', onReposition, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('resize', onReposition);
+      window.removeEventListener('scroll', onReposition, true);
+    };
+  }, [open, menuId]);
+
+  return (
+    <div className={`backdrop-looks-switch${open ? ' is-open' : ''}`} ref={rootRef}>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="backdrop-looks-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        aria-label={`Backdrop. ${selectedLabel}`}
+        onClick={() => (open ? closeMenu() : openMenu())}
+      >
+        <span className="backdrop-looks-label">Backdrop</span>
+        <span
+          className={`backdrop-looks-swatch ${selectedThumbClass}`}
+          style={selectedThumbStyle}
+          aria-hidden
+        />
+        <span className="backdrop-looks-copy">
+          <strong>{selectedLabel}</strong>
+        </span>
+        <em className="backdrop-looks-count">{looks.length}</em>
+        <ChevronDown size={14} className="backdrop-looks-chevron" aria-hidden />
+      </button>
+      {open && box && createPortal(
+        <div
+          id={menuId}
+          className="backdrop-looks-menu"
+          role="listbox"
+          aria-label="Backdrop looks"
+          style={{
+            top: box.top,
+            bottom: box.bottom,
+            left: box.left,
+            width: box.width,
+            maxHeight: box.maxHeight,
+          }}
+        >
+          <p className="backdrop-looks-hint">Pick a studio look for the scene surround.</p>
+          <div className="scene-grid scene-grid-compact backdrop-looks-grid">
+            {looks.map((item) => (
+              <div key={item.id} className={`scene-card-wrap ${background === item.id ? 'active' : ''}`}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={background === item.id}
+                  className={`scene-card ${background === item.id ? 'active' : ''}`}
+                  onClick={() => {
+                    onChoose(item);
+                    closeMenu(true);
+                  }}
+                  title={item.description}
+                >
+                  <div
+                    className={`scene-thumb ${BACKGROUNDS.some((entry) => entry.id === item.id) ? `bg-${item.id}` : ''}`}
+                    style={backdropLookThumbStyle(item)}
+                  >
+                    <div className="scene-mini-device"><span /></div>
+                  </div>
+                  <strong>{item.label}</strong>
+                </button>
+                {item.id.startsWith('custom-') && (
+                  <button
+                    type="button"
+                    className="scene-delete"
+                    title="Delete preset"
+                    aria-label={`Delete ${item.label}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDelete(item.id);
+                    }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
+              </div>
+            ))}
+            {isCustom && (
+              <button type="button" className="scene-card active" title="Edited colours" role="option" aria-selected>
+                <div className="scene-thumb" style={{ background: gradientCss(gradientColors) }}>
+                  <div className="scene-mini-device"><span /></div>
+                </div>
+                <strong>Custom</strong>
+              </button>
+            )}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
 }
 
 type FloatingMenuBox = {
@@ -692,7 +951,7 @@ function measureFloatingMenu(anchor: HTMLElement): FloatingMenuBox {
   };
 }
 
-export default function App() {
+export default function App({ onShowOnboarding }: { onShowOnboarding?: () => void } = {}) {
   const [workspace, setWorkspace] = useState<Workspace>(EMPTY_WORKSPACE);
   const [customPresets, setCustomPresets] = useState<ScenePreset[]>(() => loadCustomScenePresets());
   const [savedSizes, setSavedSizes] = useState<SavedAssetSize[]>(() => loadSavedSizes());
@@ -708,6 +967,9 @@ export default function App() {
   const [presetName, setPresetName] = useState('');
   const [savingPreset, setSavingPreset] = useState(false);
   const [leftWorkspaceTab, setLeftWorkspaceTab] = useState<LeftWorkspaceTab>('scenes');
+  const [rightWorkspaceTab, setRightWorkspaceTab] = useState<RightWorkspaceTab>('inspect');
+  const [appliedMotionPresetId, setAppliedMotionPresetId] = useState<string | null>(null);
+  const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
   const [changeLogVersion, setChangeLogVersion] = useState(0);
   const changeLogsRef = useRef(new Map<string, ChangeLogEntry[]>());
   const liveProjectRef = useRef<MockupProject>(DEFAULT_PROJECT);
@@ -726,6 +988,7 @@ export default function App() {
   const setToolset = (next: WorkspaceToolset) => {
     setWorkspaceToolset(next);
     saveWorkspaceToolset(next);
+    setRightWorkspaceTab('inspect');
     if (next === 'developer') setModelingPanelOpen(true);
     if (next === 'user') {
       setPickedMaterial(null);
@@ -734,6 +997,12 @@ export default function App() {
     notify(next === 'developer'
       ? 'Dev view — quick-edit templates, then Update shipped for User'
       : 'User view — templates as customers see them');
+  };
+
+  const openAgentMode = () => {
+    setRightWorkspaceTab('agent');
+    setSidePanelsHidden(false);
+    notify('Agent mode — describe the motion you want');
   };
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [licenseOpen, setLicenseOpen] = useState(false);
@@ -778,6 +1047,8 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [canvasDropKind, setCanvasDropKind] = useState<'files' | 'device' | null>(null);
+  const draggingLibraryDeviceRef = useRef<string | null>(null);
   const [meshOffer, setMeshOffer] = useState<MeshDropOffer | null>(null);
   const [meshExtracting, setMeshExtracting] = useState(false);
   const hoveredDeviceIdRef = useRef<string | null>(null);
@@ -802,15 +1073,14 @@ export default function App() {
   const [lightGizmoActive, setLightGizmoActive] = useState(false);
   /** Dual-canvas shared orbit so both panes keep the same viewing angle (offset from device). */
   const [sharedOrbit, setSharedOrbit] = useState<{ offset: Vec3; lookOffset?: Vec3 } | null>(null);
+  /** Skip the next camera-preset clear so restored template orbits survive project apply. */
+  const preserveOrbitRef = useRef(false);
   /** Bumped on format/device changes so both panes snap to center instantly. */
   const [cameraRecenterToken, setCameraRecenterToken] = useState(0);
   const [openSectionId, setOpenSectionId] = useState<string | null>('device');
-  const [deviceDropdownOpen, setDeviceDropdownOpen] = useState(false);
-  const deviceDropdownRef = useRef<HTMLDivElement>(null);
   const customDevicePanelRef = useRef<CustomDevicePanelHandle>(null);
   const [deviceCategoryFilter, setDeviceCategoryFilter] = useState<DeviceCategoryFilter>('all');
-  /** Which platform's device menu is open in split mode (`null` = closed). */
-  const [splitDeviceMenu, setSplitDeviceMenu] = useState<PublishTarget | null>(null);
+  const [deviceCardPreview, setDeviceCardPreview] = useState<DeviceCardPreviewLayout>('fit');
   const [aspectDropdownOpen, setAspectDropdownOpen] = useState(false);
   const [aspectMenuBox, setAspectMenuBox] = useState<FloatingMenuBox | null>(null);
   const aspectDropdownRef = useRef<HTMLDivElement>(null);
@@ -867,6 +1137,8 @@ export default function App() {
   const androidPlayerRef = useRef<AndroidMirrorPlayer | null>(null);
   const androidUnsubRef = useRef<(() => void) | null>(null);
   const toggleSection = useCallback((id: string) => {
+    // Background colour dock is tap-to-open only — leave it when opening other sections.
+    if (id !== 'look') setStudioSetFocus(null);
     setOpenSectionId((current) => (current === id ? null : id));
   }, []);
   const captureRef = useRef<CaptureApi | null>(null);
@@ -970,6 +1242,20 @@ export default function App() {
   const activeTab = workspace.tabs.find((tab) => tab.id === workspace.activeId) ?? workspace.tabs[0] ?? null;
   const hasOpenProject = activeTab != null;
   const project = activeTab?.project ?? DEFAULT_PROJECT;
+
+  /** Keep Dev “Update shipped” linked to the main Devices/Scenes template on this tab. */
+  const linkShippedTemplate = useCallback((tabId: string, templateId: string | null) => {
+    const nextId = templateId && isDevEditableTemplateId(templateId) ? templateId : null;
+    setCompositionPick(nextId ? { tabId, templateId: nextId } : null);
+    setWorkspace((ws) => ({
+      ...ws,
+      tabs: ws.tabs.map((tab) => (
+        tab.id === tabId && tab.shippedTemplateId !== nextId
+          ? { ...tab, shippedTemplateId: nextId }
+          : tab
+      )),
+    }));
+  }, []);
   liveProjectRef.current = project;
   const activeChangeLog = useMemo(() => {
     if (!activeTab) return [];
@@ -991,56 +1277,28 @@ export default function App() {
 
   useEffect(() => {
     const panel = rightPanelRef.current;
-    const scroll = inspectorScrollRef.current;
-    const el = timelineOpen ? panel : scroll;
-    const other = timelineOpen ? scroll : panel;
-    other?.classList.remove('can-scroll-more');
-    if (!el) return;
-    return bindScrollMore(el);
-  }, [timelineOpen, openSectionId]);
-
-  const deviceMenuWasOpen = useRef(false);
-  useEffect(() => {
-    const wasOpen = deviceMenuWasOpen.current;
-    deviceMenuWasOpen.current = deviceDropdownOpen;
-    if (deviceDropdownOpen) {
-      const root = deviceDropdownRef.current;
-      if (!root) return undefined;
-      const menu = root.querySelector('.device-dropdown-menu');
-      if (menu instanceof HTMLElement) menu.scrollTop = 0;
-      return pinToContainerTop(root);
-    }
-    if (!wasOpen) return undefined;
-    const section = document.querySelector('.inspector-scroll .settings-section.is-open');
-    if (section instanceof HTMLElement) return pinToContainerTop(section);
-    return undefined;
-  }, [deviceDropdownOpen]);
-
-  const splitMenuWasOpen = useRef(false);
-  useEffect(() => {
-    const wasOpen = splitMenuWasOpen.current;
-    splitMenuWasOpen.current = splitDeviceMenu != null;
-    if (splitDeviceMenu) {
-      const root = document.querySelector('.split-env-device-block .device-dropdown.is-open');
-      if (!(root instanceof HTMLElement)) return undefined;
-      const menu = root.querySelector('.device-dropdown-menu');
-      if (menu instanceof HTMLElement) menu.scrollTop = 0;
-      return pinToContainerTop(root);
-    }
-    if (!wasOpen) return undefined;
-    const section = document.querySelector('.inspector-scroll .settings-section.is-open');
-    if (section instanceof HTMLElement) return pinToContainerTop(section);
-    return undefined;
-  }, [splitDeviceMenu]);
+    if (!panel) return undefined;
+    const nestedScroll = inspectorScrollRef.current
+      ?? panel.querySelector<HTMLElement>('.right-presets-scroll, .inspector-scroll');
+    const shell = panel.querySelector<HTMLElement>('.right-panel-scroll-shell');
+    // Always scroll inside the shell/inspector — never the panel — so the bottom fade stays pinned.
+    const el = nestedScroll ?? panel;
+    const fadeHost = shell ?? panel;
+    panel.classList.remove('can-scroll-more');
+    panel.classList.remove('has-scroll-more');
+    return bindScrollMore(el, fadeHost);
+  }, [timelineOpen, openSectionId, rightWorkspaceTab]);
 
   useEffect(() => {
     if (openSectionId !== 'frame') setAspectDropdownOpen(false);
   }, [openSectionId]);
 
-  // Canvas taps on sky / floor / backdrop — keep the colour dock / Look stop in view.
+  // Canvas taps on sky / floor / backdrop — pin the colour dock once.
+  // Do not re-run when openSectionId changes, or opening Shadow / Light jumps back to the top.
   useEffect(() => {
     if (!studioSetFocus || sidePanelsHidden) return undefined;
     let cancelled = false;
+    let timeout = 0;
     const pin = () => {
       if (cancelled) return;
       const dock = document.querySelector('.right-panel .surround-colour-dock');
@@ -1051,22 +1309,18 @@ export default function App() {
       const highlighted = document.querySelector(
         '.right-panel .gradient-color-field.is-highlighted, .modeling-mode-studio-stops .modeling-mode-color-field.is-highlighted',
       );
-      if (highlighted instanceof HTMLElement) {
-        pinToContainerTop(highlighted);
-        return;
-      }
-      const section = document.getElementById('settings-look')?.closest('section');
-      if (section instanceof HTMLElement) pinToContainerTop(section);
+      if (highlighted instanceof HTMLElement) pinToContainerTop(highlighted);
     };
     const frame = requestAnimationFrame(() => {
       pin();
-      window.setTimeout(pin, 48);
+      timeout = window.setTimeout(pin, 48);
     });
     return () => {
       cancelled = true;
       cancelAnimationFrame(frame);
+      if (timeout) window.clearTimeout(timeout);
     };
-  }, [studioSetFocus, sidePanelsHidden, openSectionId]);
+  }, [studioSetFocus, sidePanelsHidden]);
 
   useEffect(() => {
     if (!aspectDropdownOpen) return undefined;
@@ -1106,25 +1360,18 @@ export default function App() {
         hydrateRecentProjects().catch(() => loadRecentProjects()),
       ]);
       if (cancelled) return;
-      // A refresh keeps the open file. Opening the site or the app starts on
-      // the projects workspace, and that launch clears the saved tabs.
+      // Restore open tabs + the active tab across reloads and app relaunches
+      // so a crash / reopen lands back where you were in the workspace.
       let resumed = projects;
       if (saved?.tabs.length && !skipSessionRestoreRef.current && !workspaceRef.current.tabs.length) {
         for (const tab of saved.tabs) resumed = rememberRecentProject(tab.project);
-        if (isDocumentReload()) {
-          const restored = { tabs: saved.tabs, activeId: saved.activeId };
-          workspaceRef.current = restored;
-          activeIdRef.current = restored.activeId;
-          setWorkspace(restored);
-        } else {
-          await saveSessionWorkspace(
-            { tabs: [], activeId: null },
-            saved.frameSize ?? frameSizeRef.current,
-          );
-          if (cancelled) return;
-          if (workspaceRef.current.tabs.length) {
-            await saveSessionWorkspace(workspaceRef.current, frameSizeRef.current);
-          }
+        const restored = { tabs: saved.tabs, activeId: saved.activeId };
+        workspaceRef.current = restored;
+        activeIdRef.current = restored.activeId;
+        setWorkspace(restored);
+        const active = restored.tabs.find((tab) => tab.id === restored.activeId) ?? restored.tabs[0];
+        if (active?.shippedTemplateId && isDevEditableTemplateId(active.shippedTemplateId)) {
+          setCompositionPick({ tabId: active.id, templateId: active.shippedTemplateId });
         }
       }
       const frame = saved?.frameSize ? sanitizeSessionFrameSize(saved.frameSize) : null;
@@ -1374,7 +1621,13 @@ export default function App() {
 
   // Format / camera-preset / composition changes: snap both panes to center.
   // Per-pane device model/finish swaps must NOT clear sharedOrbit — linked angle stays.
+  // Template restore sets preserveOrbitRef so authored free-orbit survives the apply.
   useEffect(() => {
+    if (preserveOrbitRef.current) {
+      preserveOrbitRef.current = false;
+      setCameraRecenterToken((n) => n + 1);
+      return;
+    }
     setSharedOrbit(null);
     setCameraRecenterToken((n) => n + 1);
   }, [
@@ -1942,6 +2195,20 @@ export default function App() {
     }, `Opened blank file “${name}”`);
   };
 
+  const applyTemplateCameraOrbit = (template: CompositionTemplate) => {
+    const orbit = template.cameraOrbit;
+    if (orbit?.offset) {
+      preserveOrbitRef.current = true;
+      setSharedOrbit({
+        offset: { ...orbit.offset },
+        ...(orbit.lookOffset ? { lookOffset: { ...orbit.lookOffset } } : {}),
+      });
+      return;
+    }
+    preserveOrbitRef.current = false;
+    setSharedOrbit(null);
+  };
+
   const startFromTemplate = (template: CompositionTemplate) => {
     const needsPro = template.devices.length > 1
       || template.compositionMode === 'split'
@@ -1960,11 +2227,14 @@ export default function App() {
     const editingShipped = isDeveloperToolset && isDevEditableTemplateId(template.id);
     setDeviceMenu(null);
     setTemplatePickerOpen(false);
+    applyTemplateCameraOrbit(template);
     trackRecent(nextProject);
 
     const canonical = canonicalProjectJson(nextProject);
     if (canAddTab) {
-      const tab = createProjectTab(nextProject);
+      const tab = createProjectTab(nextProject, {
+        shippedTemplateId: isDevEditableTemplateId(template.id) ? template.id : null,
+      });
       tab.syncPath = null;
       baselineRef.current.set(tab.id, canonical);
       syncPathByTabRef.current.delete(tab.id);
@@ -1972,8 +2242,8 @@ export default function App() {
       const nextWs = { tabs: [...workspaceRef.current.tabs, tab], activeId: tab.id };
       workspaceRef.current = nextWs;
       setWorkspace(nextWs);
-      if (editingShipped || isDevEditableTemplateId(template.id)) {
-        setCompositionPick({ tabId: tab.id, templateId: template.id });
+      if (tab.shippedTemplateId) {
+        setCompositionPick({ tabId: tab.id, templateId: tab.shippedTemplateId });
       }
       if (cloudRef.current?.configured) {
         void persistCloudRef.current(tab.id, nextProject, null, { quiet: true, force: true });
@@ -1995,13 +2265,21 @@ export default function App() {
         ...workspaceRef.current,
         tabs: workspaceRef.current.tabs.map((tab) => (
           tab.id === activeId
-            ? { ...tab, project: nextProject, animTime: 0, animPlaying: playMotion, timelineOpen: false, syncPath: null }
+            ? {
+              ...tab,
+              project: nextProject,
+              animTime: 0,
+              animPlaying: playMotion,
+              timelineOpen: false,
+              syncPath: null,
+              shippedTemplateId: isDevEditableTemplateId(template.id) ? template.id : tab.shippedTemplateId,
+            }
             : tab
         )),
       };
       workspaceRef.current = nextWs;
       setWorkspace(nextWs);
-      if (editingShipped || isDevEditableTemplateId(template.id)) {
+      if (isDevEditableTemplateId(template.id)) {
         setCompositionPick({ tabId: activeId, templateId: template.id });
       }
       if (cloudRef.current?.configured) {
@@ -2547,16 +2825,80 @@ export default function App() {
   };
 
   const pasteScreenFromClipboard = async (event?: ClipboardEvent, deviceId?: string | null) => {
+    const targetId = deviceId ?? hoveredDeviceIdRef.current;
     try {
+      // Prefer the OS pasteboard HTML — Electron paste events often strip Figma’s payload.
+      const htmlFromEvent = event ? readHtmlFromPasteEvent(event) : '';
+      let html = await readHtmlFromClipboard();
+      if (!isFigmaClipboardHtml(html) && isFigmaClipboardHtml(htmlFromEvent)) html = htmlFromEvent;
+      if (!html && htmlFromEvent) html = htmlFromEvent;
+
       const svgText = event ? readSvgTextFromPasteEvent(event) : null;
-      if (svgText) {
+      if (svgText && !isFigmaClipboardHtml(html)) {
         openSvgExplode(svgText, 'pasted.svg');
         return;
       }
+
+      // Figma ⌘C first — proprietary HTML, not a PNG. Needs Assets → Figma token.
+      if (isFigmaClipboardHtml(html)) {
+        notify('Exporting Figma frame as PNG…');
+        const fromFigmaCopy = await exportFigmaClipboardHtmlAsScreenPng(html);
+        if (fromFigmaCopy) {
+          applyScreenImage(
+            fromFigmaCopy.dataUrl,
+            fromFigmaCopy.name,
+            'Figma frame pasted onto the device screen',
+            targetId,
+          );
+          return;
+        }
+        throw new Error('Could not read that Figma selection. Try Copy as PNG (⇧⌘C).');
+      }
+
+      // Real bitmap (Figma “Copy as PNG”, screenshots, etc.).
       const fromEvent = event ? await readImageFromPasteEvent(event) : null;
-      const image = fromEvent ?? await readImageFromClipboard();
-      const targetId = deviceId ?? hoveredDeviceIdRef.current;
-      applyScreenImage(image.dataUrl, image.name, 'Pasted onto the device screen', targetId);
+      if (fromEvent) {
+        applyScreenImage(fromEvent.dataUrl, fromEvent.name, 'Pasted onto the device screen', targetId);
+        return;
+      }
+
+      try {
+        const fromClipboard = await readImageFromClipboard();
+        applyScreenImage(
+          fromClipboard.dataUrl,
+          fromClipboard.name,
+          'Pasted onto the device screen',
+          targetId,
+        );
+        return;
+      } catch {
+        /* fall through to Figma URL */
+      }
+
+      // Figma “Copy link to selection” with a node-id → export that frame as PNG.
+      let plain = event ? readPlainTextFromPasteEvent(event) : '';
+      if (!plain && navigator.clipboard?.readText) {
+        try {
+          plain = (await navigator.clipboard.readText()).trim();
+        } catch {
+          plain = '';
+        }
+      }
+      const figmaPng = plain ? await exportFigmaUrlAsScreenPng(plain) : null;
+      if (figmaPng) {
+        applyScreenImage(figmaPng.dataUrl, figmaPng.name, 'Figma frame pasted onto the device screen', targetId);
+        return;
+      }
+
+      const parsed = plain ? parseFigmaUrl(plain) : null;
+      if (parsed?.fileKey && !parsed.nodeId) {
+        setFigmaLinkDraft(plain);
+        setFigmaExploreOpen(true);
+        notify('Pick a frame in Figma Explore to place on the screen');
+        return;
+      }
+
+      throw new Error('Copy a frame in Figma (⌘C), then paste here — needs a Figma token in Assets');
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Nothing to paste — copy an image first');
     }
@@ -2819,8 +3161,9 @@ export default function App() {
     const targets = project.compositionMode === 'split' ? project.devices : selected;
     const next = applyAnimationPreset(animation, targets, preset);
     updateProject({ animation: next });
+    setAppliedMotionPresetId(preset.id === 'clear' ? null : preset.id);
     setAnimTime(0);
-    setAnimPlaying(true);
+    setAnimPlaying(preset.id !== 'clear');
     setTimelineOpen(true);
     notify(`${preset.label} motion applied`);
   };
@@ -2835,9 +3178,16 @@ export default function App() {
     setStudioAiStatus(null);
   }, []);
 
-  const runStudioAiPrompt = useCallback((raw: string) => {
+  const runStudioAiPrompt = useCallback((raw: string, opts?: { fromAgent?: boolean }) => {
     const text = raw.trim();
     if (!text || studioAiBusy) return;
+    const fromAgent = Boolean(opts?.fromAgent);
+    if (fromAgent) {
+      setAgentMessages((current) => [
+        ...current,
+        { id: `u-${Date.now()}`, role: 'user', text },
+      ]);
+    }
     setStudioAiBusy(true);
     const selected = getSelectedDevice(project);
     void promptToAnimationSmart(text, animation, selected, project.devices, (status) => {
@@ -2849,9 +3199,22 @@ export default function App() {
       setTimelineOpen(true);
       setStudioAiStatus(result.summary);
       setStudioAiPrompt('');
+      if (fromAgent) {
+        setAgentMessages((current) => [
+          ...current,
+          { id: `a-${Date.now()}`, role: 'assistant', text: result.summary },
+        ]);
+      }
       notify(result.summary);
     }).catch(() => {
-      setStudioAiStatus('Could not build that motion');
+      const fail = 'Could not build that motion';
+      setStudioAiStatus(fail);
+      if (fromAgent) {
+        setAgentMessages((current) => [
+          ...current,
+          { id: `a-${Date.now()}`, role: 'assistant', text: fail },
+        ]);
+      }
     }).finally(() => {
       window.setTimeout(() => setStudioAiBusy(false), 140);
     });
@@ -2881,31 +3244,6 @@ export default function App() {
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [studioAiOpen, closeStudioAi]);
-
-  useEffect(() => {
-    if (!deviceDropdownOpen && !splitDeviceMenu) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (deviceDropdownRef.current && !deviceDropdownRef.current.contains(target)) {
-        setDeviceDropdownOpen(false);
-      }
-      if (splitDeviceMenu && !(target instanceof Element && target.closest('.device-dropdown'))) {
-        setSplitDeviceMenu(null);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      setDeviceDropdownOpen(false);
-      setSplitDeviceMenu(null);
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [deviceDropdownOpen, splitDeviceMenu]);
 
   useEffect(() => {
     if (!aspectDropdownOpen) return;
@@ -3037,9 +3375,75 @@ export default function App() {
     }
   };
 
+  const placeLibraryDeviceOnCanvas = useCallback((deviceId: string) => {
+    if (!isDeviceUnlocked(license.tier, deviceId)) {
+      notify(upgradeCopy('The full device library'));
+      setLicenseOpen(true);
+      return;
+    }
+    const model = getDevice(deviceId);
+    let message = `Placed ${model.label}`;
+    let placed = false;
+    setProject((current) => {
+      if (current.compositionMode === 'split') {
+        const platform = model.platform === 'android' ? 'android' : 'ios';
+        placed = true;
+        message = `Set ${platform === 'ios' ? 'iOS' : 'Android'} to ${model.label}`;
+        return applyDeviceToPlatform(current, platform, deviceId);
+      }
+      if (current.devices.length >= entitlementsMaxDevices) {
+        message = license.tier === 'free'
+          ? upgradeCopy('Multi-device scenes')
+          : `You can place up to ${entitlementsMaxDevices} devices`;
+        return current;
+      }
+      if (current.devices.length >= MAX_DEVICES) {
+        message = `You can place up to ${MAX_DEVICES} devices`;
+        return current;
+      }
+      const selected = getSelectedDevice(current);
+      const slot = current.devices.length;
+      const copy = createDeviceInstance({
+        deviceId,
+        rotation: { ...STUDIO_START_ROTATION },
+        scale: selected.scale,
+        position: {
+          x: selected.position.x + (slot > 0 ? 1.15 : 0),
+          y: selected.position.y,
+          z: selected.position.z - slot * 0.08,
+        },
+        glassReflection: selected.glassReflection,
+        reflectionStyle: selected.reflectionStyle,
+        screenshot: isPlaceholderScreenshot(deviceScreenMedia(selected, current.screenshot))
+          ? placeholderForDevice(deviceId)
+          : null,
+        deviceColor: selected.deviceColor ?? current.deviceColor,
+        clayMode: selected.clayMode ?? current.clayMode,
+      });
+      placed = true;
+      message = current.devices.length === 0
+        ? `Placed ${model.label}`
+        : `${model.label} added · ${current.devices.length + 1} devices`;
+      return syncProjectFromSelected({ ...current, devices: [...current.devices, copy] }, copy);
+    });
+    setCameraRecenterToken((n) => n + 1);
+    setDeviceChosen(true);
+    setDeviceMenu(null);
+    if (message.includes('Pro')) setLicenseOpen(true);
+    notify(message);
+    if (placed) setOpenSectionId('device');
+  }, [entitlementsMaxDevices, license.tier, notify]);
+
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setDragOver(false);
+    setCanvasDropKind(null);
+    const libraryId = event.dataTransfer.getData(DEVICE_DRAG_MIME) || draggingLibraryDeviceRef.current;
+    draggingLibraryDeviceRef.current = null;
+    if (libraryId) {
+      placeLibraryDeviceOnCanvas(libraryId);
+      return;
+    }
     void takeDroppedFiles(event.dataTransfer);
   };
 
@@ -3140,6 +3544,39 @@ export default function App() {
     }
     openProjectInTab(named, `Opened “${named.name}”`, inside ? filePath : null);
   };
+  const applyProjectRef = useRef(applyProject);
+  applyProjectRef.current = applyProject;
+
+  useEffect(() => {
+    const api = window.mockupDesktop;
+    if (!api?.openProjectPath) return undefined;
+
+    let lastOpened = '';
+    let lastOpenedAt = 0;
+    const openFromOs = async (filePath: string) => {
+      const now = Date.now();
+      if (filePath === lastOpened && now - lastOpenedAt < 1500) return;
+      lastOpened = filePath;
+      lastOpenedAt = now;
+      if (!sessionReadyRef.current) skipSessionRestoreRef.current = true;
+      try {
+        const result = await api.openProjectPath!(filePath);
+        applyProjectRef.current(result.contents, result.path);
+      } catch (error) {
+        notifyRef.current(error instanceof Error ? error.message : 'Unable to open project');
+      }
+    };
+
+    const stop = api.onOpenFromOs?.((filePath) => {
+      void openFromOs(filePath);
+    });
+    void api.takePendingOpen?.().then((filePath) => {
+      if (filePath) void openFromOs(filePath);
+    });
+    return () => {
+      stop?.();
+    };
+  }, []);
 
   const onOpen = async () => {
     try {
@@ -3890,7 +4327,7 @@ export default function App() {
     setLightGizmoActive(false);
     setSidePanelsHidden(false);
     setModelingPanelOpen(true);
-    // Keep Look collapsed — the colour dock / Backdrop looks open only from this tap.
+    // Keep Look collapsed — backdrop looks + colour dock open at the top of the right panel.
     setDeviceMenu(null);
     setPickedMaterial(null);
     setStudioSetFocus(stop);
@@ -3918,11 +4355,43 @@ export default function App() {
     setPickedMaterial({
       deviceInstanceId: payload.deviceInstanceId,
       materialName: payload.materialName,
+      meshName: payload.meshName,
       colorHex: payload.colorHex,
     });
     setStudioSetFocus(null);
     pinLayer('device', payload.deviceInstanceId);
   }, []);
+
+  const removePickedMesh = useCallback(() => {
+    if (!pickedMaterial?.meshName) return;
+    const { deviceInstanceId, meshName } = pickedMaterial;
+    const target = project.devices.find((device) => device.id === deviceInstanceId);
+    if (!target || target.hiddenMeshes?.includes(meshName)) return;
+    setProject((current) => ({
+      ...current,
+      devices: current.devices.map((device) => (
+        device.id !== deviceInstanceId || device.hiddenMeshes?.includes(meshName)
+          ? device
+          : { ...device, hiddenMeshes: [...(device.hiddenMeshes ?? []), meshName] }
+      )),
+    }));
+    notify(`Removed “${meshName}”`);
+  }, [notify, pickedMaterial, project.devices]);
+
+  const restoreHiddenMeshes = useCallback(() => {
+    if (!pickedMaterial) return;
+    const { deviceInstanceId } = pickedMaterial;
+    const target = project.devices.find((device) => device.id === deviceInstanceId);
+    const count = target?.hiddenMeshes?.length ?? 0;
+    if (!count) return;
+    setProject((current) => ({
+      ...current,
+      devices: current.devices.map((device) => (
+        device.id === deviceInstanceId ? { ...device, hiddenMeshes: undefined } : device
+      )),
+    }));
+    notify(count === 1 ? 'Restored 1 removed part' : `Restored ${count} removed parts`);
+  }, [notify, pickedMaterial, project.devices]);
 
   const persistCustomMaterialTweaks = useCallback((deviceId: string, tweaks: Record<string, MaterialTweak> | undefined) => {
     if (!isCustomDeviceId(deviceId)) return;
@@ -4283,18 +4752,32 @@ export default function App() {
         return;
       }
       const svgText = readSvgTextFromPasteEvent(event);
+      const html = readHtmlFromPasteEvent(event);
+      const figmaHtml = isFigmaClipboardHtml(html);
       const items = event.clipboardData?.items;
       const hasImage = items
         ? Array.from(items).some((item) => (
           item.type.startsWith('image/')
           || item.type === 'image/svg+xml'
           || item.kind === 'file'
-        ))
+        )) || Boolean(html.match(/<img[\s>]/i))
         : Boolean(event.clipboardData?.files?.length);
-      // Mac screenshots often never show up on the paste event. Still try the
-      // system pasteboard, and only take over the shortcut when an image is there
-      // or the pointer is on a device.
-      if (!svgText && !hasImage && !hoveredDeviceIdRef.current && !window.mockupDesktop?.readClipboardImage) return;
+      const plain = readPlainTextFromPasteEvent(event);
+      const figmaLink = Boolean(parseFigmaUrl(plain));
+      // Mac / Figma often never surface a real image on the paste event (⌘C is
+      // HTML-only). Still take over when Figma HTML, an image, a Figma link, a
+      // hovered device, or the desktop pasteboard bridge is available.
+      if (
+        !svgText
+        && !hasImage
+        && !figmaHtml
+        && !figmaLink
+        && !hoveredDeviceIdRef.current
+        && !window.mockupDesktop?.readClipboardImage
+        && !window.mockupDesktop?.readClipboardHtml
+      ) {
+        return;
+      }
       event.preventDefault();
       void pasteScreenFromClipboard(event, hoveredDeviceIdRef.current);
     };
@@ -4426,6 +4909,12 @@ export default function App() {
     setCompositionPick((current) => (
       current?.templateId === template.id ? null : current
     ));
+    setWorkspace((ws) => ({
+      ...ws,
+      tabs: ws.tabs.map((tab) => (
+        tab.shippedTemplateId === template.id ? { ...tab, shippedTemplateId: null } : tab
+      )),
+    }));
     notify(`Deleted shipped “${template.label}”`);
   };
 
@@ -4547,55 +5036,114 @@ export default function App() {
     () => templatesByCategory('scenes'),
     [templatesTick],
   );
-  const activeCompositionId = compositionPick?.tabId === workspace.activeId
-    ? compositionPick.templateId
-    : null;
+  const deviceCompositions = useMemo(
+    () => templatesByCategory('devices'),
+    [templatesTick],
+  );
+  const mainShipTargets = useMemo(
+    () => [...deviceCompositions, ...sceneCompositions],
+    [deviceCompositions, sceneCompositions],
+  );
+  const activeCompositionId = (
+    compositionPick?.tabId === workspace.activeId
+      ? compositionPick.templateId
+      : null
+  ) ?? (activeTab?.shippedTemplateId && isDevEditableTemplateId(activeTab.shippedTemplateId)
+    ? activeTab.shippedTemplateId
+    : null);
+  /** Prefer the Devices/Scenes template this tab came from (the “file it’s in”). */
+  const linkedShipTarget = useMemo(() => {
+    if (activeCompositionId) {
+      const hit = mainShipTargets.find((item) => item.id === activeCompositionId);
+      if (hit) return hit;
+    }
+    const rawName = (project.name || '').trim().toLowerCase();
+    const bareName = rawName.replace(/\s+\d+$/, '');
+    return mainShipTargets.find((item) => {
+      const label = item.label.trim().toLowerCase();
+      return label === rawName || label === bareName || rawName.startsWith(`${label} `);
+    }) ?? null;
+  }, [activeCompositionId, mainShipTargets, project.name]);
+  const shipTargetId = linkedShipTarget?.id ?? '';
+  const phoneFilePath = activeTab?.syncPath ?? syncPathByTabRef.current.get(activeTab?.id ?? '') ?? null;
+  const canPushIntoPhoneFile = Boolean(
+    isDeveloperToolset
+    && project.devices.length > 0
+    && (shipTargetId || phoneFilePath),
+  );
 
   const onApplyComposition = (template: CompositionTemplate) => {
     const tabId = workspace.activeId;
     if (!tabId) return;
-    setProject((current) => applyCompositionKeepingDevices(current, template));
-    setCompositionPick({ tabId, templateId: template.id });
+    applyTemplateCameraOrbit(template);
+    // Dev can override the phones in the open file; User keeps current models.
+    const replaceDevices = isDeveloperToolset && template.category !== 'scenes';
+    setProject((current) => applyCompositionKeepingDevices(current, template, { replaceDevices }));
+    linkShippedTemplate(tabId, isDevEditableTemplateId(template.id) ? template.id : null);
     setAnimTime(0);
     const motion = template.motion ? getAnimationPreset(template.motion) : undefined;
     setAnimPlaying(Boolean(motion && motion.loop && motion.id !== 'clear'));
     notify(
       isDeveloperToolset
-        ? `Quick-editing “${template.label}” — Update shipped when ready`
+        ? `Editing “${template.label}” — Push to overwrite devices in that file`
         : `Applied “${template.label}”`,
     );
   };
 
-  const quickUpdateShippedTemplate = async () => {
-    if (!activeCompositionId || !isDevEditableTemplateId(activeCompositionId)) {
-      notify('Pick a Devices or Scenes template first');
-      setTemplatePickerOpen(true);
+  /** Write the open shot (including device models) back into the file it came from. */
+  const pushBackIntoPhoneFile = async (forcedId?: string | null) => {
+    const tabId = workspace.activeId;
+    if (!tabId || project.devices.length === 0) {
+      notify('Add a device before pushing');
       return;
     }
-    const existing = getCompositionTemplate(activeCompositionId);
-    const category = existing?.category === 'scenes' ? 'scenes' as const : 'devices' as const;
-    const label = compositionName || project.name || existing?.label || 'Untitled composition';
-    try {
-      const next = prepareShippedFromProject(label, project, category, { id: activeCompositionId });
-      const result = await shipCompositionTemplate(next);
-      if (!result.ok) {
-        notify(result.reason || 'Could not update shipped template');
+    const targetId = forcedId || shipTargetId || linkedShipTarget?.id || '';
+    const existing = targetId ? getCompositionTemplate(targetId) : null;
+    const notes: string[] = [];
+
+    if (targetId && isDevEditableTemplateId(targetId)) {
+      const category = existing?.category === 'scenes' ? 'scenes' as const : 'devices' as const;
+      // Keep the file’s name; overwrite its device list from the open shot.
+      const label = existing?.label || project.name || 'Untitled composition';
+      try {
+        const next = prepareShippedFromProject(label, project, category, {
+          id: targetId,
+          cameraOrbit: sharedOrbit,
+        });
+        const result = await shipCompositionTemplate(next);
+        if (!result.ok) {
+          notify(result.reason || 'Could not overwrite devices in that file');
+          return;
+        }
+        setTemplatesTick((n) => n + 1);
+        linkShippedTemplate(tabId, result.template.id);
+        notes.push(`“${result.template.label}” devices`);
+      } catch (err) {
+        notify(err instanceof Error ? err.message : 'Could not overwrite devices in that file');
         return;
       }
-      setTemplatesTick((n) => n + 1);
-      setCompositionPick((current) => (
-        current?.tabId === workspace.activeId
-          ? { tabId: current.tabId, templateId: result.template.id }
-          : current
-      ));
-      notify(`Updated shipped “${result.template.label}” · User view sees it now`);
-    } catch (err) {
-      notify(err instanceof Error ? err.message : 'Could not update shipped template');
     }
+
+    const syncPath = phoneFilePath;
+    if (syncPath || (cloudRef.current?.configured && !cloudRef.current.missing)) {
+      const savedPath = await persistCloudRef.current(
+        tabId,
+        project,
+        syncPath,
+        { quiet: true, force: true },
+      );
+      if (savedPath) notes.push('project file');
+    }
+
+    if (!notes.length) {
+      notify('Choose the Devices file to overwrite, then push');
+      return;
+    }
+    notify(`Overwrote ${notes.join(' + ')}`);
   };
 
   const onSaveComposition = (opts?: { openLibrary?: boolean }) => {
-    const saved = saveComposition(compositionName, project);
+    const saved = saveComposition(compositionName, project, { cameraOrbit: sharedOrbit });
     const next = loadSavedCompositions();
     setSavedCompositions(next);
     setCompositionName('');
@@ -4607,7 +5155,10 @@ export default function App() {
   };
 
   const onCopyBuiltinComposition = async (category: 'devices' | 'scenes' = 'devices') => {
-    const source = formatBuiltinCompositionSource(compositionName || project.name, project, { category });
+    const source = formatBuiltinCompositionSource(compositionName || project.name, project, {
+      category,
+      cameraOrbit: sharedOrbit,
+    });
     try {
       await navigator.clipboard.writeText(source);
       notify(`Copied built-in ${category} template · paste into src/lib/templates.ts`);
@@ -4941,6 +5492,7 @@ export default function App() {
             setLicenseOpen(true);
           }}
           onFeedback={() => setFeedbackOpen(true)}
+          onShowOnboarding={onShowOnboarding}
           deviceUnlocked={(deviceId) => isDeviceUnlocked(license.tier, deviceId)}
         />
       ) : (
@@ -4949,24 +5501,37 @@ export default function App() {
           <div className="left-workspace-head">
             <div className="left-workspace-stack">
               <div className="left-workspace-tabs" role="tablist" aria-label="Workspace tools">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={leftWorkspaceTab === 'scenes'}
-                  className={leftWorkspaceTab === 'scenes' ? 'panel-tab selected' : 'panel-tab'}
-                  onClick={() => setLeftWorkspaceTab('scenes')}
-                >
-                  Objects
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={leftWorkspaceTab === 'assets'}
-                  className={leftWorkspaceTab === 'assets' ? 'panel-tab selected' : 'panel-tab'}
-                  onClick={() => setLeftWorkspaceTab('assets')}
-                >
-                  Assets
-                </button>
+                {leftWorkspaceTab === 'log' ? (
+                  <button
+                    type="button"
+                    className="panel-tab selected"
+                    onClick={() => setLeftWorkspaceTab('scenes')}
+                    title="Back to Layer"
+                  >
+                    Log
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={leftWorkspaceTab === 'scenes'}
+                      className={leftWorkspaceTab === 'scenes' ? 'panel-tab selected' : 'panel-tab'}
+                      onClick={() => setLeftWorkspaceTab('scenes')}
+                    >
+                      Layer
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={leftWorkspaceTab === 'assets'}
+                      className={leftWorkspaceTab === 'assets' ? 'panel-tab selected' : 'panel-tab'}
+                      onClick={() => setLeftWorkspaceTab('assets')}
+                    >
+                      Assets
+                    </button>
+                  </>
+                )}
               </div>
             </div>
             <button
@@ -4988,7 +5553,6 @@ export default function App() {
                   project={project}
                   scenes={compositionScenes}
                   activeSceneId={activeCompositionSceneId ?? compositionScenes[0]?.id ?? 'scene-main'}
-                  looks={allScenes}
                   onSwitchScene={onSwitchCompositionScene}
                   onRenameScene={onRenameCompositionScene}
                   onRemoveScene={onRemoveCompositionScene}
@@ -5006,9 +5570,6 @@ export default function App() {
                     });
                   }}
                   onRemoveDevice={deleteDeviceById}
-                  onChooseLook={chooseScene}
-                  onDeleteLook={onDeletePreset}
-                  onUpdateGradient={updateGradient}
                   onOpenSection={(sectionId) => setOpenSectionId(sectionId)}
                   onOpenAssets={() => setLeftWorkspaceTab('assets')}
                   onSelectOverlay={selectCanvasOverlay}
@@ -5019,7 +5580,6 @@ export default function App() {
                   }}
                   onRemoveProp={removeSceneProp}
                   onRemoveBackdrop={removeBackdrop}
-                  backdropLooksOpen={studioSetFocus != null}
                   onSelectBackdrop={selectBackdrop}
                   onFocusKeyLight={focusKeyLight}
                   onFocusSceneLight={focusSceneLight}
@@ -5085,7 +5645,7 @@ export default function App() {
                         setAssetsDropActive(false);
                         void takeDroppedFiles(event.dataTransfer);
                       }}
-                      title={`Drop, paste, or browse a screenshot for ${getDevice(activeEnvDevice.deviceId).label}`}
+                      title={`Drop, paste, or browse a screenshot for ${getDevice(activeEnvDevice.deviceId).label}. Figma: ⌘C a frame, then ⌘V (token required).`}
                     >
                       <ImagePlus size={20} strokeWidth={1.6} />
                       <div className="upload-zone-copy">
@@ -5093,7 +5653,7 @@ export default function App() {
                         <span>
                           {activePublishTarget === 'ios' ? 'Writes to iOS only' : 'Writes to Android only'}
                           {' · '}
-                          Browse · ⌘V
+                          Figma ⌘C → ⌘V
                         </span>
                       </div>
                     </button>
@@ -5102,7 +5662,7 @@ export default function App() {
                         type="url"
                         className="assets-figma-input"
                         value={figmaLinkDraft}
-                        placeholder="Paste a Figma link"
+                        placeholder="Or paste a Figma frame link"
                         aria-label="Figma file link"
                         onChange={(event) => setFigmaLinkDraft(event.target.value)}
                         onKeyDown={(event) => {
@@ -5263,8 +5823,8 @@ export default function App() {
                 >
                   <button
                     type="button"
-                    className={isDeveloperToolset ? 'is-active' : ''}
-                    aria-pressed={isDeveloperToolset}
+                    className={rightWorkspaceTab !== 'agent' && isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={rightWorkspaceTab !== 'agent' && isDeveloperToolset}
                     title="Developer toolset — author & ship templates"
                     onClick={() => setToolset('developer')}
                   >
@@ -5273,13 +5833,23 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    className={!isDeveloperToolset ? 'is-active' : ''}
-                    aria-pressed={!isDeveloperToolset}
+                    className={rightWorkspaceTab !== 'agent' && !isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={rightWorkspaceTab !== 'agent' && !isDeveloperToolset}
                     title="User toolset — preview as customers see the app"
                     onClick={() => setToolset('user')}
                   >
                     <UserRound size={13} strokeWidth={1.9} />
                     User
+                  </button>
+                  <button
+                    type="button"
+                    className={rightWorkspaceTab === 'agent' ? 'is-active' : ''}
+                    aria-pressed={rightWorkspaceTab === 'agent'}
+                    title="Agent mode — AI chat for animation"
+                    onClick={openAgentMode}
+                  >
+                    <Bot size={13} strokeWidth={1.9} />
+                    Agent
                   </button>
                 </div>
               )}
@@ -5304,11 +5874,21 @@ export default function App() {
         <main
           className="canvas-panel"
           onDragOver={(e) => {
-            if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+            const types = Array.from(e.dataTransfer.types);
+            const isDevice = Boolean(draggingLibraryDeviceRef.current) || types.includes(DEVICE_DRAG_MIME);
+            const isFiles = types.includes('Files');
+            if (!isDevice && !isFiles) return;
             e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setCanvasDropKind(isDevice ? 'device' : 'files');
             setDragOver(true);
           }}
-          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }}
+          onDragLeave={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              setDragOver(false);
+              setCanvasDropKind(null);
+            }
+          }}
           onDrop={onDrop}
         >
           <div
@@ -5318,14 +5898,14 @@ export default function App() {
             <div className="canvas-top-right">
               {toolsetSwitchAvailable && (
                 <div
-                  className={`workspace-view-toggle${isDeveloperToolset ? ' is-dev' : ' is-user'}`}
+                  className={`workspace-view-toggle${rightWorkspaceTab === 'agent' ? ' is-agent' : isDeveloperToolset ? ' is-dev' : ' is-user'}`}
                   role="group"
                   aria-label="Workspace view"
                 >
                   <button
                     type="button"
-                    className={isDeveloperToolset ? 'is-active' : ''}
-                    aria-pressed={isDeveloperToolset}
+                    className={rightWorkspaceTab !== 'agent' && isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={rightWorkspaceTab !== 'agent' && isDeveloperToolset}
                     title="Dev view — quick-edit templates and ship updates to User"
                     onClick={() => setToolset('developer')}
                   >
@@ -5334,13 +5914,23 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    className={!isDeveloperToolset ? 'is-active' : ''}
-                    aria-pressed={!isDeveloperToolset}
+                    className={rightWorkspaceTab !== 'agent' && !isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={rightWorkspaceTab !== 'agent' && !isDeveloperToolset}
                     title="User view — preview the templates customers get"
                     onClick={() => setToolset('user')}
                   >
                     <UserRound size={12} strokeWidth={2.2} aria-hidden />
                     User view
+                  </button>
+                  <button
+                    type="button"
+                    className={rightWorkspaceTab === 'agent' ? 'is-active' : ''}
+                    aria-pressed={rightWorkspaceTab === 'agent'}
+                    title="Agent mode — AI chat for animation"
+                    onClick={openAgentMode}
+                  >
+                    <Bot size={12} strokeWidth={2.2} aria-hidden />
+                    Agent
                   </button>
                 </div>
               )}
@@ -5681,6 +6271,16 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => {
+                    const id = deviceMenu.id;
+                    setDeviceMenu(null);
+                    void pasteScreenFromClipboard(undefined, id);
+                  }}
+                >
+                  <ClipboardPaste size={14} /> Paste screenshot
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setDeviceMenu(null);
                     setLeftWorkspaceTab('assets');
                     imageInputRef.current?.click();
@@ -5720,8 +6320,17 @@ export default function App() {
             {dragOver && (
               <div className="drag-overlay">
                 <Upload size={16} />
-                <b>Drop a screenshot or a 3D model</b>
-                <span>FBX, DAE, OBJ, glTF, Blend, and C4D ask before they are extracted</span>
+                {canvasDropKind === 'device' ? (
+                  <>
+                    <b>Drop to place this device</b>
+                    <span>Adds it to the canvas · click a card to switch the selected model</span>
+                  </>
+                ) : (
+                  <>
+                    <b>Drop a screenshot or a 3D model</b>
+                    <span>FBX, DAE, OBJ, glTF, Blend, and C4D ask before they are extracted</span>
+                  </>
+                )}
               </div>
             )}
             <ViewAxisGizmo
@@ -6077,30 +6686,117 @@ export default function App() {
         </main>
 
         <aside className="right-panel" aria-hidden={sidePanelsHidden} ref={rightPanelRef}>
+          <div className="right-workspace-tabs" role="tablist" aria-label="Inspector tools">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={rightWorkspaceTab === 'inspect'}
+              className={rightWorkspaceTab === 'inspect' ? 'panel-tab selected' : 'panel-tab'}
+              onClick={() => setRightWorkspaceTab('inspect')}
+            >
+              Inspect
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={rightWorkspaceTab === 'presets'}
+              className={rightWorkspaceTab === 'presets' ? 'panel-tab selected' : 'panel-tab'}
+              onClick={() => setRightWorkspaceTab('presets')}
+            >
+              Presets
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={rightWorkspaceTab === 'agent'}
+              className={rightWorkspaceTab === 'agent' ? 'panel-tab selected' : 'panel-tab'}
+              onClick={openAgentMode}
+            >
+              Agent
+            </button>
+          </div>
+          {rightWorkspaceTab !== 'agent' && (
           <CompositionSwitcher
             templates={sceneCompositions}
             activeId={activeCompositionId}
             onApply={onApplyComposition}
             mode={isDeveloperToolset ? 'developer' : 'user'}
+            onCreate={isDeveloperToolset ? () => onAddShippedLibraryTemplate('scenes') : undefined}
+            onCreateLayout={isDeveloperToolset ? () => onAddShippedLibraryTemplate('devices') : undefined}
             onDuplicate={onDuplicateLibraryTemplate}
           />
+          )}
+          {rightWorkspaceTab === 'presets' ? (
+            <div className="right-panel-scroll-shell">
+              <div className="inspector-scroll right-presets-scroll">
+                <AnimationPresetsPanel
+                  onApply={applyMotionPreset}
+                  appliedId={appliedMotionPresetId}
+                  deviceId={displaySelected.deviceId}
+                  deviceColor={displaySelected.deviceColor ?? project.deviceColor}
+                  clayMode={displaySelected.clayMode ?? project.clayMode}
+                  screenshot={displaySelected.screenshot ?? null}
+                />
+              </div>
+              <div className="right-panel-edge-fade" aria-hidden />
+            </div>
+          ) : rightWorkspaceTab === 'agent' ? (
+            <AgentChatPanel
+              messages={agentMessages}
+              busy={studioAiBusy}
+              status={studioAiStatus}
+              onSend={(text) => runStudioAiPrompt(text, { fromAgent: true })}
+              onClose={() => setRightWorkspaceTab('inspect')}
+            />
+          ) : (
+          <>
           {isDeveloperToolset && (
-            <div className="template-quick-edit" aria-label="Quick edit shipped template">
+            <div className="template-quick-edit" aria-label="Push devices into file">
               <div className="template-quick-edit-copy">
-                <strong>Quick edit</strong>
+                <strong>Overwrite devices in file</strong>
                 <span>
-                  {activeCompositionId && isDevEditableTemplateId(activeCompositionId)
-                    ? (getCompositionTemplate(activeCompositionId)?.label ?? activeCompositionId)
-                    : 'Pick a template to edit'}
+                  {linkedShipTarget
+                    ? `Push current phones into “${linkedShipTarget.label}”`
+                    : phoneFilePath
+                      ? 'Push current phones into this project file'
+                      : 'Pick the Devices file these phones belong to'}
                 </span>
               </div>
+              <label className="template-quick-edit-target">
+                <span className="sr-only">Devices file</span>
+                <select
+                  value={shipTargetId}
+                  disabled={mainShipTargets.length === 0 || !workspace.activeId}
+                  onChange={(e) => {
+                    const tabId = workspace.activeId;
+                    if (!tabId) return;
+                    linkShippedTemplate(tabId, e.target.value || null);
+                  }}
+                >
+                  <option value="">Choose Devices file…</option>
+                  {deviceCompositions.length > 0 && (
+                    <optgroup label="Devices">
+                      {deviceCompositions.map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {sceneCompositions.length > 0 && (
+                    <optgroup label="Scenes">
+                      {sceneCompositions.map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </label>
               <div className="template-quick-edit-actions">
                 <button
                   type="button"
                   className="text-button"
-                  title="Browse Devices & Scenes templates"
+                  title="Browse Devices templates"
                   onClick={() => {
-                    setTemplateCategory('scenes');
+                    setTemplateCategory('devices');
                     setTemplatePickerOpen(true);
                   }}
                 >
@@ -6109,15 +6805,17 @@ export default function App() {
                 <button
                   type="button"
                   className="button primary-button"
-                  disabled={!activeCompositionId || !isDevEditableTemplateId(activeCompositionId) || project.devices.length === 0}
-                  title="Write current shot into shippedTemplates.json for User view"
-                  onClick={() => void quickUpdateShippedTemplate()}
+                  disabled={!canPushIntoPhoneFile}
+                  title="Overwrite the phones stored in that Devices / project file"
+                  onClick={() => void pushBackIntoPhoneFile(shipTargetId || null)}
                 >
-                  <RefreshCw size={13} /> Update shipped
+                  <RefreshCw size={13} />
+                  {linkedShipTarget ? `Push into “${linkedShipTarget.label}”` : 'Push into file'}
                 </button>
               </div>
             </div>
           )}
+          <div className="right-panel-scroll-shell">
           <div className="inspector-scroll" ref={inspectorScrollRef}>
             {studioSetFocus && (
               <div className="surround-colour-dock is-active" data-stop={studioSetFocus}>
@@ -6127,14 +6825,21 @@ export default function App() {
                       ? 'Surround colour'
                       : studioSetFocus === 'floor'
                         ? 'Floor colour'
-                        : 'Backdrop colour'}
+                        : 'Backdrop'}
                   </strong>
                   <span>
                     {isTransparent
-                      ? 'Transparent look is on — restore colours to edit'
+                      ? 'Pick a look below, or restore the last coloured background'
                       : 'Opened from background tap · drag canvas still orbits'}
                   </span>
                 </div>
+                <BackdropLooksPicker
+                  looks={allScenes}
+                  background={project.background}
+                  gradientColors={project.gradientColors}
+                  onChoose={chooseScene}
+                  onDelete={onDeletePreset}
+                />
                 {isTransparent ? (
                   <button
                     type="button"
@@ -6526,14 +7231,36 @@ export default function App() {
                   </div>
                 </>
               )}
+              <DeviceCategoryBar value={deviceCategoryFilter} onChange={setDeviceCategoryFilter} />
+              <div className="device-card-preview-toggle" role="group" aria-label="Device card layout preview">
+                <span className="device-card-preview-label">Card preview</span>
+                <div className="device-card-preview-options">
+                  <button
+                    type="button"
+                    className={deviceCardPreview === 'crop' ? 'is-active' : ''}
+                    aria-pressed={deviceCardPreview === 'crop'}
+                    title="Scaled up and half-cropped past the card edge"
+                    onClick={() => setDeviceCardPreview('crop')}
+                  >
+                    V1 Crop
+                  </button>
+                  <button
+                    type="button"
+                    className={deviceCardPreview === 'fit' ? 'is-active' : ''}
+                    aria-pressed={deviceCardPreview === 'fit'}
+                    title="Centered with breathing room on all sides"
+                    onClick={() => setDeviceCardPreview('fit')}
+                  >
+                    V2 Fit
+                  </button>
+                </div>
+              </div>
               {project.compositionMode === 'split' ? (
                 <div className="split-env-device-block">
                   {([
                     { platform: 'ios' as const, device: iosEnvDevice, finish: iosEnvFinish, title: 'iOS device' },
                     { platform: 'android' as const, device: androidEnvDevice, finish: androidEnvFinish, title: 'Android device' },
                   ]).map(({ platform, device, finish, title }) => {
-                    const model = getDevice(device.deviceId);
-                    const menuOpen = splitDeviceMenu === platform;
                     const platformDevices = filteredDevices.filter((d) => d.platform === platform);
                     const isAssetTarget = activePublishTarget === platform;
                     return (
@@ -6545,56 +7272,28 @@ export default function App() {
                           <strong>{title}</strong>
                           <span>{isAssetTarget ? 'Assets target' : 'Model only'}</span>
                         </div>
-                        <div className={`device-dropdown ${menuOpen ? 'is-open' : ''}`}>
-                          <button
-                            type="button"
-                            className="device-dropdown-trigger"
-                            aria-expanded={menuOpen}
-                            aria-haspopup="listbox"
-                            title={`Choose ${platform === 'ios' ? 'iOS' : 'Android'} device`}
-                            onClick={(event) => {
-                              const root = event.currentTarget.closest('.device-dropdown');
-                              const willOpen = splitDeviceMenu !== platform;
-                              setSplitDeviceMenu(willOpen ? platform : null);
-                              if (willOpen && root instanceof HTMLElement) pinToContainerTop(root);
-                            }}
-                          >
-                            <span className="device-dropdown-copy">
-                              <strong>{model.label}</strong>
-                              <span>{screenSizeLabel(model.screenSize)}</span>
-                            </span>
-                            <ChevronDown size={14} className="device-dropdown-chevron" />
-                          </button>
-                          {menuOpen && (
-                            <div className="device-dropdown-menu" role="listbox" aria-label={`${title} models`}>
-                              <DeviceCategoryBar value={deviceCategoryFilter} onChange={setDeviceCategoryFilter} />
-                              <div className="device-dropdown-options">
-                              {platformDevices.length === 0 ? (
-                                <div className="device-dropdown-empty">No devices in this category</div>
-                              ) : (
-                                <DeviceMenuOptions
-                                  devices={platformDevices}
-                                  grouped={deviceCategoryFilter === 'all'}
-                                  isSelected={(id) => device.deviceId === id}
-                                  isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
-                                  onPick={(option, unlocked) => {
-                                    if (!unlocked) {
-                                      notify(upgradeCopy('The full device library'));
-                                      setLicenseOpen(true);
-                                      setSplitDeviceMenu(null);
-                                      return;
-                                    }
-                                    setProject((current) => applyDeviceToPlatform(current, platform, option.id));
-                                    setCameraRecenterToken((n) => n + 1);
-                                    setDeviceChosen(true);
-                                    setSplitDeviceMenu(null);
-                                  }}
-                                />
-                              )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
+                        <DeviceCardGrid
+                          devices={platformDevices}
+                          previewLayout={deviceCardPreview}
+                          isSelected={(id) => device.deviceId === id}
+                          isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
+                          onLibraryDragStart={(id) => { draggingLibraryDeviceRef.current = id; }}
+                          onLibraryDragEnd={() => {
+                            draggingLibraryDeviceRef.current = null;
+                            setDragOver(false);
+                            setCanvasDropKind(null);
+                          }}
+                          onPick={(option, unlocked) => {
+                            if (!unlocked) {
+                              notify(upgradeCopy('The full device library'));
+                              setLicenseOpen(true);
+                              return;
+                            }
+                            setProject((current) => applyDeviceToPlatform(current, platform, option.id));
+                            setCameraRecenterToken((n) => n + 1);
+                            setDeviceChosen(true);
+                          }}
+                        />
                         <FinishDots
                           ariaLabel={`${title} finish`}
                           color={finish.deviceColor}
@@ -6610,84 +7309,49 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  <div
-                    className={`device-dropdown ${deviceDropdownOpen ? 'is-open' : ''}`}
-                    ref={deviceDropdownRef}
-                  >
+                  <DeviceCardGrid
+                    devices={filteredDevices}
+                    previewLayout={deviceCardPreview}
+                    isSelected={(id) => project.deviceId === id}
+                    isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
+                    onLibraryDragStart={(id) => { draggingLibraryDeviceRef.current = id; }}
+                    onLibraryDragEnd={() => {
+                      draggingLibraryDeviceRef.current = null;
+                      setDragOver(false);
+                      setCanvasDropKind(null);
+                    }}
+                    onPick={(device, unlocked) => {
+                      if (!unlocked) {
+                        notify(upgradeCopy('The full device library'));
+                        setLicenseOpen(true);
+                        return;
+                      }
+                      patchSelectedDevice({ deviceId: device.id });
+                      setDeviceChosen(true);
+                      if (isPlaceholderScreenshot(activeEnvScreenshot)) {
+                        applyScreenImage(placeholderForDevice(device), device.label, 'Size guide updated');
+                      }
+                    }}
+                  />
+                  <div className="device-card-import-row">
                     <button
                       type="button"
-                      className="device-dropdown-trigger"
-                      aria-expanded={deviceDropdownOpen}
-                      aria-haspopup="listbox"
-                      title="Choose device"
-                      onClick={(event) => {
-                        const root = event.currentTarget.closest('.device-dropdown');
-                        const willOpen = !deviceDropdownOpen;
-                        setDeviceDropdownOpen(willOpen);
-                        if (willOpen && root instanceof HTMLElement) pinToContainerTop(root);
-                      }}
+                      className="device-card-import"
+                      onClick={() => customDevicePanelRef.current?.openImport()}
                     >
-                      <span className="device-dropdown-copy">
-                        <strong>{getDevice(project.deviceId).label}</strong>
-                        <span>{screenSizeLabel(getDevice(project.deviceId).screenSize)}</span>
-                      </span>
-                      <ChevronDown size={14} className="device-dropdown-chevron" />
+                      <Upload size={13} />
+                      Import model
                     </button>
-                    {deviceDropdownOpen && (
-                      <div className="device-dropdown-menu" role="listbox" aria-label="Devices">
-                        <DeviceCategoryBar value={deviceCategoryFilter} onChange={setDeviceCategoryFilter} />
-                        <div className="device-dropdown-options">
-                        {filteredDevices.length === 0 ? (
-                          <div className="device-dropdown-empty">No devices in this category</div>
-                        ) : (
-                          <DeviceMenuOptions
-                            devices={filteredDevices}
-                            grouped={deviceCategoryFilter === 'all'}
-                            isSelected={(id) => project.deviceId === id}
-                            isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
-                            onPick={(device, unlocked) => {
-                              if (!unlocked) {
-                                notify(upgradeCopy('The full device library'));
-                                setLicenseOpen(true);
-                                setDeviceDropdownOpen(false);
-                                return;
-                              }
-                              patchSelectedDevice({ deviceId: device.id });
-                              setDeviceChosen(true);
-                              setDeviceDropdownOpen(false);
-                              if (isPlaceholderScreenshot(activeEnvScreenshot)) {
-                                applyScreenImage(placeholderForDevice(device), device.label, 'Size guide updated');
-                              }
-                            }}
-                          />
-                        )}
-                        </div>
-                        <button
-                          type="button"
-                          className="device-dropdown-import"
-                          onClick={() => {
-                            customDevicePanelRef.current?.openImport();
-                            setDeviceDropdownOpen(false);
-                          }}
-                        >
-                          <Upload size={13} />
-                          Import model
-                        </button>
-                        <button
-                          type="button"
-                          className="device-dropdown-import device-dropdown-import-folder"
-                          onClick={() => {
-                            customDevicePanelRef.current?.openImportFolder();
-                            setDeviceDropdownOpen(false);
-                          }}
-                        >
-                          <Upload size={13} />
-                          Import folder
-                        </button>
-                          <p className="device-dropdown-import-hint">GLB, glTF, FBX, DAE, OBJ, Blend, or C4D — pick several models at once. Select texture images with each mesh, or import the export folder. Desktop converts .blend via Blender; C4D / Max / Maya still need an export to GLB or FBX first.</p>
-                      </div>
-                    )}
+                    <button
+                      type="button"
+                      className="device-card-import"
+                      onClick={() => customDevicePanelRef.current?.openImportFolder()}
+                    >
+                      <Upload size={13} />
+                      Import folder
+                    </button>
                   </div>
+                  <p className="device-card-import-hint">GLB, glTF, FBX, DAE, OBJ, Blend, or C4D — pick several models at once. Select texture images with each mesh, or import the export folder. Desktop converts .blend via Blender; C4D / Max / Maya still need an export to GLB or FBX first.</p>
                   <CustomDevicePanel
                     ref={customDevicePanelRef}
                     selectedDeviceId={project.deviceId}
@@ -7594,21 +8258,26 @@ export default function App() {
               </div>
             </SettingsSection>
 
-            <SettingsSection id="shadow" title="Shadow" hint="Progressive soft shadows and floor grounding" icon={Layers3} open={openSectionId === 'shadow'} onToggle={toggleSection}>
+            <SettingsSection id="shadow" title="Shadows" hint="Soft studio shadows, contact, and ambient occlusion" icon={Layers3} open={openSectionId === 'shadow'} onToggle={toggleSection}>
               <div className="env-group">
                 <div className="env-group-head">
                   <div className="field-caption">Shadows</div>
                   <button
                     type="button"
                     className="env-reset"
-                    title="Reset shadow"
+                    title="Reset shadows"
                     onClick={() => updateProject({
                       shadowType: DEFAULT_PROJECT.shadowType,
                       shadowSoftness: DEFAULT_PROJECT.shadowSoftness,
                       shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
                       shadowContact: DEFAULT_PROJECT.shadowContact,
+                      shadowContactEnabled: DEFAULT_PROJECT.shadowContactEnabled,
+                      shadowDistance: DEFAULT_PROJECT.shadowDistance,
+                      shadowColor: DEFAULT_PROJECT.shadowColor,
+                      ambientOcclusion: DEFAULT_PROJECT.ambientOcclusion,
                       shadowQuality: DEFAULT_PROJECT.shadowQuality,
                       showGroundBase: DEFAULT_PROJECT.showGroundBase,
+                      lightPosition: { ...DEFAULT_PROJECT.lightPosition },
                     })}
                   >
                     <RotateCcw size={12} />
@@ -7626,41 +8295,82 @@ export default function App() {
                 {(project.shadowType ?? DEFAULT_PROJECT.shadowType) !== 'off' && (
                   <div className="env-sliders" style={{ marginTop: 12 }}>
                     <SliderField
+                      label="Opacity"
+                      min={0}
+                      max={100}
+                      step={1}
+                      unit="%"
+                      value={Math.round(opacityToPercent(project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity))}
+                      onChange={(v) => updateProject({ shadowOpacity: percentToOpacity(v) })}
+                    />
+                    <SliderField
                       label="Softness"
-                      min={0.2}
-                      max={8}
+                      min={0}
+                      max={100}
+                      step={1}
+                      unit="%"
+                      value={Math.round(softnessToPercent(project.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness))}
+                      onChange={(v) => updateProject({ shadowSoftness: percentToSoftness(v) })}
+                    />
+                    <SliderField
+                      label="Distance"
+                      min={SHADOW_DISTANCE_MIN}
+                      max={SHADOW_DISTANCE_MAX}
                       step={0.1}
                       unit=""
-                      value={project.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness}
-                      onChange={(v) => updateProject({ shadowSoftness: v })}
+                      value={project.shadowDistance ?? DEFAULT_PROJECT.shadowDistance}
+                      onChange={(v) => updateProject({ shadowDistance: v })}
                     />
                     <p className="field-caption" style={{ marginTop: -4 }}>
-                      Apparent key-light size — higher softens the penumbra.
+                      How far the floor shadow reaches. Raise this for floating devices.
                     </p>
-                    <SliderField
-                      label="Intensity"
-                      min={0}
-                      max={2}
-                      step={0.01}
-                      unit=""
-                      value={project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity}
-                      onChange={(v) => updateProject({ shadowOpacity: v })}
-                    />
-                    <p className="field-caption" style={{ marginTop: -4 }}>
-                      Progressive floor shadow — 1 is the soft default, above 1 crushes the core darker, low fades to a whisper.
-                    </p>
-                    <SliderField
-                      label="Contact"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      unit=""
-                      value={project.shadowContact ?? DEFAULT_PROJECT.shadowContact}
-                      onChange={(v) => updateProject({ shadowContact: v })}
-                    />
-                    <p className="field-caption" style={{ marginTop: -4 }}>
-                      Subtle darkening where the mesh meets the floor.
-                    </p>
+                    {(() => {
+                      const focus = displaySelected?.position ?? { x: 0, y: 0, z: 0 };
+                      const yaw = displaySelected?.rotation.y ?? 0;
+                      const pose = project.lightPosition ?? DEFAULT_PROJECT.lightPosition;
+                      const spherical = lightToSpherical(pose, focus, yaw);
+                      return (
+                        <SliderField
+                          label="Direction"
+                          min={-180}
+                          max={180}
+                          step={1}
+                          unit="°"
+                          value={Math.round(spherical.azimuth)}
+                          onChange={(azimuth) => updateProject({
+                            lightPosition: sphericalToLight(
+                              azimuth,
+                              spherical.elevation,
+                              spherical.distance,
+                              focus,
+                              yaw,
+                            ),
+                          })}
+                        />
+                      );
+                    })()}
+                    <label className="env-color-row">
+                      <span>Colour</span>
+                      <input
+                        type="color"
+                        value={project.shadowColor ?? DEFAULT_SHADOW_COLOR}
+                        onChange={(e) => updateProject({ shadowColor: e.target.value })}
+                        aria-label="Shadow colour"
+                      />
+                    </label>
+                    <div className="option-toggle-row" style={{ marginTop: 4 }}>
+                      <span>Contact shadows</span>
+                      <SwitchControl
+                        checked={project.shadowContactEnabled !== false}
+                        label="Toggle contact shadows"
+                        onChange={(on) => updateProject({
+                          shadowContactEnabled: on,
+                          shadowContact: on
+                            ? Math.max(project.shadowContact ?? 0, DEFAULT_PROJECT.shadowContact)
+                            : (project.shadowContact ?? DEFAULT_PROJECT.shadowContact),
+                        })}
+                      />
+                    </div>
                     <div className="field-caption" style={{ marginTop: 10 }}>Quality</div>
                     <div className="camera-preset-grid">
                       {SHADOW_QUALITIES.map((quality) => (
@@ -7679,9 +8389,6 @@ export default function App() {
                       {SHADOW_QUALITIES.find((quality) => quality.id === (project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality))?.hint
                         ?? 'Balanced for smooth interaction'}
                     </p>
-                    <p className="field-caption" style={{ marginTop: 8 }}>
-                      Direction follows the key light — open Light and enable Move in scene, then drag the axes.
-                    </p>
                     <div className="option-toggle-row" style={{ marginTop: 8 }}>
                       <span>Move key light</span>
                       <SwitchControl
@@ -7695,6 +8402,20 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                <div className="env-sliders" style={{ marginTop: 12 }}>
+                  <SliderField
+                    label="Ambient occlusion"
+                    min={0}
+                    max={100}
+                    step={1}
+                    unit="%"
+                    value={Math.round(aoToPercent(project.ambientOcclusion ?? DEFAULT_PROJECT.ambientOcclusion))}
+                    onChange={(v) => updateProject({ ambientOcclusion: percentToAo(v) })}
+                  />
+                  <p className="field-caption" style={{ marginTop: -4 }}>
+                    Subtle depth in edges and crevices. Keep low for a clean product look.
+                  </p>
+                </div>
                 <div className="option-toggle-row" style={{ marginTop: 12 }}>
                   <span>Floor plate</span>
                   <SwitchControl
@@ -7709,6 +8430,15 @@ export default function App() {
 
             <SettingsSection id="look" title="Look & motion" hint="Style, effects and animation" icon={Sparkles} open={openSectionId === 'look'} onToggle={toggleSection}>
               <div className="scene-look-block is-inspector">
+                <div className="scene-look-group">
+                  <BackdropLooksPicker
+                    looks={allScenes}
+                    background={project.background}
+                    gradientColors={project.gradientColors}
+                    onChoose={chooseScene}
+                    onDelete={onDeletePreset}
+                  />
+                </div>
                 {selectedSceneProp && (
                   <div className="scene-look-group">
                     <div className="field-caption scene-look-sub">
@@ -7917,6 +8647,15 @@ export default function App() {
                         <Icon size={16} strokeWidth={1.8} aria-hidden />
                       </button>
                     ))}
+                    <button
+                      type="button"
+                      className="motion-preset-chip motion-preset-browse"
+                      title="Browse preset animations with previews"
+                      aria-label="Browse preset animations"
+                      onClick={() => setRightWorkspaceTab('presets')}
+                    >
+                      All presets
+                    </button>
                   </div>
                 </div>
 
@@ -7955,6 +8694,8 @@ export default function App() {
               </div>
             </SettingsSection>
 
+          </div>
+          <div className="right-panel-edge-fade" aria-hidden />
           </div>
           <div className="inspector-footer inspector-export-panel">
             <div className="figma-export-head">
@@ -8066,6 +8807,8 @@ export default function App() {
               {exporting ? exportActionLabel : 'Export composition'}
             </button>
           </div>
+          </>
+          )}
         </aside>
 
         <AnimationTimeline
@@ -8408,6 +9151,7 @@ export default function App() {
           project={project}
           compositionName={compositionName}
           activeTemplateId={activeCompositionId}
+          cameraOrbit={sharedOrbit}
           pickedMaterial={pickedMaterial}
           materialTweak={
             pickedMaterial
@@ -8427,6 +9171,8 @@ export default function App() {
           onClearMaterial={clearPickedMaterialOverrides}
           onApplyPreset={applyMaterialPresetToPicked}
           onSetMaterialMap={setPickedMaterialMap}
+          onRemovePickedMesh={removePickedMesh}
+          onRestoreHiddenMeshes={restoreHiddenMeshes}
           onPatchProp={patchSceneProp}
           onUpdateGradient={updateGradient}
           onFocusStudioStop={setStudioSetFocus}
@@ -8484,6 +9230,9 @@ export default function App() {
           onPromoted={(template) => {
             setTemplatesTick((n) => n + 1);
             setTemplateCategory(template.category === 'scenes' ? 'scenes' : 'devices');
+            if (workspace.activeId && isDevEditableTemplateId(template.id)) {
+              linkShippedTemplate(workspace.activeId, template.id);
+            }
             startFromTemplate(template);
           }}
           onClose={() => {
@@ -8584,7 +9333,6 @@ export default function App() {
         onNotify={notify}
         appVersion="0.1.0"
       />
-      <TemplateThumbHost />
       {templatePickerOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setTemplatePickerOpen(false); }}>
           <div

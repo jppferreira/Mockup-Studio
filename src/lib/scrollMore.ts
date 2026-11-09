@@ -45,11 +45,13 @@ export function releasePinPadding(el: HTMLElement) {
   scroller.style.paddingBottom = '';
 }
 
-/** Toggle a bottom fade when a scroller still has content below the fold. */
-export function bindScrollMore(el: HTMLElement) {
+/** Toggle a bottom fade when a scroller still has content below the fold.
+ *  Optional fadeHost gets `has-scroll-more` for a pinned overlay (prefer over sticky ::after). */
+export function bindScrollMore(el: HTMLElement, fadeHost?: HTMLElement | null) {
   const update = () => {
     const more = el.scrollHeight - el.clientHeight - el.scrollTop > 12;
     el.classList.toggle('can-scroll-more', more);
+    fadeHost?.classList.toggle('has-scroll-more', more);
   };
   update();
   el.addEventListener('scroll', update, { passive: true });
@@ -66,6 +68,7 @@ export function bindScrollMore(el: HTMLElement) {
   mo.observe(el, { childList: true });
   return () => {
     el.classList.remove('can-scroll-more');
+    fadeHost?.classList.remove('has-scroll-more');
     el.removeEventListener('scroll', update);
     ro.disconnect();
     mo.disconnect();

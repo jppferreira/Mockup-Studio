@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import OnboardingFlow from './components/OnboardingFlow';
 import { isSiteUnlocked, SiteGate } from './components/SiteGate';
 import { applyAccentTheme, readAccentColor, readAccentTheme } from './lib/accentTheme';
 import { installNumberScrub } from './lib/numberScrub';
+import { clearOnboardingComplete, isOnboardingComplete } from './lib/onboarding';
 import './styles.css';
 
 installNumberScrub();
@@ -47,13 +49,22 @@ function dismissSplash(immediate = false) {
 
 function Root() {
   const [locked, setLocked] = useState(() => !isSiteUnlocked());
+  const [needsOnboarding, setNeedsOnboarding] = useState(() => !isOnboardingComplete());
 
   useEffect(() => {
     dismissSplash(locked);
   }, [locked]);
 
+  const showOnboarding = () => {
+    clearOnboardingComplete();
+    setNeedsOnboarding(true);
+  };
+
   if (locked) return <SiteGate onUnlock={() => setLocked(false)} />;
-  return <App />;
+  if (needsOnboarding) {
+    return <OnboardingFlow onComplete={() => setNeedsOnboarding(false)} />;
+  }
+  return <App onShowOnboarding={showOnboarding} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

@@ -35,6 +35,22 @@ export const TEMPLATE_BACKDROP: GradientColors = {
 /** Default shallow DoF for every shipped / applied composition. */
 export const TEMPLATE_DEPTH_OF_FIELD_AMOUNT = 0.48;
 
+/**
+ * Subtle progressive soft floor — shared by every new project, composition,
+ * and shipped template unless a saved composition stores its own values.
+ */
+export const TEMPLATE_SHADOW = {
+  shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
+  shadowSoftness: DEFAULT_PROJECT.shadowSoftness,
+  shadowType: DEFAULT_PROJECT.shadowType,
+  shadowContact: DEFAULT_PROJECT.shadowContact,
+  shadowContactEnabled: DEFAULT_PROJECT.shadowContactEnabled,
+  shadowDistance: DEFAULT_PROJECT.shadowDistance,
+  shadowColor: DEFAULT_PROJECT.shadowColor,
+  ambientOcclusion: DEFAULT_PROJECT.ambientOcclusion,
+  shadowQuality: DEFAULT_PROJECT.shadowQuality,
+} as const;
+
 export interface CompositionTemplate {
   id: string;
   label: string;
@@ -61,6 +77,10 @@ export interface CompositionTemplate {
   shadowSoftness?: number;
   shadowType?: ShadowType;
   shadowContact?: number;
+  shadowContactEnabled?: boolean;
+  shadowDistance?: number;
+  shadowColor?: string;
+  ambientOcclusion?: number;
   shadowQuality?: ShadowQuality;
   /** Extra luminaires for realistic / Spline-like setups */
   sceneLights?: SceneLight[];
@@ -76,6 +96,8 @@ export interface CompositionTemplate {
   linkSplitTransform?: boolean;
   cameraView?: CameraView;
   cameraLens?: CameraLens;
+  /** Free-orbit pose (offset from framed device). Omitted = default view framing. */
+  cameraOrbit?: { offset: Vec3; lookOffset?: Vec3 };
   lightPosition?: Vec3;
   lightColor?: string;
   /** Glass environment. Omitted compositions keep the project default. */
@@ -92,6 +114,7 @@ export interface CompositionTemplate {
     deviceColor?: DeviceColor;
     clayMode?: boolean;
     materialTweaks?: Record<string, MaterialTweak>;
+    hiddenMeshes?: string[];
   }>;
   overlays?: SceneOverlay[];
   /** Tracks target `slot-0`… and `__camera__`. Present on user-saved compositions. */
@@ -338,8 +361,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 1.15,
     fillIntensity: 0.38,
-    shadowOpacity: 0.52,
-    shadowSoftness: 2.4,
     showGroundBase: false,
     lightPosition: { x: -3.4, y: 6.2, z: 4.4 },
     lightColor: '#f6f1e8',
@@ -369,8 +390,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.86,
     fillIntensity: 1.05,
-    shadowOpacity: 0.28,
-    shadowSoftness: 4.4,
     showGroundBase: false,
     lightPosition: { x: 2.4, y: 5.6, z: 5.2 },
     lightColor: '#fff8f0',
@@ -399,8 +418,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 1.01,
     fillIntensity: 0.45,
-    shadowOpacity: 0.4,
-    shadowSoftness: 2.2,
     showGroundBase: false,
     lightPosition: { x: 4.2, y: 5.4, z: 3.2 },
     lightColor: '#fff4e4',
@@ -429,8 +446,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.97,
     fillIntensity: 0.7,
-    shadowOpacity: 0.36,
-    shadowSoftness: 3.2,
     showGroundBase: false,
     lightPosition: { x: -2.2, y: 5.8, z: 4.8 },
     lightColor: '#fff6ea',
@@ -459,8 +474,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.94,
     fillIntensity: 0.35,
-    shadowOpacity: 0.2,
-    shadowSoftness: 3.6,
     showGroundBase: false,
     cameraLens: 'standard',
     lightPosition: { x: 3.6, y: 4.2, z: 5 },
@@ -490,8 +503,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 1.04,
     fillIntensity: 0.4,
-    shadowOpacity: 0.48,
-    shadowSoftness: 2.8,
     showGroundBase: false,
     lightPosition: { x: -2.8, y: 5.5, z: 4.6 },
     lightColor: '#f3f0ea',
@@ -520,8 +531,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.9,
     fillIntensity: 0.85,
-    shadowOpacity: 0.34,
-    shadowSoftness: 3.4,
     showGroundBase: false,
     cameraLens: 'standard',
     lightPosition: { x: -1.5, y: 6.4, z: 5.5 },
@@ -562,8 +571,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.79,
     fillIntensity: 0.95,
-    shadowOpacity: 0.38,
-    shadowSoftness: 3.2,
     motion: 'float',
     devices: [{
       deviceId: 'iphone_16_pro_max',
@@ -591,8 +598,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.94,
     fillIntensity: 0.65,
-    shadowOpacity: 0.42,
-    shadowSoftness: 2.4,
     motion: 'tilt',
     devices: [{
       deviceId: 'iphone_17_pro',
@@ -618,8 +623,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 1.01,
     fillIntensity: 0.55,
-    shadowOpacity: 0.45,
-    shadowSoftness: 2.8,
     motion: 'turntable',
     devices: [{
       deviceId: 'iphone_15_pro_max',
@@ -646,8 +649,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.86,
     fillIntensity: 0.8,
-    shadowOpacity: 0.36,
-    shadowSoftness: 3.0,
     motion: 'orbit',
     devices: [
       {
@@ -682,8 +683,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.9,
     fillIntensity: 0.7,
-    shadowOpacity: 0.4,
-    shadowSoftness: 2.2,
     motion: 'float',
     devices: [{
       deviceId: 'pixel_9_pro',
@@ -711,8 +710,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'split',
     lightIntensity: 0.83,
     fillIntensity: 0.85,
-    shadowOpacity: 0.35,
-    shadowSoftness: 3.0,
     motion: 'float',
     devices: [
       {
@@ -747,8 +744,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.94,
     fillIntensity: 1.2,
-    shadowOpacity: 0.38,
-    shadowSoftness: 4.2,
     motion: 'float',
     devices: [{
       deviceId: 'iphone_16_pro_max',
@@ -780,8 +775,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 0.9,
     fillIntensity: 0.62,
-    shadowOpacity: 0.46,
-    shadowSoftness: 2.6,
     motion: 'tilt',
     devices: [{
       deviceId: 'iphone_16_pro_max',
@@ -810,8 +803,6 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
     compositionMode: 'single',
     lightIntensity: 1.01,
     fillIntensity: 0.7,
-    shadowOpacity: 0.42,
-    shadowSoftness: 3.4,
     motion: 'turntable',
     devices: [{
       deviceId: 'iphone_17_pro',
@@ -825,16 +816,21 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
   },
 ];
 
-/** Soft white backdrop — Apple product-studio default for every layout. DoF only when the composition sets it. */
+/**
+ * Fill missing studio defaults without wiping authored look.
+ * Saved / shipped compositions keep their colours, lighting, and backdrop.
+ */
 export function withAppleStudioLook(template: CompositionTemplate): CompositionTemplate {
   return {
     ...template,
-    background: 'studio',
-    gradient: { ...TEMPLATE_BACKDROP },
+    background: template.background || 'studio',
+    gradient: template.gradient ? { ...template.gradient } : { ...TEMPLATE_BACKDROP },
     depthOfField: template.depthOfField === true,
     depthOfFieldAmount: template.depthOfFieldAmount ?? TEMPLATE_DEPTH_OF_FIELD_AMOUNT,
     sceneProps: template.sceneProps?.map((prop) => (
-      prop.kind === 'studio_backdrop' ? { ...prop, color: '#ffffff' } : prop
+      prop.kind === 'studio_backdrop'
+        ? { ...prop, color: prop.color || '#ffffff' }
+        : prop
     )),
   };
 }
@@ -857,10 +853,11 @@ export function getCompositionTemplate(id: string) {
 /**
  * Builtin / shipped layouts that Dev can overwrite into `shippedTemplates.json`.
  * User-saved `comp-*` templates are personal library only.
+ * Any other id can be pushed from Dev so main Devices/Scenes templates stay overridable.
  */
 export function isDevEditableTemplateId(id: string | null | undefined): boolean {
   if (!id || id.startsWith('comp-')) return false;
-  return listShippedCompositionTemplates().some((item) => item.id === id);
+  return true;
 }
 
 export function templatesByCategory(category: TemplateCategory) {
@@ -926,10 +923,14 @@ export function projectFromTemplate(
           Object.entries(extra.materialTweaks).map(([name, tweak]) => [name, { ...tweak }]),
         )
         : undefined,
+      hiddenMeshes: extra?.hiddenMeshes?.length ? [...extra.hiddenMeshes] : undefined,
     });
   });
   const primary = devices[0];
-  const gradient = { ...TEMPLATE_BACKDROP };
+  const gradient = template.gradient
+    ? { ...template.gradient }
+    : { ...TEMPLATE_BACKDROP };
+  const background = template.background || 'studio';
 
   const sceneProps = (template.sceneProps ?? []).map((entry, index) => createSceneProp({
     ...entry,
@@ -941,13 +942,15 @@ export function projectFromTemplate(
       : entry.scale
         ? { ...entry.scale }
         : undefined,
-    color: entry.kind === 'studio_backdrop' ? '#ffffff' : entry.color,
+    color: entry.kind === 'studio_backdrop'
+      ? (entry.color || '#ffffff')
+      : entry.color,
   }));
 
   const scene = createCompositionScene({
     id: 'scene-main',
     name: 'Scene 1',
-    background: 'studio',
+    background,
     gradientColors: gradient,
   });
 
@@ -979,11 +982,15 @@ export function projectFromTemplate(
     scale: primary.scale,
     lightIntensity: template.lightIntensity ?? DEFAULT_PROJECT.lightIntensity,
     fillIntensity: template.fillIntensity ?? DEFAULT_PROJECT.fillIntensity,
-    shadowOpacity: template.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity,
-    shadowSoftness: template.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness,
-    shadowType: template.shadowType ?? DEFAULT_PROJECT.shadowType,
-    shadowContact: template.shadowContact ?? DEFAULT_PROJECT.shadowContact,
-    shadowQuality: template.shadowQuality ?? DEFAULT_PROJECT.shadowQuality,
+    shadowOpacity: template.shadowOpacity ?? TEMPLATE_SHADOW.shadowOpacity,
+    shadowSoftness: template.shadowSoftness ?? TEMPLATE_SHADOW.shadowSoftness,
+    shadowType: template.shadowType ?? TEMPLATE_SHADOW.shadowType,
+    shadowContact: template.shadowContact ?? TEMPLATE_SHADOW.shadowContact,
+    shadowContactEnabled: template.shadowContactEnabled ?? TEMPLATE_SHADOW.shadowContactEnabled,
+    shadowDistance: template.shadowDistance ?? TEMPLATE_SHADOW.shadowDistance,
+    shadowColor: template.shadowColor ?? TEMPLATE_SHADOW.shadowColor,
+    ambientOcclusion: template.ambientOcclusion ?? TEMPLATE_SHADOW.ambientOcclusion,
+    shadowQuality: template.shadowQuality ?? TEMPLATE_SHADOW.shadowQuality,
     showGroundBase: template.showGroundBase !== false,
     sceneLights: (template.sceneLights ?? []).map((light) => createSceneLight(light)),
     environmentIntensity: template.environmentIntensity ?? null,
@@ -1018,31 +1025,59 @@ export function projectFromTemplate(
 
 /**
  * Restage the current shot with a composition’s set, light, and pose.
- * Device models, screens, and finishes stay on the phones already in the scene.
+ * By default device models, screens, and finishes stay on the phones already
+ * in the scene. Pass `replaceDevices` in Dev to override those models from
+ * the template (screens / material tweaks on matching slots are kept).
  */
 export function applyCompositionKeepingDevices(
   project: MockupProject,
   template: CompositionTemplate,
+  options?: { replaceDevices?: boolean },
 ): MockupProject {
   const slots = template.devices;
-  const count = project.devices.length;
+  const replaceDevices = options?.replaceDevices === true;
+  const count = replaceDevices ? Math.max(project.devices.length, slots.length) : project.devices.length;
   const fan = slots.length <= 1 && count > 1;
-  const devices = project.devices.map((device, index) => {
+  const devices = Array.from({ length: count }, (_, index) => {
+    const previous = project.devices[index] ?? project.devices[project.devices.length - 1];
     const slot = slots[Math.min(index, Math.max(0, slots.length - 1))];
-    if (!slot) return device;
+    if (!slot) return previous;
     const spread = fan ? (index - (count - 1) / 2) * 0.85 : 0;
+    const extra = template.deviceExtras?.[Math.min(index, Math.max(0, (template.deviceExtras?.length ?? 1) - 1))];
+    const base = previous ?? createDeviceInstance({
+      id: index === 0 ? 'device-main' : `device-${index + 1}`,
+      deviceId: slot.deviceId,
+      screenshot: null,
+    });
     return {
-      ...device,
-      rotation: slot.rotation ? { ...slot.rotation } : device.rotation,
-      scale: slot.scale ?? device.scale,
+      ...base,
+      id: previous?.id ?? base.id,
+      deviceId: replaceDevices ? slot.deviceId : base.deviceId,
+      rotation: slot.rotation ? { ...slot.rotation } : base.rotation,
+      scale: slot.scale ?? base.scale,
       position: slot.position
         ? { x: slot.position.x + spread, y: slot.position.y, z: slot.position.z }
-        : device.position,
+        : base.position,
+      ...(replaceDevices && extra ? {
+        glassReflection: extra.glassReflection ?? base.glassReflection,
+        reflectionStyle: extra.reflectionStyle ?? base.reflectionStyle,
+        lidOpen: extra.lidOpen ?? base.lidOpen,
+        deviceColor: extra.deviceColor ?? base.deviceColor,
+        clayMode: extra.clayMode ?? base.clayMode,
+        materialTweaks: extra.materialTweaks
+          ? Object.fromEntries(
+            Object.entries(extra.materialTweaks).map(([name, tweak]) => [name, { ...tweak }]),
+          )
+          : base.materialTweaks,
+        hiddenMeshes: extra.hiddenMeshes?.length ? [...extra.hiddenMeshes] : base.hiddenMeshes,
+      } : {}),
     };
   });
   const selected = devices.find((device) => device.id === project.selectedDeviceId) ?? devices[0];
   if (!selected) return project;
-  const gradient = { ...TEMPLATE_BACKDROP };
+  const gradient = template.gradient
+    ? { ...template.gradient }
+    : { ...TEMPLATE_BACKDROP };
   const sceneProps = (template.sceneProps ?? []).map((entry, index) => createSceneProp({
     ...entry,
     id: entry.id ?? `prop-${index + 1}`,
@@ -1053,7 +1088,9 @@ export function applyCompositionKeepingDevices(
       : entry.scale
         ? { ...entry.scale }
         : undefined,
-    color: entry.kind === 'studio_backdrop' ? '#ffffff' : entry.color,
+    color: entry.kind === 'studio_backdrop'
+      ? (entry.color || '#ffffff')
+      : entry.color,
   }));
   const motion = template.motion ? getAnimationPreset(template.motion) : undefined;
   const animation = motion
@@ -1062,22 +1099,29 @@ export function applyCompositionKeepingDevices(
 
   return syncProjectLayers(syncProjectFromSelected({
     ...project,
-    background: 'studio',
+    background: template.background || project.background || 'studio',
     gradientColors: gradient,
     devices,
     sceneProps,
     animation,
     lightIntensity: template.lightIntensity ?? project.lightIntensity,
     fillIntensity: template.fillIntensity ?? project.fillIntensity,
-    shadowOpacity: template.shadowOpacity ?? project.shadowOpacity,
-    shadowSoftness: template.shadowSoftness ?? project.shadowSoftness,
-    shadowType: template.shadowType ?? project.shadowType ?? DEFAULT_PROJECT.shadowType,
-    shadowContact: template.shadowContact ?? project.shadowContact ?? DEFAULT_PROJECT.shadowContact,
-    shadowQuality: template.shadowQuality ?? project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality,
+    // Prefer the composition’s stored shadows; fall back to the soft studio floor.
+    shadowOpacity: template.shadowOpacity ?? TEMPLATE_SHADOW.shadowOpacity,
+    shadowSoftness: template.shadowSoftness ?? TEMPLATE_SHADOW.shadowSoftness,
+    shadowType: template.shadowType ?? TEMPLATE_SHADOW.shadowType,
+    shadowContact: template.shadowContact ?? TEMPLATE_SHADOW.shadowContact,
+    shadowContactEnabled: template.shadowContactEnabled ?? TEMPLATE_SHADOW.shadowContactEnabled,
+    shadowDistance: template.shadowDistance ?? TEMPLATE_SHADOW.shadowDistance,
+    shadowColor: template.shadowColor ?? TEMPLATE_SHADOW.shadowColor,
+    ambientOcclusion: template.ambientOcclusion ?? TEMPLATE_SHADOW.ambientOcclusion,
+    shadowQuality: template.shadowQuality ?? TEMPLATE_SHADOW.shadowQuality,
     showGroundBase: template.showGroundBase ?? project.showGroundBase,
     lightPosition: template.lightPosition ? { ...template.lightPosition } : project.lightPosition,
     lightColor: template.lightColor ?? project.lightColor,
-    sceneLights: template.sceneLights
+    // Authored lighting wins when present (including empty). Older templates
+    // without the field keep the project's current extras.
+    sceneLights: Array.isArray(template.sceneLights)
       ? template.sceneLights.map((light) => createSceneLight(light))
       : (project.sceneLights ?? []),
     environmentIntensity: template.environmentIntensity !== undefined

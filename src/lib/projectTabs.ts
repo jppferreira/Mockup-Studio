@@ -14,6 +14,11 @@ export interface ProjectTab {
   timelineOpen: boolean;
   /** File inside the iCloud / Drive sync folder, when this tab is saved there. */
   syncPath?: string | null;
+  /**
+   * Shipped Devices/Scenes template this tab is editing in Dev.
+   * Lets Update shipped keep overriding the same layout after relaunch.
+   */
+  shippedTemplateId?: string | null;
 }
 
 export function createProjectTabId() {
@@ -49,6 +54,8 @@ export function createProjectTab(project?: MockupProject, partial?: Partial<Omit
     animTime: partial?.animTime ?? 0,
     animPlaying: partial?.animPlaying ?? false,
     timelineOpen: partial?.timelineOpen ?? false,
+    syncPath: partial?.syncPath ?? null,
+    shippedTemplateId: partial?.shippedTemplateId ?? null,
   };
 }
 

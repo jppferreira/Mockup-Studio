@@ -153,6 +153,14 @@ export interface SceneStage {
   shadowType: ShadowType;
   /** Extra contact darkening under the closest mesh points, 0–1. */
   shadowContact: number;
+  /** Contact-shadow plate on/off. Absent on older saves — treated as on. */
+  shadowContactEnabled: boolean;
+  /** How far floor shadows reach, in world units. */
+  shadowDistance: number;
+  /** Floor shadow tint. */
+  shadowColor: string;
+  /** Screen-space ambient occlusion, 0–1. */
+  ambientOcclusion: number;
   /** Interactive shadow map quality. */
   shadowQuality: ShadowQuality;
   showGroundBase: boolean;
@@ -258,6 +266,11 @@ export interface DeviceInstance {
    * Merged on top of the device library’s baked `tweaks`.
    */
   materialTweaks?: Record<string, MaterialTweak>;
+  /**
+   * Mesh / node names removed in DEV modeling mode (Apple logos, emboss marks, stray parts).
+   * Applied on top of the device library’s baked `hideNodes`.
+   */
+  hiddenMeshes?: string[];
 }
 
 export type CompositionMode = 'single' | 'split';
@@ -559,6 +572,14 @@ export interface MockupProject {
   shadowType: ShadowType;
   /** Extra contact darkening under the closest mesh points, 0–1. */
   shadowContact: number;
+  /** Contact-shadow plate on/off. Absent on older saves — treated as on. */
+  shadowContactEnabled: boolean;
+  /** How far floor shadows reach, in world units. Raise for floating devices. */
+  shadowDistance: number;
+  /** Floor shadow tint (CSS hex). */
+  shadowColor: string;
+  /** Screen-space ambient occlusion, 0–1. */
+  ambientOcclusion: number;
   /** Interactive shadow map quality. Export forces Ultra temporarily. */
   shadowQuality: ShadowQuality;
   /** Soft disc under the device; turn off for a floating product shot */
@@ -628,6 +649,9 @@ export function createDeviceInstance(partial?: Partial<DeviceInstance>): DeviceI
       ? Object.fromEntries(
         Object.entries(partial.materialTweaks).map(([name, tweak]) => [name, { ...tweak }]),
       )
+      : undefined,
+    hiddenMeshes: Array.isArray(partial?.hiddenMeshes)
+      ? [...new Set(partial.hiddenMeshes.filter((name): name is string => typeof name === 'string' && name.trim().length > 0))]
       : undefined,
   };
 }
@@ -733,10 +757,17 @@ export const DEFAULT_PROJECT: MockupProject = {
   sceneLights: [],
   environmentIntensity: null,
   toneMappingExposure: null,
-  shadowSoftness: 6.1,
+  // Photographic product floor: soft penumbra, visible contact, subtle AO.
+  // Softness ~50% of the 0.2–14 range; opacity 1 = 100% on the panel.
+  // Quality Auto for edit — export boosts maps to Ultra.
+  shadowSoftness: 7.2,
   shadowOpacity: 1,
   shadowType: 'soft',
-  shadowContact: 0,
+  shadowContact: 0.55,
+  shadowContactEnabled: true,
+  shadowDistance: 3.6,
+  shadowColor: '#1a1c22',
+  ambientOcclusion: 0.28,
   shadowQuality: 'auto',
   showGroundBase: true,
   edgeBlurTop: false,
@@ -1032,6 +1063,10 @@ function blankSceneStage(): SceneStage {
     shadowOpacity: DEFAULT_PROJECT.shadowOpacity,
     shadowType: DEFAULT_PROJECT.shadowType,
     shadowContact: DEFAULT_PROJECT.shadowContact,
+    shadowContactEnabled: DEFAULT_PROJECT.shadowContactEnabled,
+    shadowDistance: DEFAULT_PROJECT.shadowDistance,
+    shadowColor: DEFAULT_PROJECT.shadowColor,
+    ambientOcclusion: DEFAULT_PROJECT.ambientOcclusion,
     shadowQuality: DEFAULT_PROJECT.shadowQuality,
     // A blank scene starts with an empty stage; the Stage tool adds a floor piece.
     showGroundBase: false,
@@ -1082,6 +1117,10 @@ export function captureSceneStage(project: MockupProject): SceneStage {
     shadowOpacity: project.shadowOpacity,
     shadowType: project.shadowType ?? DEFAULT_PROJECT.shadowType,
     shadowContact: project.shadowContact ?? DEFAULT_PROJECT.shadowContact,
+    shadowContactEnabled: project.shadowContactEnabled !== false,
+    shadowDistance: project.shadowDistance ?? DEFAULT_PROJECT.shadowDistance,
+    shadowColor: project.shadowColor ?? DEFAULT_PROJECT.shadowColor,
+    ambientOcclusion: project.ambientOcclusion ?? DEFAULT_PROJECT.ambientOcclusion,
     shadowQuality: project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality,
     showGroundBase: project.showGroundBase,
     edgeBlurTop: project.edgeBlurTop,
@@ -1155,6 +1194,10 @@ export function applySceneStage(project: MockupProject, scene: CompositionScene)
     shadowOpacity: stage.shadowOpacity,
     shadowType: stage.shadowType ?? DEFAULT_PROJECT.shadowType,
     shadowContact: stage.shadowContact ?? DEFAULT_PROJECT.shadowContact,
+    shadowContactEnabled: stage.shadowContactEnabled !== false,
+    shadowDistance: stage.shadowDistance ?? DEFAULT_PROJECT.shadowDistance,
+    shadowColor: stage.shadowColor ?? DEFAULT_PROJECT.shadowColor,
+    ambientOcclusion: stage.ambientOcclusion ?? DEFAULT_PROJECT.ambientOcclusion,
     shadowQuality: stage.shadowQuality ?? DEFAULT_PROJECT.shadowQuality,
     showGroundBase: stage.showGroundBase,
     edgeBlurTop: stage.edgeBlurTop,

@@ -31,13 +31,9 @@ import { ensureCompositionLayers } from '../lib/layers';
 import type { SceneOverlay } from '../lib/overlays';
 import { bindScrollMore, pinToContainerTop } from '../lib/scrollMore';
 import {
-  BACKGROUNDS,
-  gradientCss,
   type CompositionScene,
   type DeviceInstance,
-  type GradientColors,
   type MockupProject,
-  type ScenePreset,
 } from '../types';
 
 export type SceneLayerSelection =
@@ -65,15 +61,11 @@ type SceneHierarchyProps = {
   project: MockupProject;
   scenes: CompositionScene[];
   activeSceneId: string;
-  looks: ScenePreset[];
   onSwitchScene: (sceneId: string) => void;
   onRenameScene: (sceneId: string, name: string) => void;
   onRemoveScene: (sceneId: string) => void;
   onSelectDevice: (device: DeviceInstance) => void;
   onRemoveDevice: (deviceId: string) => void;
-  onChooseLook: (look: ScenePreset) => void;
-  onDeleteLook: (lookId: string) => void;
-  onUpdateGradient: (key: keyof GradientColors, value: string) => void;
   onOpenSection: (sectionId: string) => void;
   onOpenAssets: () => void;
   onSelectOverlay: (overlayId: string) => void;
@@ -81,9 +73,7 @@ type SceneHierarchyProps = {
   onRemoveProp: (propId: string) => void;
   /** Clear the studio backdrop (switches the look to Transparent). */
   onRemoveBackdrop?: () => void;
-  /** True after a background / Backdrop tap — expands looks + colour controls. */
-  backdropLooksOpen?: boolean;
-  /** Select Backdrop and open colour controls (same as tapping the canvas surround). */
+  /** Select Backdrop and open looks on the right panel (same as tapping the canvas surround). */
   onSelectBackdrop?: () => void;
   onFocusKeyLight: () => void;
   onFocusSceneLight?: (lightId: string) => void;
@@ -101,12 +91,6 @@ function sceneRowLabel(scene: CompositionScene, count: number) {
 
 function propLabel(kind: string) {
   return kind.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function lookThumbStyle(look: ScenePreset) {
-  if (!look.gradient) return undefined;
-  if (BACKGROUNDS.some((item) => item.id === look.id)) return undefined;
-  return { background: gradientCss(look.gradient) };
 }
 
 function textHit(label: string, needle: string) {
@@ -132,22 +116,17 @@ export default function SceneHierarchy({
   project,
   scenes,
   activeSceneId,
-  looks,
   onSwitchScene,
   onRenameScene,
   onRemoveScene,
   onSelectDevice,
   onRemoveDevice,
-  onChooseLook,
-  onDeleteLook,
-  onUpdateGradient,
   onOpenSection,
   onOpenAssets,
   onSelectOverlay,
   onSelectProp,
   onRemoveProp,
   onRemoveBackdrop,
-  backdropLooksOpen = false,
   onSelectBackdrop,
   onFocusKeyLight,
   onFocusSceneLight,
@@ -534,8 +513,8 @@ export default function SceneHierarchy({
                           type="button"
                           className="scene-tree-main"
                           title={project.background === 'transparent'
-                            ? 'Backdrop is off · tap to restore looks'
-                            : 'Tap to edit background colours · Backspace or ✕ removes'}
+                            ? 'Backdrop is off · tap to open looks on the right'
+                            : 'Tap to edit backdrop looks and colours on the right · Backspace or ✕ removes'}
                           onClick={() => {
                             setSelection({ kind: 'backdrop' });
                             if (onSelectBackdrop) onSelectBackdrop();
@@ -561,81 +540,6 @@ export default function SceneHierarchy({
                           </button>
                         )}
                       </div>
-                      {backdropLooksOpen && (
-                        <div className="scene-tree-looks">
-                          <div className="scene-grid scene-grid-compact">
-                            {looks.map((item) => (
-                              <div key={item.id} className={`scene-card-wrap ${project.background === item.id ? 'active' : ''}`}>
-                                <button
-                                  type="button"
-                                  className={`scene-card ${project.background === item.id ? 'active' : ''}`}
-                                  onClick={() => onChooseLook(item)}
-                                  title={item.description}
-                                >
-                                  <div className={`scene-thumb ${BACKGROUNDS.some((entry) => entry.id === item.id) ? `bg-${item.id}` : ''}`} style={lookThumbStyle(item)}>
-                                    <div className="scene-mini-device"><span /></div>
-                                  </div>
-                                  <strong>{item.label}</strong>
-                                </button>
-                                {item.id.startsWith('custom-') && (
-                                  <button
-                                    type="button"
-                                    className="scene-delete"
-                                    title="Delete preset"
-                                    aria-label={`Delete ${item.label}`}
-                                    onClick={() => onDeleteLook(item.id)}
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
-                                )}
-                              </div>
-                            ))}
-                            {project.background === 'custom' && (
-                              <button type="button" className="scene-card active" title="Edited colours">
-                                <div className="scene-thumb" style={{ background: gradientCss(project.gradientColors) }}>
-                                  <div className="scene-mini-device"><span /></div>
-                                </div>
-                                <strong>Custom</strong>
-                              </button>
-                            )}
-                          </div>
-                          {project.background !== 'transparent' && (
-                            <div className="scene-tree-colors" aria-label="Backdrop, sky, and floor colours">
-                              <div className="field-caption scene-look-sub">Backdrop · Sky · Floor</div>
-                              <div className="gradient-color-grid is-separate-stops">
-                                {([
-                                  ['center', 'Backdrop'],
-                                  ['mid', 'Sky · surround'],
-                                  ['edge', 'Floor'],
-                                ] as const).map(([key, label]) => (
-                                  <label key={key} className="gradient-color-field">
-                                    <span className="gradient-color-label">{label}</span>
-                                    <span className="gradient-color-input">
-                                      <input
-                                        type="color"
-                                        value={project.gradientColors[key]}
-                                        aria-label={`${label} colour`}
-                                        onChange={(e) => onUpdateGradient(key, e.target.value)}
-                                      />
-                                      <input
-                                        type="text"
-                                        defaultValue={project.gradientColors[key]}
-                                        key={`backdrop-${key}-${project.gradientColors[key]}`}
-                                        maxLength={7}
-                                        aria-label={`${label} hex`}
-                                        onBlur={(e) => onUpdateGradient(key, e.target.value)}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') e.currentTarget.blur();
-                                        }}
-                                      />
-                                    </span>
-                                  </label>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   )}
 

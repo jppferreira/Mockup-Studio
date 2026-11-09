@@ -15,6 +15,14 @@ import {
   type ScenePropKind, type SceneStage, type Vec3,
 } from '../types';
 import { loadCustomScenePresets } from './scenePresets';
+import {
+  DEFAULT_SHADOW_COLOR,
+  isShadowColor,
+  SHADOW_DISTANCE_MAX,
+  SHADOW_DISTANCE_MIN,
+  SHADOW_SOFTNESS_MAX,
+  SHADOW_SOFTNESS_MIN,
+} from './studioShadows';
 
 const REFLECTION_IDS = new Set<string>([...REFLECTION_MAPS.map((m) => m.id), 'custom']);
 
@@ -115,6 +123,8 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
         deviceColor: normalizeDeviceColor(item.deviceColor, projectColor),
         clayMode: typeof item.clayMode === 'boolean' ? item.clayMode : projectClay,
         lidOpen: number(item.lidOpen, 1, 0, 1),
+        materialTweaks: item.materialTweaks,
+        hiddenMeshes: item.hiddenMeshes,
       });
     });
   }
@@ -257,8 +267,8 @@ export function validateProject(value: unknown): MockupProject {
     shadowSoftness: number(
       input.shadowSoftness,
       input.shadowType === 'sharp' ? Math.min(2.2, DEFAULT_PROJECT.shadowSoftness) : DEFAULT_PROJECT.shadowSoftness,
-      0.2,
-      8,
+      SHADOW_SOFTNESS_MIN,
+      SHADOW_SOFTNESS_MAX,
     ),
     shadowOpacity: number(input.shadowOpacity, DEFAULT_PROJECT.shadowOpacity, 0, 2),
     shadowType: (['contact', 'soft', 'sharp', 'off'] as const).includes(input.shadowType as never)
@@ -270,6 +280,10 @@ export function validateProject(value: unknown): MockupProject {
       0,
       1,
     ),
+    shadowContactEnabled: input.shadowContactEnabled !== false,
+    shadowDistance: number(input.shadowDistance, DEFAULT_PROJECT.shadowDistance, SHADOW_DISTANCE_MIN, SHADOW_DISTANCE_MAX),
+    shadowColor: isShadowColor(input.shadowColor) ? input.shadowColor : DEFAULT_PROJECT.shadowColor,
+    ambientOcclusion: number(input.ambientOcclusion, DEFAULT_PROJECT.ambientOcclusion, 0, 1),
     shadowQuality: (['auto', 'high', 'ultra'] as const).includes(input.shadowQuality as never)
       ? (input.shadowQuality as MockupProject['shadowQuality'])
       : DEFAULT_PROJECT.shadowQuality,
@@ -388,7 +402,7 @@ function normalizeStoredStage(raw: unknown, fallback: MockupProject): SceneStage
     toneMappingExposure: source.toneMappingExposure == null
       ? (fallback.toneMappingExposure ?? null)
       : number(source.toneMappingExposure, 1.45, 0.2, 4),
-    shadowSoftness: number(source.shadowSoftness, fallback.shadowSoftness, 0.2, 8),
+    shadowSoftness: number(source.shadowSoftness, fallback.shadowSoftness, SHADOW_SOFTNESS_MIN, SHADOW_SOFTNESS_MAX),
     shadowOpacity: number(source.shadowOpacity, fallback.shadowOpacity, 0, 2),
     shadowType: (['contact', 'soft', 'sharp', 'off'] as const).includes(source.shadowType as never)
       ? (source.shadowType as MockupProject['shadowType'])
@@ -396,6 +410,24 @@ function normalizeStoredStage(raw: unknown, fallback: MockupProject): SceneStage
     shadowContact: number(
       source.shadowContact,
       fallback.shadowContact ?? DEFAULT_PROJECT.shadowContact,
+      0,
+      1,
+    ),
+    shadowContactEnabled: typeof source.shadowContactEnabled === 'boolean'
+      ? source.shadowContactEnabled
+      : (fallback.shadowContactEnabled !== false),
+    shadowDistance: number(
+      source.shadowDistance,
+      fallback.shadowDistance ?? DEFAULT_PROJECT.shadowDistance,
+      SHADOW_DISTANCE_MIN,
+      SHADOW_DISTANCE_MAX,
+    ),
+    shadowColor: isShadowColor(source.shadowColor)
+      ? source.shadowColor
+      : (isShadowColor(fallback.shadowColor) ? fallback.shadowColor : DEFAULT_SHADOW_COLOR),
+    ambientOcclusion: number(
+      source.ambientOcclusion,
+      fallback.ambientOcclusion ?? DEFAULT_PROJECT.ambientOcclusion,
       0,
       1,
     ),

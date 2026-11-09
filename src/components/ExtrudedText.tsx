@@ -51,6 +51,9 @@ function ExtrudedLine({
         bevelThickness={Math.min(0.02, depth * 0.12)}
         bevelSize={size * 0.012}
         bevelSegments={2}
+        castShadow
+        receiveShadow
+        userData={{ overlayId: overlay.id, overlayKind: 'text' }}
       >
         {text}
         <meshStandardMaterial
@@ -59,6 +62,7 @@ function ExtrudedLine({
           metalness={0.04}
           transparent={(overlay.opacity ?? 1) < 0.999}
           opacity={overlay.opacity}
+          depthWrite={(overlay.opacity ?? 1) >= 0.999}
         />
       </Text3D>
     </group>

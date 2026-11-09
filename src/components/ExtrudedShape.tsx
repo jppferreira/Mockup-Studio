@@ -79,13 +79,20 @@ function ExtrudedShapeMesh({
         onSelect?.(overlay.id);
       }}
     >
-      <mesh geometry={geometry}>
+      <mesh
+        geometry={geometry}
+        castShadow
+        receiveShadow
+        userData={{ overlayId: overlay.id, overlayKind: 'shape' }}
+      >
         <meshStandardMaterial
           color={overlay.color || '#d7dde4'}
           roughness={0.46}
           metalness={0.03}
           transparent={(overlay.opacity ?? 1) < 0.999}
           opacity={overlay.opacity}
+          // Opaque shapes must write depth so PCSS can land on / from them.
+          depthWrite={(overlay.opacity ?? 1) >= 0.999}
         />
       </mesh>
     </Billboard>

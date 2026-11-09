@@ -10,21 +10,35 @@ import cleanShadowmapParsFragment from 'three/src/renderers/shaders/ShaderChunk/
  * another canvas's shadows. Instead this always rebuilds the chunk from the
  * stock import, so every call (and every HMR cycle) lands on the same string.
  *
- * The standard directional/spot shadow shader already receives shadowRadius.
- * We use it as an approximate emitter size, which means an existing project's
- * shadowSoftness slider drives penumbra width without recompiling shaders.
- *
- * Standard PCF stays in place if the installed Three.js shader changes.
+ * Interactive orbit uses a lighter sample count; studio idle / export use the
+ * full contact-hardening filter. Standard PCF stays in place if the installed
+ * Three.js shader changes.
  */
-const MARKER = '/* MOCKUP_STUDIO_PCSS_V2 */';
+export type ProgressiveShadowProfile = 'interactive' | 'studio';
 
-// Packed RGBA depth is the format used by PCF / PCFSoft shadow maps in r170.
-// This is a two-pass approximation: blocker search followed by a filter
-// whose radius grows with distance between blocker and receiving surface.
-const PCSS_GLSL = /* glsl */ `
+const MARKER = '/* MOCKUP_STUDIO_PCSS_V5 */';
+
+const PROFILE_SAMPLES: Record<ProgressiveShadowProfile, { blockers: number; filter: number }> = {
+  // Orbit / gizmo: fewer texture fetches per shadowed fragment.
+  interactive: { blockers: 8, filter: 12 },
+  // Idle preview + export: fuller penumbra quality.
+  studio: { blockers: 16, filter: 24 },
+};
+
+let activeProfile: ProgressiveShadowProfile = 'studio';
+const cachedByProfile: Partial<Record<ProgressiveShadowProfile, string>> = {};
+/** Canvases currently requesting each profile — interactive wins while any pane is busy. */
+const profileUsers: Record<ProgressiveShadowProfile, number> = {
+  interactive: 0,
+  studio: 0,
+};
+
+function buildPcssGlsl(blockers: number, filter: number): string {
+  return /* glsl */ `
 ${MARKER}
 float studioShadowDepth(sampler2D map, vec2 uv) {
-  // Avoid sampling the clamped edge outside the shadow atlas.
+  // Outside the atlas: treat as fully lit so clamped edges never stamp a square.
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
   return unpackRGBAToDepth(texture2D(map, clamp(uv, vec2(0.001), vec2(0.999))));
 }
 
@@ -41,17 +55,17 @@ float studioProgressiveShadow(
   float emitterSize
 ) {
   vec2 texel = 1.0 / mapSize;
-  // Rotate the fixed disk kernel per pixel to break up repeated ring patterns.
   float noise = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
   float angle = noise * 6.2831853;
+  float bias = 0.00035;
 
   float averageDepth = 0.0;
   float blockers = 0.0;
-  float searchSize = clamp(emitterSize * 1.3, 2.5, 64.0);
-  for (int i = 0; i < 12; i++) {
-    vec2 uv = receiver.xy + studioShadowDisk(i, 12.0, angle) * texel * searchSize;
+  float searchSize = clamp(emitterSize * 1.15, 3.0, 80.0);
+  for (int i = 0; i < ${blockers}; i++) {
+    vec2 uv = receiver.xy + studioShadowDisk(i, ${blockers}.0, angle) * texel * searchSize;
     float depth = studioShadowDepth(map, uv);
-    if (depth < receiver.z - 0.00025) {
+    if (depth < receiver.z - bias) {
       averageDepth += depth;
       blockers += 1.0;
     }
@@ -59,25 +73,28 @@ float studioProgressiveShadow(
 
   if (blockers < 0.5) return 1.0;
   averageDepth /= blockers;
-  // The gap is almost zero at contact: the filter then stays crisp.
-  // For elevated devices / cast shadows, that gap increases the penumbra.
-  float gap = max(0.0, (receiver.z - averageDepth) / max(averageDepth, 0.08));
-  float radius = clamp(1.0 + gap * emitterSize * 9.0, 1.0, 96.0);
+  // Contact-hardening: gap ~ 0 at the feet (crisp core), grows for floating /
+  // tilted devices so the cast blooms like a large softbox.
+  float gap = max(0.0, (receiver.z - averageDepth) / max(averageDepth, 0.06));
+  float minRadius = clamp(emitterSize * 0.12, 1.6, 6.0);
+  float radius = clamp(minRadius + pow(gap, 0.85) * emitterSize * 8.5, minRadius, 160.0);
 
   float visibility = 0.0;
-  for (int i = 0; i < 20; i++) {
-    vec2 uv = receiver.xy + studioShadowDisk(i, 20.0, angle + 0.6) * texel * radius;
-    visibility += step(receiver.z, studioShadowDepth(map, uv));
+  for (int i = 0; i < ${filter}; i++) {
+    vec2 uv = receiver.xy + studioShadowDisk(i, ${filter}.0, angle + 0.51) * texel * radius;
+    visibility += step(receiver.z - bias * 0.35, studioShadowDepth(map, uv));
   }
-  return visibility / 20.0;
+  return visibility / ${filter}.0;
 }
 `;
+}
 
-let cached: string | null = null;
-
-function buildProgressiveShadowChunk(): string | null {
-  if (cached) return cached;
+function buildProgressiveShadowChunk(profile: ProgressiveShadowProfile): string | null {
+  const hit = cachedByProfile[profile];
+  if (hit) return hit;
   const original = cleanShadowmapParsFragment;
+  const { blockers, filter } = PROFILE_SAMPLES[profile];
+  const pcss = buildPcssGlsl(blockers, filter);
 
   const start = '#ifdef USE_SHADOWMAP';
   const functionStart = 'float getShadow( sampler2D shadowMap,';
@@ -87,7 +104,7 @@ function buildProgressiveShadowChunk(): string | null {
     return null;
   }
 
-  let shader = original.replace(start, `${start}\n${PCSS_GLSL}`);
+  let shader = original.replace(start, `${start}\n${pcss}`);
   const at = shader.indexOf(frustumStart, shader.indexOf(functionStart));
   // Replace both PCF paths (the renderer uses PCFSoftShadowMap). VSM and the
   // point-light shadow implementation continue using the original shader.
@@ -99,27 +116,80 @@ function buildProgressiveShadowChunk(): string | null {
   return clamp(1.0 - (1.0 - shadow) * shadowIntensity, 0.0, 1.0);
 #endif`;
   shader = shader.slice(0, at) + replacement + shader.slice(at + frustumStart.length);
-  cached = shader;
+  cachedByProfile[profile] = shader;
   return shader;
 }
 
 /**
  * Patch the shared shadow chunk. Safe to call from every canvas' onCreated:
- * the result is deterministic, so a second canvas never reverts the first.
- * Returns false (and leaves the stock chunk installed) if the Three.js
- * shader no longer matches the expected entry points.
+ * the result is deterministic for a given profile, so a second canvas never
+ * reverts the first. Returns false (and leaves the stock chunk installed) if
+ * the Three.js shader no longer matches the expected entry points.
+ *
+ * Returns true when the installed profile changed (callers should refresh materials).
  */
-export function installProgressiveShadowShader(): boolean {
-  const shader = buildProgressiveShadowChunk();
+export function installProgressiveShadowShader(
+  profile: ProgressiveShadowProfile = 'studio',
+): boolean {
+  const shader = buildProgressiveShadowChunk(profile);
   if (!shader) {
     if (!THREE.ShaderChunk.shadowmap_pars_fragment.includes(MARKER)) {
       console.warn('[Mockup Studio] Unsupported Three.js shadow chunk, retaining PCF shadows.');
     }
     THREE.ShaderChunk.shadowmap_pars_fragment = cleanShadowmapParsFragment;
-    return false;
+    const changed = activeProfile !== profile;
+    activeProfile = profile;
+    return changed;
   }
+  const changed = (
+    activeProfile !== profile
+    || THREE.ShaderChunk.shadowmap_pars_fragment !== shader
+  );
+  activeProfile = profile;
   if (THREE.ShaderChunk.shadowmap_pars_fragment !== shader) {
     THREE.ShaderChunk.shadowmap_pars_fragment = shader;
   }
-  return true;
+  return changed;
+}
+
+export function getProgressiveShadowProfile(): ProgressiveShadowProfile {
+  return activeProfile;
+}
+
+/**
+ * Track per-canvas profile demand. Interactive wins while any canvas is busy so
+ * split view never fights over the shared ShaderChunk.
+ * Returns true when the installed profile changed.
+ */
+export function retainProgressiveShadowProfile(
+  profile: ProgressiveShadowProfile,
+): boolean {
+  profileUsers[profile] += 1;
+  const desired: ProgressiveShadowProfile = profileUsers.interactive > 0
+    ? 'interactive'
+    : 'studio';
+  return installProgressiveShadowShader(desired);
+}
+
+/** Drop a canvas' profile demand; may restore studio PCSS when all panes idle. */
+export function releaseProgressiveShadowProfile(
+  profile: ProgressiveShadowProfile,
+): boolean {
+  profileUsers[profile] = Math.max(0, profileUsers[profile] - 1);
+  const desired: ProgressiveShadowProfile = profileUsers.interactive > 0
+    ? 'interactive'
+    : 'studio';
+  return installProgressiveShadowShader(desired);
+}
+
+/** Force materials to pick up a newly installed PCSS profile. */
+export function refreshShadowMaterials(root: THREE.Object3D) {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of list) {
+      if (mat) mat.needsUpdate = true;
+    }
+  });
 }

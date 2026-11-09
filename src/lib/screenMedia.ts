@@ -82,7 +82,33 @@ async function fileOrBlobToScreenDataUrl(blob: Blob, nameHint = 'clipboard.png')
   return { dataUrl: await readFileAsDataUrl(file), name: file.name || nameHint };
 }
 
-/** Read an image from a paste event — works with Figma “Copy as PNG” / Cmd+C. */
+/** Pull a data-URL / http(s) image out of HTML Figma sometimes puts on the pasteboard. */
+async function readImageFromHtmlClipboard(html: string): Promise<{ dataUrl: string; name: string } | null> {
+  if (!html || !/<img[\s>]/i.test(html)) return null;
+  const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  const src = match?.[1]?.trim();
+  if (!src) return null;
+
+  if (/^data:image\//i.test(src)) {
+    return { dataUrl: src, name: 'figma-paste.png' };
+  }
+
+  if (/^https?:\/\//i.test(src)) {
+    try {
+      const response = await fetch(src);
+      if (!response.ok) return null;
+      const blob = await response.blob();
+      if (!blob.type.startsWith('image/') && !blob.type.includes('svg')) return null;
+      return fileOrBlobToScreenDataUrl(blob, 'figma-paste.png');
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/** Read an image from a paste event — works with Figma “Copy as PNG”. */
 export async function readImageFromPasteEvent(event: ClipboardEvent): Promise<{ dataUrl: string; name: string } | null> {
   const items = event.clipboardData?.items;
   if (items) {
@@ -105,7 +131,42 @@ export async function readImageFromPasteEvent(event: ClipboardEvent): Promise<{ 
     }
   }
 
+  const html = event.clipboardData?.getData('text/html') ?? '';
+  const fromHtml = await readImageFromHtmlClipboard(html);
+  if (fromHtml) return fromHtml;
+
   return null;
+}
+
+/** Plain text from a paste event (Figma “Copy link to selection”, etc.). */
+export function readPlainTextFromPasteEvent(event: ClipboardEvent): string {
+  return (event.clipboardData?.getData('text/plain') || '').trim();
+}
+
+/** HTML from a paste event (Figma ⌘C embeds figmeta here). */
+export function readHtmlFromPasteEvent(event: ClipboardEvent): string {
+  return event.clipboardData?.getData('text/html') || '';
+}
+
+/** Async HTML clipboard read — used when the paste event has no payload. */
+export async function readHtmlFromClipboard(): Promise<string> {
+  const desktop = window.mockupDesktop?.readClipboardHtml;
+  if (desktop) {
+    const result = await desktop();
+    if (result.ok && result.html) return result.html;
+  }
+  if (!navigator.clipboard?.read) return '';
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      if (!item.types.includes('text/html')) continue;
+      const blob = await item.getType('text/html');
+      return await blob.text();
+    }
+  } catch {
+    return '';
+  }
+  return '';
 }
 
 /** Async clipboard read. The Mac app reads the system pasteboard directly. */

@@ -16,6 +16,11 @@ const SHIPPED_KIND = 'mockup-studio-templates' as const;
 let runtimePromoted: CompositionTemplate[] = [];
 /** Soft-deleted shipped ids (code defaults + pack) for this session / pack. */
 let runtimeRemovedIds: string[] = [];
+/**
+ * Pack last written (or re-read) this session. Vite's static JSON import goes stale
+ * after Dev pushes, so later Update shipped / Ship as new must not rebuild from it alone.
+ */
+let sessionPack: { templates: CompositionTemplate[]; removedIds: string[] } | null = null;
 const runtimeListeners = new Set<() => void>();
 
 type ShippedPackPayload = TemplatesLibraryPayload & {
@@ -95,7 +100,10 @@ export function prepareShippedFromProject(
   label: string,
   project: MockupProject,
   category: 'devices' | 'scenes' = 'devices',
-  options?: { id?: string },
+  options?: {
+    id?: string;
+    cameraOrbit?: CompositionTemplate['cameraOrbit'] | null;
+  },
 ): CompositionTemplate {
   const resolvedId = options?.id?.trim()
     || slugify(label.trim() || project.name || 'composition');
@@ -104,6 +112,7 @@ export function prepareShippedFromProject(
       id: resolvedId,
       category,
       badge: category === 'scenes' ? 'Scene' : 'Layout',
+      cameraOrbit: options?.cameraOrbit,
     }),
     category,
   );
@@ -116,12 +125,12 @@ export async function shipCompositionTemplate(
   const prepared = prepareShippedTemplate(template);
   runtimeRemovedIds = runtimeRemovedIds.filter((id) => id !== prepared.id);
   registerRuntimePromoted([prepared]);
-  const pack = readShippedPack();
-  const contents = serializeShippedTemplatePack(
-    upsertShippedTemplates(pack.templates, [prepared]),
-    pack.removedIds.filter((id) => id !== prepared.id),
-  );
+  const pack = await resolveShippedPackForWrite();
+  const removedIds = pack.removedIds.filter((id) => id !== prepared.id);
+  const templates = upsertShippedTemplates(pack.templates, [prepared]);
+  const contents = serializeShippedTemplatePack(templates, removedIds);
   const result = await writeShippedTemplatePack(contents);
+  if (result.ok) rememberSessionPack(templates, removedIds);
   return { ...result, template: prepared };
 }
 
@@ -208,10 +217,11 @@ export async function deleteShippedTemplate(
   runtimePromoted = runtimePromoted.filter((item) => item.id !== id);
   if (!runtimeRemovedIds.includes(id)) runtimeRemovedIds = [...runtimeRemovedIds, id];
   notifyRuntimeListeners();
-  const pack = readShippedPack();
+  const pack = await resolveShippedPackForWrite();
   const templates = pack.templates.filter((item) => item.id !== id);
   const removedIds = pack.removedIds.includes(id) ? pack.removedIds : [...pack.removedIds, id];
   const result = await writeShippedTemplatePack(serializeShippedTemplatePack(templates, removedIds));
+  if (result.ok) rememberSessionPack(templates, removedIds);
   return result;
 }
 
@@ -243,18 +253,65 @@ export function parseShippedTemplatePack(raw: unknown): CompositionTemplate[] {
 }
 
 export function loadShippedPackTemplates(): CompositionTemplate[] {
+  if (sessionPack) {
+    const removed = new Set(sessionPack.removedIds);
+    return sessionPack.templates.filter((item) => !removed.has(item.id));
+  }
   return parseShippedTemplatePack(shippedPack);
 }
 
 export function loadShippedRemovedIds(): string[] {
+  if (sessionPack) return [...sessionPack.removedIds];
   return parseRemovedIds(shippedPack);
 }
 
+/**
+ * Baseline for a Dev push: session/disk pack + live promotions − soft deletes.
+ * Keeps successive Update shipped / Ship as new from clobbering earlier edits.
+ */
 function readShippedPack(): { templates: CompositionTemplate[]; removedIds: string[] } {
-  return {
-    templates: loadShippedPackTemplates(),
-    removedIds: loadShippedRemovedIds(),
+  const removedIds = [...new Set([
+    ...loadShippedRemovedIds(),
+    ...getRuntimeRemovedTemplateIds(),
+  ])];
+  const removed = new Set(removedIds);
+  const templates = upsertShippedTemplates(
+    loadShippedPackTemplates(),
+    getRuntimePromotedTemplates(),
+  ).filter((item) => !removed.has(item.id));
+  return { templates, removedIds };
+}
+
+function rememberSessionPack(
+  templates: CompositionTemplate[],
+  removedIds: string[],
+) {
+  sessionPack = {
+    templates: templates.map((item) => prepareShippedTemplate(item)),
+    removedIds: [...new Set(removedIds)].filter(Boolean).sort(),
   };
+}
+
+/** Prefer the on-disk pack in Electron DEV so pushes always accumulate. */
+async function resolveShippedPackForWrite(): Promise<{
+  templates: CompositionTemplate[];
+  removedIds: string[];
+}> {
+  const api = window.mockupDesktop;
+  if (api?.devReadShippedTemplates) {
+    try {
+      const file = await api.devReadShippedTemplates();
+      if (file.ok && file.contents) {
+        const raw = JSON.parse(file.contents) as unknown;
+        const diskTemplates = parseShippedTemplatePack(raw);
+        const diskRemoved = parseRemovedIds(raw);
+        rememberSessionPack(diskTemplates, diskRemoved);
+      }
+    } catch {
+      /* Fall back to session / bundled pack below. */
+    }
+  }
+  return readShippedPack();
 }
 
 export function serializeShippedTemplatePack(

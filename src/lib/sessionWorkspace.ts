@@ -98,6 +98,7 @@ export async function saveSessionWorkspace(
     animPlaying: false,
     timelineOpen: tab.timelineOpen,
     syncPath: tab.syncPath ?? null,
+    shippedTemplateId: tab.shippedTemplateId ?? null,
   }));
   const cleaned = frameSize ? sanitizeSessionFrameSize(frameSize) : (
     workspace.frameSize ? sanitizeSessionFrameSize(workspace.frameSize) : null
@@ -125,6 +126,9 @@ export async function loadSessionWorkspace(): Promise<SessionWorkspace | null> {
         animPlaying: false,
         timelineOpen: row.timelineOpen === true,
         syncPath: typeof row.syncPath === 'string' ? row.syncPath : null,
+        shippedTemplateId: typeof row.shippedTemplateId === 'string' && row.shippedTemplateId.trim()
+          ? row.shippedTemplateId.trim()
+          : null,
       });
     } catch {
       /* Skip a tab whose project no longer validates. */

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { coverDraw, registerScreenSeeker, screenMediaKind, waitForVideoSeek } from './screenMedia';
 
@@ -37,10 +38,13 @@ export function useScreenEmissiveMap({
   /** When true, keep video playing in sync with wall-clock (preview). */
   playing?: boolean;
 }) {
+  const invalidate = useThree((s) => s.invalidate);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const texRef = useRef<THREE.CanvasTexture | null>(null);
   const rafRef = useRef<number | null>(null);
+  const invalidateRef = useRef(invalidate);
+  invalidateRef.current = invalidate;
 
   useEffect(() => {
     if (!material) return undefined;
@@ -98,6 +102,8 @@ export function useScreenEmissiveMap({
       tex.needsUpdate = true;
       material.emissiveMap = tex;
       material.needsUpdate = true;
+      // Demand frameloop: push a redraw after the texture changes.
+      invalidateRef.current();
     };
 
     const stopLoop = () => {
@@ -124,6 +130,7 @@ export function useScreenEmissiveMap({
       // assigning a packed albedo atlas here showed random logos on the screen.
       material.emissiveMap = null;
       material.needsUpdate = true;
+      invalidateRef.current();
       return () => {
         cancelled = true;
         stopLoop();
@@ -156,6 +163,7 @@ export function useScreenEmissiveMap({
     video.preload = 'auto';
     video.crossOrigin = 'anonymous';
     videoRef.current = video;
+    const shouldLoop = kind === 'live' || Boolean(playing);
 
     const tick = () => {
       if (cancelled || !videoRef.current) return;
@@ -163,19 +171,20 @@ export function useScreenEmissiveMap({
       if (v.readyState >= 2) {
         paintFromSource(v, v.videoWidth || width, v.videoHeight || height);
       }
-      rafRef.current = requestAnimationFrame(tick);
+      // Only keep the paint loop while the screen is actually advancing.
+      if (shouldLoop) rafRef.current = requestAnimationFrame(tick);
     };
 
     const onReady = () => {
       if (cancelled) return;
       paintFromSource(video, video.videoWidth || width, video.videoHeight || height);
-      if (kind === 'live' || playing) {
+      if (shouldLoop) {
         void video.play().catch(() => { /* autoplay */ });
       } else {
         video.pause();
       }
       stopLoop();
-      rafRef.current = requestAnimationFrame(tick);
+      if (shouldLoop) rafRef.current = requestAnimationFrame(tick);
     };
 
     video.addEventListener('loadeddata', onReady);

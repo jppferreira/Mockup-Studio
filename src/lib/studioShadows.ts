@@ -148,6 +148,20 @@ export function fitDirectionalShadowCamera(
             maxZ = Math.max(maxZ, _tmp.z);
           }
         }
+
+        // March the cast a few metres so cove / wall receivers stay in the map.
+        // Floor projection alone misses shadows that climb the seamless paper.
+        for (let step = 1; step <= 4; step += 1) {
+          _tmp.copy(_corner).addScaledVector(_lightDir, step * 1.8);
+          if (_tmp.y < floorY - 0.05) continue;
+          _tmp.applyMatrix4(_viewMatrix);
+          minX = Math.min(minX, _tmp.x);
+          maxX = Math.max(maxX, _tmp.x);
+          minY = Math.min(minY, _tmp.y);
+          maxY = Math.max(maxY, _tmp.y);
+          minZ = Math.min(minZ, _tmp.z);
+          maxZ = Math.max(maxZ, _tmp.z);
+        }
       }
     }
   }
@@ -194,10 +208,10 @@ export function resolveKeyShadowMapSize(
   exportBoost: boolean,
   maxTextureSize: number,
 ): number {
-  let size = 2048;
+  // Interactive stays light for orbit/gizmo; studio idle + export keep photographic maps.
+  let size = 1024;
   if (exportBoost || quality === 'ultra' || mode === 'studio') size = 4096;
-  else if (quality === 'high') size = 2048;
-  else size = 2048;
+  else size = 1024;
   const cap = Math.max(512, Math.min(4096, maxTextureSize || 4096));
   // Prefer power-of-two under the GPU limit.
   let out = size;
@@ -205,16 +219,32 @@ export function resolveKeyShadowMapSize(
   return THREE.MathUtils.clamp(out, 512, 4096);
 }
 
-/** AccumulativeShadows / contact resolution for the floor plate. */
+/** ContactShadows resolution for the floor plate. */
 export function resolveFloorShadowResolution(
   quality: ShadowQuality,
   mode: StudioShadowMode,
   exportBoost: boolean,
   maxTextureSize: number,
 ): number {
-  let size = mode === 'interactive' ? 1024 : 2048;
-  if (exportBoost || quality === 'ultra') size = 2048;
-  else if (quality === 'high' && mode === 'studio') size = 2048;
+  let size = 2048;
+  if (mode === 'interactive' && !exportBoost) {
+    size = (quality === 'high' || quality === 'ultra') ? 1024 : 512;
+  } else if (exportBoost || quality === 'ultra' || quality === 'high') {
+    size = 2048;
+  }
+  const cap = Math.max(512, Math.min(2048, maxTextureSize || 2048));
+  let out = size;
+  while (out > cap) out = Math.floor(out / 2);
+  return THREE.MathUtils.clamp(out, 512, 2048);
+}
+
+/** Extra scene lights (spot / directional) — lighter while orbiting. */
+export function resolveSceneLightShadowMapSize(
+  mode: StudioShadowMode,
+  exportBoost: boolean,
+  maxTextureSize: number,
+): number {
+  let size = exportBoost || mode === 'studio' ? 2048 : 1024;
   const cap = Math.max(512, Math.min(2048, maxTextureSize || 2048));
   let out = size;
   while (out > cap) out = Math.floor(out / 2);
@@ -232,8 +262,55 @@ export function resolveAccumulationSamples(
   return STUDIO_SHADOW_SAMPLES.preview;
 }
 
+/** Softness slider floor / ceiling (project units). */
+export const SHADOW_SOFTNESS_MIN = 0.2;
+/** High end is a wide softbox bloom — past the old 8 ceiling. */
+export const SHADOW_SOFTNESS_MAX = 14;
+
+/** How far a floor shadow can reach (world units). Covers standing phones; raise for floats. */
+export const SHADOW_DISTANCE_MIN = 0.6;
+export const SHADOW_DISTANCE_MAX = 10;
+
+/** Default cool-black product shadow — Apple-like, not pure #000. */
+export const DEFAULT_SHADOW_COLOR = '#1a1c22';
+
+const HEX6 = /^#[0-9a-fA-F]{6}$/;
+
+export function isShadowColor(value: unknown): value is string {
+  return typeof value === 'string' && HEX6.test(value);
+}
+
+/** Softness 0.2–14 → 0–100% for the properties panel. */
+export function softnessToPercent(softness: number): number {
+  const s = THREE.MathUtils.clamp(softness, SHADOW_SOFTNESS_MIN, SHADOW_SOFTNESS_MAX);
+  return ((s - SHADOW_SOFTNESS_MIN) / (SHADOW_SOFTNESS_MAX - SHADOW_SOFTNESS_MIN)) * 100;
+}
+
+export function percentToSoftness(percent: number): number {
+  const t = THREE.MathUtils.clamp(percent, 0, 100) / 100;
+  return SHADOW_SOFTNESS_MIN + t * (SHADOW_SOFTNESS_MAX - SHADOW_SOFTNESS_MIN);
+}
+
+/** Opacity 0–1 (photographic) → 0–100%. Values above 1 still render darker. */
+export function opacityToPercent(opacity: number): number {
+  return THREE.MathUtils.clamp(opacity, 0, 1) * 100;
+}
+
+export function percentToOpacity(percent: number): number {
+  return THREE.MathUtils.clamp(percent, 0, 100) / 100;
+}
+
+/** Ambient occlusion 0–1 → 0–100%. */
+export function aoToPercent(amount: number): number {
+  return THREE.MathUtils.clamp(amount, 0, 1) * 100;
+}
+
+export function percentToAo(percent: number): number {
+  return THREE.MathUtils.clamp(percent, 0, 100) / 100;
+}
+
 /**
- * Softness (project 0.2–8) → apparent penumbra width.
+ * Softness (project 0.2–14) → apparent penumbra width.
  * Preserves saved meaning: low = defined, mid = product photo, high = softbox bloom.
  */
 export function softnessToPenumbra(softness: number): {
@@ -248,15 +325,20 @@ export function softnessToPenumbra(softness: number): {
   /** AccumulativeShadows alphaTest (higher = tighter core). */
   alphaTest: number;
 } {
-  const s = THREE.MathUtils.clamp(softness, 0.2, 8);
-  const t = THREE.MathUtils.smoothstep(0.2, 8, s);
+  const s = THREE.MathUtils.clamp(softness, SHADOW_SOFTNESS_MIN, SHADOW_SOFTNESS_MAX);
+  const t = THREE.MathUtils.smoothstep(SHADOW_SOFTNESS_MIN, SHADOW_SOFTNESS_MAX, s);
   return {
-    radius: THREE.MathUtils.lerp(0.55, 3.4, t),
-    contactBlur: THREE.MathUtils.lerp(0.55, 2.1, t),
-    mapRadius: THREE.MathUtils.lerp(1.2, 3.8, t),
-    emitterSize: Math.max(2, s * 6),
+    radius: THREE.MathUtils.lerp(0.5, 4.4, t),
+    contactBlur: THREE.MathUtils.lerp(0.7, 3.4, t),
+    mapRadius: THREE.MathUtils.lerp(1.4, 5.2, t),
+    emitterSize: Math.max(2.5, s * 7.2),
     alphaTest: THREE.MathUtils.lerp(0.55, 0.82, 1 - t),
   };
+}
+
+/** World-space reach of the contact plate. Distance 3.6 covers a standing phone. */
+export function distanceToContactFar(distance: number): number {
+  return THREE.MathUtils.clamp(distance, SHADOW_DISTANCE_MIN, SHADOW_DISTANCE_MAX);
 }
 
 /**
@@ -284,9 +366,9 @@ export function shadowIntensityCurve(opacity: number, anchor: number, max: numbe
 }
 
 /**
- * Opacity (0–2) → contact-plate strengths without crushing falloff.
- * PCSS carries the cast; contact stays a light foot kiss so raising Intensity
- * darkens the silhouette instead of washing the floor with a soft gray blob.
+ * Opacity (0–2) → floor-plate strengths.
+ * Contact is the photographic ground (Rotato / Apple product shot).
+ * PCSS catcher adds the directional cast on top.
  */
 export function opacityToShadowStrength(
   opacity: number,
@@ -295,13 +377,15 @@ export function opacityToShadowStrength(
   accumulative: number;
   contactPrimary: number;
   contactAccent: number;
+  catcher: number;
 } {
-  const o = shadowIntensityCurve(opacity, 0.55, 1.15) * opacityScale;
+  const o = shadowIntensityCurve(opacity, 0.72, 1.35) * opacityScale;
   const t = THREE.MathUtils.clamp(opacity, 0, SHADOW_INTENSITY_MAX) / SHADOW_INTENSITY_MAX;
   return {
-    accumulative: THREE.MathUtils.clamp(o * 0.55, 0, 0.55),
-    contactPrimary: THREE.MathUtils.clamp(o * 0.4, 0, 0.4),
-    contactAccent: THREE.MathUtils.clamp(o * 0.18 * (0.35 + t), 0, 0.32),
+    accumulative: THREE.MathUtils.clamp(o * 0.7, 0, 0.78),
+    contactPrimary: THREE.MathUtils.clamp(o * 0.78, 0, 0.7),
+    contactAccent: THREE.MathUtils.clamp(o * 0.38 * (0.45 + t), 0, 0.48),
+    catcher: THREE.MathUtils.clamp(o * 0.62, 0, 0.72),
   };
 }
 

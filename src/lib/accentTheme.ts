@@ -4,7 +4,7 @@ export type AccentTheme = 'green' | 'purple' | 'custom';
 
 export const ACCENT_THEME_KEY = 'mockup-studio-accent';
 export const ACCENT_COLOR_KEY = 'mockup-studio-accent-color';
-export const DEFAULT_CUSTOM_ACCENT = '#6cb6ff';
+export const DEFAULT_CUSTOM_ACCENT = '#3b82f6';
 
 export type AccentPair = { accent: string; soft: string };
 
@@ -33,7 +33,7 @@ export function readAccentTheme(): AccentTheme {
   } catch {
     /* private mode */
   }
-  return 'purple';
+  return 'custom';
 }
 
 export function readAccentColor(): string {

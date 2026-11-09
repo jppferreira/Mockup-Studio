@@ -16,6 +16,7 @@ import * as THREE from 'three';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import {
   createNeutralStudioEnvironment,
+  setAmbientOcclusion,
   setDepthOfField,
 } from '../lib/renderRealism';
 import {
@@ -25,11 +26,14 @@ import {
 } from '../lib/studioEnvironment';
 import {
   collectCasterBounds,
+  distanceToContactFar,
   fitDirectionalShadowCamera,
   opacityToShadowStrength,
   resolveFloorShadowResolution,
   shadowIntensityCurve,
   softnessToPenumbra,
+  DEFAULT_SHADOW_COLOR,
+  SHADOW_SOFTNESS_MAX,
   STUDIO_SHADOW_IDLE_MS,
   type StudioShadowApi,
   type StudioShadowMode,
@@ -118,6 +122,17 @@ export function StudioExposure({ exposure }: { exposure: number }) {
   useEffect(() => {
     gl.toneMappingExposure = exposure;
   }, [gl, exposure]);
+  return null;
+}
+
+/** Screen-space AO. Amount 0 skips the pass. */
+export function StudioAmbientOcclusion({ amount }: { amount: number }) {
+  const gl = useThree((state) => state.gl);
+  const amountRef = useRef(amount);
+  amountRef.current = amount;
+  useFrame(() => {
+    setAmbientOcclusion(gl, amountRef.current);
+  });
   return null;
 }
 
@@ -254,6 +269,9 @@ function StudioShadowCatcher({
   useLayoutEffect(() => {
     const target = mesh.current;
     if (!target) return;
+    // Layer 1: main camera sees it (PCSS), ContactShadows camera (layer 0) does not —
+    // otherwise this plane floods the contact map with a dark rectangle.
+    target.layers.set(1);
     // Never a pointer target: orbit, grab, and selection keep using OrbitPickFloor.
     target.raycast = () => null;
   }, []);
@@ -264,8 +282,10 @@ function StudioShadowCatcher({
       rotation={[-Math.PI / 2, 0, 0]}
       position={[0, y + 0.0008, 0]}
       receiveShadow
+      castShadow={false}
       renderOrder={1}
-      userData={{ studioShadowCatcher: true }}
+      layers={1}
+      userData={{ studioShadowCatcher: true, contactShadowPlane: true }}
     >
       <planeGeometry args={[size, size]} />
       <shadowMaterial
@@ -446,31 +466,39 @@ function useAdaptiveShadowExtent(
  * every scene light and can permanently restore intensity=0 if reset() races
  * mid-bake — that made the whole app go dark.
  *
- * Interactive: continuous low-cost contact plate.
- * Studio / export: higher-resolution contact with tighter feet + broader penumbra.
+ * Interactive (orbit / gizmo / playback): continuous plate so the foot tracks motion.
+ * Studio idle / export: bake once (`frames={1}`) and freeze — remount via refreshToken
+ * when lighting or casters change. Infinity-while-idle was the main idle GPU cost.
  */
 function StudioSoftFloorShadows({
   y,
   opacity,
   softness,
   contact,
+  contactEnabled = true,
+  distance,
   quality,
   exportBoost = false,
   lightPosition,
   lightTarget,
   lightStrength,
-  color = '#0b0d11',
+  color = DEFAULT_SHADOW_COLOR,
+  onPaper = false,
 }: {
   y: number;
   opacity: number;
   softness: number;
   contact: number;
+  contactEnabled?: boolean;
+  distance: number;
   quality: ShadowQuality;
   exportBoost?: boolean;
   lightPosition: Vec3;
   lightTarget: Vec3;
   lightStrength: number;
   color?: string;
+  /** Cyclorama / studio_backdrop — lift + polygon-offset so the plate does not stripe the paper. */
+  onPaper?: boolean;
 }) {
   const interaction = useStudioShadowInteraction();
   const mode: StudioShadowMode = exportBoost ? 'studio' : (interaction?.mode ?? 'studio');
@@ -481,37 +509,34 @@ function StudioSoftFloorShadows({
   const strength = opacityToShadowStrength(opacity, 1);
   const resolution = resolveFloorShadowResolution(quality, mode, exportBoost, maxTex);
   const [refreshToken, setRefreshToken] = useState(0);
+  // Live while the viewport is moving (orbit, gizmos, playback) and during export
+  // so stills / video pick up the current pose. Idle studio bakes once.
+  const frames = mode === 'interactive' || exportBoost ? Infinity : 1;
 
-  const lightFade = THREE.MathUtils.clamp(0.7 + lightStrength * 0.2, 0.65, 1);
-  // PCSS catcher carries the cast silhouette. Keep the contact plate as a light
-  // foot kiss — a strong soft plate washed the floor lighter as Intensity rose.
+  const groupRef = useRef<THREE.Group>(null);
+  const lightFade = THREE.MathUtils.clamp(0.75 + lightStrength * 0.18, 0.7, 1);
+  const paperFade = onPaper ? 0.72 : 1;
   const primaryOpacity = Math.min(
-    0.32,
-    (mode === 'studio' ? strength.accumulative : strength.contactPrimary) * lightFade * 0.35,
+    0.68,
+    strength.contactPrimary * lightFade * paperFade,
   );
-  const accentOpacity = mode === 'studio'
+  const accentOpacity = contactEnabled
     ? Math.min(
-      0.28,
-      strength.contactAccent * lightFade * (0.35 + THREE.MathUtils.clamp(contact, 0, 1) * 0.7),
+      0.5,
+      strength.contactAccent * lightFade * (0.4 + THREE.MathUtils.clamp(contact, 0, 1) * 0.85),
     )
     : 0;
-  const contactFar = THREE.MathUtils.clamp(
-    THREE.MathUtils.lerp(3.4, 1.35, THREE.MathUtils.clamp(contact, 0, 1)),
-    1.2,
-    4,
-  );
-  // Tight plate: PCSS already widens the penumbra with height, so the contact
-  // blur only needs to feather the foot. Studio stays a touch softer than interactive.
+  const contactFar = distanceToContactFar(distance);
+  // drei ContactShadows: width/height are multiplied by scale — keep width=1.
   const blur = mode === 'studio'
-    ? Math.max(0.35, penumbra.contactBlur * 0.5)
-    : Math.max(0.3, penumbra.contactBlur * 0.42);
+    ? Math.max(0.55, penumbra.contactBlur * 0.9)
+    : Math.max(0.45, penumbra.contactBlur * 0.72);
 
   const reset = useCallback(() => {
     setRefreshToken((n) => n + 1);
   }, []);
 
   const settle = useCallback(() => {
-    // ContactShadows resolve in one depth pass — bump key so export gets a fresh plate.
     setRefreshToken((n) => n + 1);
   }, []);
 
@@ -534,19 +559,36 @@ function StudioSoftFloorShadows({
     reset,
     lightPosition.x, lightPosition.y, lightPosition.z,
     lightTarget.x, lightTarget.y, lightTarget.z,
-    softness, opacity, contact, quality, scale, exportBoost, lightStrength, color, mode,
+    softness, opacity, contact, contactEnabled, distance, quality, scale, exportBoost, lightStrength, color, mode,
   ]);
 
-  if (primaryOpacity < 0.012) return null;
+  useLayoutEffect(() => {
+    const root = groupRef.current;
+    if (!root) return;
+    root.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const list = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const mat of list) {
+        if (!mat) continue;
+        mat.polygonOffset = true;
+        mat.polygonOffsetFactor = -2;
+        mat.polygonOffsetUnits = -8;
+        mat.depthWrite = false;
+      }
+    });
+  }, [refreshToken, onPaper]);
+
+  if (!contactEnabled || primaryOpacity < 0.02) return null;
 
   return (
-    <group position={[0, y + 0.001, 0]}>
+    <group ref={groupRef} position={[0, y + (onPaper ? 0.004 : 0.001), 0]}>
       <ContactShadows
         key={`floor-${mode}-${resolution}-${refreshToken}`}
-        frames={mode === 'interactive' ? Infinity : (exportBoost ? 1 : Infinity)}
+        frames={frames}
         opacity={primaryOpacity}
-        width={scale}
-        height={scale}
+        width={1}
+        height={1}
         blur={blur}
         far={contactFar}
         resolution={resolution}
@@ -554,19 +596,19 @@ function StudioSoftFloorShadows({
         smooth
         scale={scale}
       />
-      {accentOpacity > 0.04 && contact > 0.08 && (
+      {accentOpacity > 0.05 && contact > 0.04 && mode === 'studio' && (
         <ContactShadows
           key={`feet-${resolution}-${refreshToken}`}
-          frames={1}
+          frames={exportBoost ? Infinity : 1}
           opacity={accentOpacity}
-          width={scale * 0.88}
-          height={scale * 0.88}
-          blur={Math.max(0.3, blur * 0.4)}
-          far={Math.min(1.9, contactFar * 0.55)}
+          width={1}
+          height={1}
+          blur={Math.max(0.28, blur * 0.38)}
+          far={Math.min(1.7, contactFar * 0.38)}
           resolution={Math.min(1024, resolution)}
           color={color}
           smooth
-          scale={scale * 0.88}
+          scale={scale * 0.92}
         />
       )}
     </group>
@@ -610,6 +652,9 @@ export interface StudioLightingProps {
   shadowOpacity: number;
   shadowType: ShadowType;
   shadowContact: number;
+  shadowContactEnabled?: boolean;
+  shadowDistance?: number;
+  shadowColor?: string;
   shadowQuality: ShadowQuality;
   /** Force Ultra map size / bake while exporting. */
   shadowExportBoost?: boolean;
@@ -647,6 +692,9 @@ export function StudioLighting({
   shadowOpacity,
   shadowType,
   shadowContact,
+  shadowContactEnabled = true,
+  shadowDistance = 3.6,
+  shadowColor,
   shadowQuality,
   shadowExportBoost = false,
   showGroundBase,
@@ -694,19 +742,32 @@ export function StudioLighting({
     0.35,
     shadowSoftness * preset.shadow.blurScale,
   );
+  const floorShadowColor = shadowColor || preset.shadow.color || DEFAULT_SHADOW_COLOR;
   const coveContactStrength = showCyclorama
     ? Math.min(1.4, shadowIntensityCurve(shadowOpacity, 0.7, 1.8) * preset.shadow.opacityScale * (0.5 + shadowContact * 0.5))
     : 0;
-  // Soft penumbras average toward lit — boost catcher opacity with Softness so
-  // raising Intensity always reads darker, never washed-out.
-  const softComp = THREE.MathUtils.smoothstep(1.5, 8, shadowSoftness);
+  const softComp = THREE.MathUtils.smoothstep(1.5, SHADOW_SOFTNESS_MAX, shadowSoftness);
+  const catcherStrength = opacityToShadowStrength(shadowOpacityResolved, 1).catcher;
   const catcherOpacity = showFloorShadow
-    ? shadowIntensityCurve(shadowOpacity, 0.72, 2.4) * preset.shadow.opacityScale * (1 + softComp * 0.75)
+    ? THREE.MathUtils.clamp(catcherStrength * (1 + softComp * 0.4), 0, 0.78)
+    : 0;
+  // Paper needs a stronger stain than the invisible floor plate — white seamless
+  // reads the overlay as the only directional cast.
+  const paperShadowOpacity = showFloorShadow
+    ? THREE.MathUtils.clamp(catcherStrength * (1.25 + softComp * 0.35), 0, 0.86)
     : 0;
 
   const ambientRef = useRef<THREE.AmbientLight>(null);
   const hemiRef = useRef<THREE.HemisphereLight>(null);
   const bounceRef = useRef<THREE.PointLight>(null);
+
+  // Backdrop paper lives on layer 1 (skipped by ContactShadows). Wrap + bounce
+  // must reach that layer or the cyclorama goes black once it receives shadows.
+  useLayoutEffect(() => {
+    ambientRef.current?.layers.enable(1);
+    hemiRef.current?.layers.enable(1);
+    bounceRef.current?.layers.enable(1);
+  }, []);
 
   // Re-assert wrap lights every frame — shadow bakers must never leave them at 0.
   useFrame(() => {
@@ -770,6 +831,8 @@ export function StudioLighting({
             onSelect={onSelectBackdrop}
             contactPoints={contactPoints}
             contactStrength={coveContactStrength}
+            shadowOpacity={paperShadowOpacity}
+            shadowColor={floorShadowColor}
           />
         </group>
       )}
@@ -784,13 +847,14 @@ export function StudioLighting({
           onSelect={onSelectFloor}
         />
       )}
-      {/* Progressive key-light cast always lands on the floor, whatever the set. */}
-      {showFloorShadow && (
+      {/* Invisible catcher only when there is no paper cyclorama — otherwise the
+          catcher + receiving backdrop stack as a hard tone seam / clipped edge. */}
+      {showFloorShadow && !studioSet && (
         <StudioShadowCatcher
           y={floorY}
-          size={60}
+          size={22}
           opacity={catcherOpacity}
-          color={preset.shadow.color}
+          color={floorShadowColor}
         />
       )}
       {showFloorShadow && shadowOpacityResolved > 0.01 && (
@@ -799,12 +863,15 @@ export function StudioLighting({
           opacity={shadowOpacityResolved}
           softness={shadowBlur}
           contact={shadowContact}
+          contactEnabled={shadowContactEnabled}
+          distance={shadowDistance}
           quality={shadowQuality}
           exportBoost={shadowExportBoost}
           lightPosition={keyPosition}
           lightTarget={focus}
           lightStrength={keyIntensity}
-          color={preset.shadow.color}
+          color={floorShadowColor}
+          onPaper={studioSet}
         />
       )}
     </>

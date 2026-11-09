@@ -245,9 +245,79 @@ void main() {
 }
 `;
 
+const AO_FRAG = /* glsl */`
+uniform sampler2D tColor;
+uniform sampler2D tDepth;
+uniform vec2 uTexel;
+uniform float uAmount;
+uniform float uRadius;
+uniform float uNear;
+uniform float uFar;
+uniform mat4 uProjection;
+uniform mat4 uInvProjection;
+varying vec2 vUv;
+
+float viewDistance(vec2 uv) {
+  float depth = texture2D(tDepth, uv).r;
+  float viewZ = (uNear * uFar) / ((uFar - uNear) * depth - uFar);
+  return -viewZ;
+}
+
+vec3 viewPos(vec2 uv) {
+  float depth = texture2D(tDepth, uv).r;
+  vec4 clip = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+  vec4 view = uInvProjection * clip;
+  return view.xyz / max(view.w, 1e-6);
+}
+
+void main() {
+  vec4 color = texture2D(tColor, vUv);
+  if (uAmount < 0.008 || color.a < 0.02) {
+    gl_FragColor = color;
+    return;
+  }
+
+  float depth = texture2D(tDepth, vUv).r;
+  if (depth > 0.9994) {
+    gl_FragColor = color;
+    return;
+  }
+
+  vec3 origin = viewPos(vUv);
+  vec3 normal = normalize(cross(dFdx(origin), dFdy(origin)));
+  float dist = max(0.08, -origin.z);
+  float radius = uRadius * (0.55 + dist * 0.06);
+
+  float noise = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
+  float occlusion = 0.0;
+  const int SAMPLES = 12;
+  const float GOLDEN = 2.39996323;
+  for (int i = 0; i < SAMPLES; i++) {
+    float fi = float(i);
+    float r = sqrt((fi + 0.5) / float(SAMPLES));
+    float theta = fi * GOLDEN + noise * 6.2831853;
+    vec3 hemi = normalize(normal + vec3(cos(theta) * r, sin(theta) * r, 0.35) * 0.85);
+    vec3 sampleView = origin + hemi * (radius * (0.22 + r));
+    vec4 clip = uProjection * vec4(sampleView, 1.0);
+    vec2 sampleUv = clip.xy / max(clip.w, 1e-6) * 0.5 + 0.5;
+    if (sampleUv.x < 0.0 || sampleUv.x > 1.0 || sampleUv.y < 0.0 || sampleUv.y > 1.0) continue;
+    float sampleDist = viewDistance(sampleUv);
+    float sampleZ = -sampleView.z;
+    float delta = sampleZ - sampleDist;
+    float range = smoothstep(0.0, 1.0, radius / max(abs(sampleDist - dist), 0.04));
+    occlusion += step(0.012, delta) * range;
+  }
+
+  float ao = 1.0 - (occlusion / float(SAMPLES)) * uAmount;
+  ao = mix(1.0, clamp(ao, 0.42, 1.0), color.a);
+  gl_FragColor = vec4(color.rgb * ao, color.a);
+}
+`;
+
 type DofState = { amount: number; focusDistance: number };
 
 const dofStates = new WeakMap<THREE.WebGLRenderer, DofState>();
+const aoStates = new WeakMap<THREE.WebGLRenderer, number>();
 
 /** `amount` is 0–1. Zero skips the pass. `focusDistance` is camera-to-subject, in world units. */
 export function setDepthOfField(
@@ -269,6 +339,18 @@ export function setDepthOfField(
 
 function readDof(gl: THREE.WebGLRenderer): DofState {
   return dofStates.get(gl) ?? { amount: 0, focusDistance: 8 };
+}
+
+/** `amount` is 0–1. Zero skips the pass. Subtle values (0.2–0.4) read as product photography. */
+export function setAmbientOcclusion(gl: THREE.WebGLRenderer, amount: number) {
+  const next = typeof amount === 'number' && Number.isFinite(amount)
+    ? Math.min(1, Math.max(0, amount))
+    : 0;
+  aoStates.set(gl, next);
+}
+
+function readAo(gl: THREE.WebGLRenderer): number {
+  return aoStates.get(gl) ?? 0;
 }
 
 function fitTarget(target: THREE.WebGLRenderTarget, width: number, height: number) {
@@ -367,6 +449,41 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
   dofScene.add(dofQuad);
   const dofCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
+  const aoTarget = new THREE.WebGLRenderTarget(1, 1, {
+    depthBuffer: false,
+    stencilBuffer: false,
+    samples: 0,
+    type: THREE.UnsignedByteType,
+    format: THREE.RGBAFormat,
+  });
+  aoTarget.texture.colorSpace = THREE.LinearSRGBColorSpace;
+  aoTarget.texture.generateMipmaps = false;
+
+  const aoInvProjection = new THREE.Matrix4();
+  const aoMaterial = new THREE.ShaderMaterial({
+    uniforms: {
+      tColor: { value: null as THREE.Texture | null },
+      tDepth: { value: null as THREE.Texture | null },
+      uTexel: { value: new THREE.Vector2(1, 1) },
+      uAmount: { value: 0 },
+      uRadius: { value: 0.16 },
+      uNear: { value: 0.1 },
+      uFar: { value: 100 },
+      uProjection: { value: new THREE.Matrix4() },
+      uInvProjection: { value: aoInvProjection },
+    },
+    vertexShader: GRADE_VERT,
+    fragmentShader: AO_FRAG,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const aoQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), aoMaterial);
+  aoQuad.frustumCulled = false;
+  const aoScene = new THREE.Scene();
+  aoScene.add(aoQuad);
+  const aoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
   const original = gl.render.bind(gl);
   const size = new THREE.Vector2();
 
@@ -383,7 +500,10 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
     const height = Math.max(1, Math.floor(drawing.y));
     const autoClear = gl.autoClear;
     const dof = readDof(gl);
+    const aoAmount = readAo(gl);
     const useDof = dof.amount >= 0.02;
+    const useAo = aoAmount >= 0.02;
+    const needDepth = (useDof || useAo) && Boolean(depthTarget.depthTexture);
 
     try {
       let colorTarget: THREE.WebGLRenderTarget = buffer;
@@ -392,14 +512,16 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
       gl.autoClear = true;
       original(scene, camera);
 
-      if (useDof && depthTarget.depthTexture) {
-        // Second pass only to capture hardware depth. Real materials keep skinning and transparency.
+      if (needDepth) {
+        // Shared depth for DoF and AO so skinned / transparent materials stay correct.
         fitTarget(depthTarget, width, height);
-        fitTarget(dofTarget, width, height);
         gl.setRenderTarget(depthTarget);
         gl.autoClear = true;
         original(scene, camera);
+      }
 
+      if (useDof && depthTarget.depthTexture) {
+        fitTarget(dofTarget, width, height);
         const px = height / 900;
         const shaped = Math.pow(dof.amount, 1.15);
         const uniforms = dofMaterial.uniforms;
@@ -417,6 +539,26 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
         gl.autoClear = true;
         original(dofScene, dofCamera);
         colorTarget = dofTarget;
+      }
+
+      if (useAo && depthTarget.depthTexture) {
+        fitTarget(aoTarget, width, height);
+        aoInvProjection.copy(camera.projectionMatrix).invert();
+        const uniforms = aoMaterial.uniforms;
+        uniforms.tColor.value = colorTarget.texture;
+        uniforms.tDepth.value = depthTarget.depthTexture;
+        uniforms.uTexel.value.set(1 / width, 1 / height);
+        uniforms.uAmount.value = aoAmount;
+        uniforms.uRadius.value = THREE.MathUtils.lerp(0.08, 0.28, aoAmount);
+        uniforms.uNear.value = camera.near;
+        uniforms.uFar.value = Math.max(camera.far, camera.near + 0.01);
+        uniforms.uProjection.value.copy(camera.projectionMatrix);
+        uniforms.uInvProjection.value.copy(aoInvProjection);
+
+        gl.setRenderTarget(aoTarget);
+        gl.autoClear = true;
+        original(aoScene, aoCamera);
+        colorTarget = aoTarget;
       }
 
       gl.setRenderTarget(previous);

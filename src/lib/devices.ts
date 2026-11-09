@@ -18,8 +18,6 @@ export type BuiltinDeviceId =
   | 'ipad_mini_6'
   | 'macbook_pro_13_2020'
   | 'apple_watch_series_7'
-  | 'chronograph_watch'
-  | 'rolex_watch'
   | 'airpods_pro'
   | 'sony_mdr_7506'
   | 'skullcandy_crusher'
@@ -40,8 +38,6 @@ export type BuiltinDeviceId =
   | 'galaxy_z_fold8'
   | 'galaxy_z_fold8_ultra'
   | 'galaxy_z_flip8'
-  | 'galaxy_watch'
-  | 'galaxy_watch_ultra'
   | 'pixel_11'
   | 'pixel_11_pro'
   | 'pixel_11_pro_xl'
@@ -181,7 +177,7 @@ export function categoryOfDevice(device: Pick<DeviceModel, 'id' | 'category'>): 
   if (/ipad|tablet|\btab_/.test(id)) return 'tablets';
   if (/imac|desktop|studio_display/.test(id)) return 'desktops';
   if (/macbook|laptop/.test(id)) return 'laptops';
-  if (/watch|chronograph|rolex/.test(id)) return 'watches';
+  if (/watch/.test(id)) return 'watches';
   if (/airpods|mdr_|skullcandy|jbl_|headphone/.test(id)) return 'headphones';
   if (/vision_pro|spatial/.test(id)) return 'spatial';
   return 'phones';
@@ -229,65 +225,61 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [0, Math.PI / 2, 0],
     uv: { repeat: [1, -1] },
     glassMats: ['glass.002', 'lensinglass'],
-    // Metal squares glued to the bottom edge of the Sketchfab mesh.
-    hideNodes: ['Plane.013_metaL.001_0', 'Plane.014_metaL.001_0'],
+    // Metal squares glued to the bottom edge of the Sketchfab mesh + back Apple logo.
+    hideNodes: ['Plane.013_metaL.001_0', 'Plane.014_metaL.001_0', 'Cube.014_apple logo.001_0'],
   },
   {
     id: 'iphone_17_pro',
     label: 'iPhone 17 Pro',
-    subtitle: 'iOS · Cosmic Orange',
+    subtitle: 'iOS · Device pack',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_17_pro.glb',
-    screenMat: 'OLED',
+    screenMat: 'screen',
     screenSize: { width: 1206, height: 2622 },
     rot: [0, 0, 0],
-    uv: { },
-    glassMats: ['Glass', 'Glass_tint', 'Frosted_glass', 'Camera_sapphire_miror', 'Camera_Lens'],
-    tweaks: {
-      Glass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.03, transparent: true },
-      Display_Frame: {
-        color: 0x000000, emissive: 0x0d0d0f, emissiveIntensity: 1,
-        metalness: 0, roughness: 1, envMapIntensity: 0, toneMapped: false,
-      },
-      OLED_off: {
-        color: 0x000000, emissive: 0x0d0d0f, emissiveIntensity: 1,
-        metalness: 0, roughness: 1, envMapIntensity: 0, toneMapped: false,
-      },
-    },
+    uv: { planar: true },
+    glassMats: ['glass', 'camera glass', 'flash glass', 'lens'],
+    lockMaterials: true,
+    hideNodes: ['Cube'],
   },
   {
     id: 'iphone_17_pro_max',
     label: 'iPhone 17 Pro Max',
-    subtitle: 'iOS · Edge display',
+    subtitle: 'iOS · Device pack',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_17_pro_max.glb',
-    screenMat: 'screen.001',
+    screenMat: 'screen.1',
     screenSize: { width: 1320, height: 2868 },
-    rot: [0, Math.PI / 2, 0],
-    uv: { repeat: [-1, -1] },
-    screenInset: { border: 26, radius: 162 },
-    glassMats: ['glass.002', 'lensinglass'],
-    tweaks: {
-      'black.002': {
-        color: 0x000000, emissive: 0x000000, emissiveIntensity: 1,
-        metalness: 0, roughness: 1, envMapIntensity: 0, toneMapped: false,
-      },
-    },
+    rot: [0, Math.PI, 0],
+    uv: { planar: true },
+    glassMats: ['camera glass.1', 'flash glass', 'lens.1'],
+    lockMaterials: true,
+    hideNodes: ['Cube'],
   },
   {
     id: 'iphone_duo',
     label: 'iPhone Duo',
-    subtitle: 'iOS · Procedural foldable',
+    subtitle: 'iOS · Textured foldable',
     platform: 'ios',
-    kind: 'procedural',
-    procedural: 'duo',
-    finish: TONE_SILVER,
-    screenMat: 'ProceduralScreen',
+    kind: 'gltf',
+    category: 'phones',
+    url: './models/iphone_duo.glb',
+    screenMat: 'Screen',
     screenSize: { width: 2064, height: 2752 },
     rot: [0, 0, 0],
-    uv: {},
+    uv: { planar: true },
+    glassMats: ['Glass'],
+    lockMaterials: true,
+    lid: {
+      mode: 'fold',
+      wing: ['Base_02', 'Screen_02', 'Glass_Screen_02', 'Lens_01'],
+      splitSpans: ['Screen_01', 'Glass_Screen_01'],
+      wingSide: 'min',
+      axis: 'y',
+      closeAngle: Math.PI,
+    },
   },
   {
     id: 'pixel_9',
@@ -381,9 +373,10 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/iphone_13_pro_max.glb',
     screenMat: 'Wallpaper',
     screenSize: { width: 1284, height: 2778 },
-    rot: [0, 0, 0],
+    rot: [0, Math.PI, 0],
     uv: { flipY: true, mirrorX: true },
     glassMats: ['Glass', 'Screen_Glass', 'Camera_Glass', 'Gray_Glass', 'Black_Glass', 'Lens'],
+    hideNodes: ['Apple Logo', 'Apple Logo_Logo_0'],
   },
   {
     id: 'galaxy_s21_ultra',
@@ -394,7 +387,6 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/galaxy_s21_ultra.glb',
     screenMat: 'Screen',
     screenSize: { width: 1440, height: 3200 },
-    // Screen was authored on −Z; turn it toward the camera.
     rot: [0, Math.PI, 0],
     uv: { flipY: true },
     glassMats: ['Glass', 'Lens', 'Lens.001'],
@@ -411,6 +403,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [0, Math.PI, 0],
     uv: { mirrorX: true, flipY: true },
     glassMats: ['CamGlass', 'Lens'],
+    hideNodes: ['iPad Mini_BaseColorLogo_0'],
   },
   {
     id: 'macbook_pro_13_2020',
@@ -439,34 +432,6 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [0, 0, 0],
     uv: { flipY: true },
     glassMats: ['Glass_Clear2'],
-    lockMaterials: true,
-  },
-  {
-    id: 'chronograph_watch',
-    label: 'Chronograph Watch',
-    subtitle: 'Accessory · Khronos sample',
-    platform: 'ios',
-    kind: 'gltf',
-    url: './models/chronograph_watch.glb',
-    screenMat: 'Watch Face',
-    screenSize: { width: 512, height: 512 },
-    rot: [Math.PI / 2, 0, 0],
-    uv: {},
-    glassMats: ['Glass Face'],
-    lockMaterials: true,
-  },
-  {
-    id: 'rolex_watch',
-    label: 'Rolex Watch',
-    subtitle: 'Accessory · CC BY',
-    platform: 'ios',
-    kind: 'gltf',
-    url: './models/rolex_watch.glb',
-    screenMat: 'Empty',
-    screenSize: { width: 512, height: 512 },
-    rot: [0, 0, -Math.PI / 2],
-    uv: {},
-    hasScreen: false,
     lockMaterials: true,
   },
   {
@@ -637,34 +602,32 @@ export const DEVICE_MODELS: DeviceModel[] = [
   {
     id: 'iphone_18_pro_max',
     label: 'iPhone 18 Pro Max',
-    subtitle: 'iOS · Adreamyouvehadbefore',
+    subtitle: 'iOS · Device pack',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_18_pro_max.glb',
-    screenMat: 'Display',
+    screenMat: 'Black',
     screenSize: { width: 1320, height: 2868 },
-    rot: [Math.PI / 2, 0, 0],
-    uv: {},
-    glassMats: [
-      'Black_Glass', 'Back_Glass_Burgundy', 'LiDAR_Glass', 'Sapphire',
-      'Front_Element', 'Antenna_Window', 'Front_Camera_photo', 'Rear_Element_photo',
-    ],
+    rot: [0, 0, 0],
+    uv: { planar: true },
+    glassMats: ['Glass'],
+    lockMaterials: true,
+    hideNodes: ['Apple'],
   },
   {
     id: 'iphone_18_pro',
     label: 'iPhone 18 Pro',
-    subtitle: 'iOS · DUOPlyer',
+    subtitle: 'iOS · Device pack',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_18_pro.glb',
-    // Material.013 is camera housing — display panels use Material.020 (+ color variants)
-    screenMat: 'Material.020',
+    screenMat: 'Black',
     screenSize: { width: 1206, height: 2622 },
-    rot: [0, -Math.PI / 2, 0],
-    uv: { rot: -Math.PI / 2, repeat: [4, 4], offset: [0.5, 0], flipY: true, clamp: true },
-    dropNameIncludes: ['001', '002', '003'],
-    // No dedicated glass sheets — lens / flash discs get glossy treatment
-    glassMats: ['Material.021', 'Material.012', 'Material.014', 'Material.022'],
+    rot: [0, 0, 0],
+    uv: { planar: true },
+    glassMats: ['Glass'],
+    lockMaterials: true,
+    hideNodes: ['Apple'],
   },
   {
     id: 'iphone_18',
@@ -675,8 +638,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/iphone_18.glb',
     screenMat: 'OLED',
     screenSize: { width: 1206, height: 2622 },
-    // Height is Y. Turn it so the OLED faces the front camera.
-    rot: [0, Math.PI, 0],
+    rot: [0, 0, 0],
     uv: {},
     glassMats: ['Glass', 'Tinted glass', 'Frosted glass', 'Camera sapphire miror', 'Camera Lens'],
     tweaks: {
@@ -743,11 +705,11 @@ export const DEVICE_MODELS: DeviceModel[] = [
     kind: 'gltf',
     category: 'watches',
     url: './models/pixel_watch.glb',
-    screenMat: 'Screen',
+    screenMat: 'replaceable_screen_black',
     screenSize: { width: 450, height: 450 },
     rot: [0, 0, 0],
     uv: {},
-    glassMats: ['Screen Glass'],
+    glassMats: ['Gorilla_Glass_5_black_high_gloss_clearcoat', 'optical_sensor_glass'],
     lockMaterials: true,
   },
   {
@@ -758,9 +720,9 @@ export const DEVICE_MODELS: DeviceModel[] = [
     kind: 'gltf',
     category: 'phones',
     url: './models/galaxy_z_flip8.glb',
-    screenMat: 'Screen',
+    // Screen mesh shares the Graphite atlas with the body — isolated at load.
+    screenMat: 'Graphite',
     screenSize: { width: 1080, height: 2640 },
-    // Authored upright, screen already faces +Z.
     rot: [0, 0, 0],
     uv: { planar: true },
     glassMats: ['Glass'],
@@ -774,9 +736,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     kind: 'gltf',
     category: 'phones',
     url: './models/galaxy_z_fold8.glb',
-    screenMat: 'Screen',
+    screenMat: 'Screen_Graphite',
     screenSize: { width: 1968, height: 2184 },
-    // Open book: roll upright and yaw so the inner screen faces +Z.
     rot: [0, Math.PI, Math.PI / 2],
     uv: { planar: true },
     glassMats: ['Glass', 'Glass.001'],
@@ -799,10 +760,9 @@ export const DEVICE_MODELS: DeviceModel[] = [
     kind: 'gltf',
     category: 'phones',
     url: './models/galaxy_z_fold8_ultra.glb',
-    screenMat: 'Screen',
+    screenMat: 'Screen_Graphite',
     screenSize: { width: 1920, height: 2160 },
-    // Authored upright, screen already faces +Z.
-    rot: [0, 0, 0],
+    rot: [0, Math.PI, 0],
     uv: { planar: true },
     glassMats: ['Glass', 'Glass.001'],
     lockMaterials: true,
@@ -830,6 +790,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: { planar: true },
     glassMats: ['Camera:0:0:0 #1', 'Camera:0:0:0 #2', 'Camera:0:0:0 #3'],
     lockMaterials: true,
+    hideNodes: ['logo', 'logo.001', 'logo.002'],
   },
   {
     id: 'apple_watch_series_12',
@@ -886,7 +847,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/pixel_watch_7.glb',
     screenMat: 'screen',
     screenSize: { width: 450, height: 450 },
-    rot: [0, 0, 0],
+    rot: [0, Math.PI / 2, 0],
     uv: {},
     glassMats: ['glass'],
     lockMaterials: true,
@@ -913,6 +874,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: {},
     glassMats: ['transparent glass', 'foggy glass', 'camera lens'],
     lockMaterials: true,
+    hideNodes: ['Cube_1'],
   },
   {
     id: 'macbook_pro_m5',
@@ -924,10 +886,12 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/macbook_pro_m5.glb',
     screenMat: 'screen',
     screenSize: { width: 3024, height: 1964 },
-    rot: [Math.PI / 2, 0, Math.PI],
-    uv: {},
+    rot: [0, 0, 0],
+    uv: { planar: true },
     glassMats: ['glass transparent', 'pearly glass', 'pearly glass cyan'],
     lockMaterials: true,
+    hideNodes: ['Cube', 'Extrude', 'Extrude_2'],
+    lid: { mode: 'hinge', nodes: ['rotate_screen', 'screen', 'black bezel'], closeAngle: 1.55, hingeZ: 'max' },
   },
   {
     id: 'imac_24',
@@ -943,6 +907,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: {},
     glassMats: ['Glass', 'Lens'],
     lockMaterials: true,
+    // GLB ships seven colorways in a row; keep the origin iMac only.
+    dropNameIncludes: ['Plane003', 'Plane004', 'Plane005', 'Plane006', 'Plane007', 'Plane008'],
   },
   {
     id: 'imac_m4',
@@ -954,7 +920,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/imac_m4.glb',
     screenMat: 'screen',
     screenSize: { width: 4480, height: 2520 },
-    rot: [0, 0, 0],
+    rot: [0, Math.PI, 0],
     uv: {},
     glassMats: ['pearly glass cyan'],
     lockMaterials: true,
@@ -991,8 +957,6 @@ DEVICE_MODELS.push(
   listedVariant('iphone_18_pro', 'iphone_air', 'iPhone Air', 'iOS'),
   listedVariant('galaxy_s26_ultra', 'galaxy_s26_plus', 'Galaxy S26+', 'Android', 'phones', 'android'),
   listedVariant('galaxy_s26_ultra', 'galaxy_s26', 'Galaxy S26', 'Android', 'phones', 'android'),
-  listedVariant('chronograph_watch', 'galaxy_watch', 'Galaxy Watch', 'Android', 'watches', 'android'),
-  listedVariant('chronograph_watch', 'galaxy_watch_ultra', 'Galaxy Watch Ultra', 'Android', 'watches', 'android'),
   listedVariant('pixel_9', 'pixel_11', 'Pixel 11', 'Android', 'phones', 'android'),
   listedVariant('pixel_10_pro', 'pixel_11_pro', 'Pixel 11 Pro', 'Android', 'phones', 'android'),
   listedVariant('pixel_9_pro_xl', 'pixel_11_pro_xl', 'Pixel 11 Pro XL', 'Android', 'phones', 'android'),
@@ -1010,9 +974,23 @@ import {
 
 export { isCustomDeviceId };
 
+/** Bump when replacing public/models GLBs so useGLTF / HTTP caches reload textures. */
+export const DEVICE_MODEL_PACK_VERSION = 'texpack3';
+
+/** Cache-bust relative model URLs; leave blob / absolute URLs alone. */
+export function deviceAssetUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  if (/^(blob:|data:|https?:)/i.test(url)) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}v=${DEVICE_MODEL_PACK_VERSION}`;
+}
+
 export function getDevice(id: DeviceId | string | undefined): DeviceModel {
   const builtin = DEVICE_MODELS.find((d) => d.id === id);
-  if (builtin) return builtin;
+  if (builtin) {
+    const url = deviceAssetUrl(builtin.url);
+    return url && url !== builtin.url ? { ...builtin, url } : builtin;
+  }
   if (typeof id === 'string' && isCustomDeviceId(id)) {
     const custom = resolveCustomDevice(id);
     if (custom) return custom;

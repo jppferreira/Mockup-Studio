@@ -1,10 +1,85 @@
 const { app, BrowserWindow, Menu, clipboard, ipcMain, dialog, nativeImage, shell, session, systemPreferences } = require('electron');
 const fs = require('node:fs/promises');
-const { existsSync } = require('node:fs');
+const { existsSync, appendFileSync } = require('node:fs');
 const path = require('node:path');
 
 const APP_NAME = 'Mockup Studio 3D';
 app.setName(APP_NAME);
+
+const { decodeProjectFile, encodeProjectFile, isProjectFileName } = require('./projectFile.cjs');
+
+/** Absolute path Finder/Explorer asked us to open (macOS can fire before ready). */
+let pendingOpenPath = null;
+/** @type {Electron.BrowserWindow | null} */
+let mainWindow = null;
+
+function isOpenableProjectPath(filePath) {
+  if (typeof filePath !== 'string' || !filePath) return false;
+  if (!path.isAbsolute(filePath)) return false;
+  return isProjectFileName(path.basename(filePath));
+}
+
+function projectPathFromArgv(argv) {
+  if (!Array.isArray(argv)) return null;
+  for (const arg of argv) {
+    if (typeof arg !== 'string' || !arg || arg.startsWith('-')) continue;
+    // Electron / Chromium flags and the app entry path are not project files.
+    if (arg === '.' || arg.endsWith('electron') || arg.endsWith('electron.exe')) continue;
+    if (arg.endsWith('main.cjs') || arg.endsWith('package.json')) continue;
+    const resolved = path.resolve(arg);
+    if (isOpenableProjectPath(resolved) && existsSync(resolved)) return resolved;
+  }
+  return null;
+}
+
+function focusMainWindow() {
+  const win = mainWindow && !mainWindow.isDestroyed()
+    ? mainWindow
+    : BrowserWindow.getAllWindows()[0];
+  if (!win || win.isDestroyed()) return null;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  return win;
+}
+
+function notifyRendererOpen(filePath) {
+  const win = focusMainWindow();
+  if (!win || win.webContents.isLoadingMainFrame()) return;
+  win.webContents.send('project:open-from-os', filePath);
+}
+
+function queueOpenPath(filePath) {
+  if (!isOpenableProjectPath(filePath)) return;
+  pendingOpenPath = filePath;
+  if (app.isReady()) notifyRendererOpen(filePath);
+}
+
+// macOS: double-click / Open With can arrive before app.whenReady().
+app.on('open-file', (event, filePath) => {
+  event.preventDefault();
+  queueOpenPath(filePath);
+});
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const fromArgv = projectPathFromArgv(argv);
+    if (fromArgv) queueOpenPath(fromArgv);
+    else focusMainWindow();
+  });
+}
+
+const CRASH_LOG = path.join(app.getPath('userData'), 'main-crash.log');
+function logCrash(label, err) {
+  const line = `[${new Date().toISOString()}] ${label} ${err && err.stack ? err.stack : String(err)}\n`;
+  try { appendFileSync(CRASH_LOG, line); } catch { /* ignore */ }
+  console.error(label, err);
+}
+process.on('uncaughtException', (err) => logCrash('uncaughtException', err));
+process.on('unhandledRejection', (err) => logCrash('unhandledRejection', err));
 
 function installAppMenu() {
   const isMac = process.platform === 'darwin';
@@ -76,7 +151,6 @@ function appIconFile() {
 const { registerAndroidMirrorIpc, stopAndroidMirrorSession } = require('./androidMirror.cjs');
 const { registerBlendConvertIpc } = require('./blendConvert.cjs');
 const { registerCloudLibraryIpc, getLibraryDir } = require('./cloudLibrary.cjs');
-const { decodeProjectFile, encodeProjectFile } = require('./projectFile.cjs');
 const { setupAutoUpdater } = require('./updater.cjs');
 
 function createWindow() {
@@ -99,6 +173,10 @@ function createWindow() {
       sandbox: true,
     },
   });
+  mainWindow = win;
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+  });
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   win.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error('[mockup-studio] did-fail-load', code, desc, url);
@@ -112,6 +190,7 @@ function createWindow() {
   if (devUrl) win.loadURL(devUrl);
   else win.loadFile(path.join(__dirname, '../dist/index.html'));
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  return win;
 }
 
 function allowMediaPermission(permission) {
@@ -123,6 +202,8 @@ function allowMediaPermission(permission) {
 }
 
 app.whenReady().then(() => {
+  if (!gotSingleInstanceLock) return;
+
   installAppMenu();
   const iconFile = appIconFile();
   if (iconFile) {
@@ -213,6 +294,25 @@ app.whenReady().then(() => {
     return { canceled: false, contents, path: filePaths[0] };
   });
 
+  ipcMain.handle('project:openPath', async (_event, filePath) => {
+    if (!isOpenableProjectPath(filePath)) throw new Error('Not a Mockup Studio project file');
+    const resolved = path.resolve(filePath);
+    if (!existsSync(resolved)) throw new Error('That project file no longer exists');
+    const stat = await fs.stat(resolved);
+    if (!stat.isFile()) throw new Error('That path is not a file');
+    if (stat.size > 45_000_000) throw new Error('Project exceeds maximum file size');
+    const raw = await fs.readFile(resolved);
+    const contents = decodeProjectFile(raw);
+    if (pendingOpenPath === resolved || pendingOpenPath === filePath) pendingOpenPath = null;
+    return { contents, path: resolved };
+  });
+
+  ipcMain.handle('project:takePendingOpen', () => {
+    const next = pendingOpenPath;
+    pendingOpenPath = null;
+    return next;
+  });
+
   ipcMain.handle('image:save', async (_event, { dataUrl, proposedName }) => {
     if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) throw new Error('Expected an image');
     const match = /^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i.exec(dataUrl);
@@ -246,12 +346,64 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('clipboard:readImage', async () => {
-    const image = clipboard.readImage();
+    // Figma “Copy as PNG” often lands as public.png / image/png rather than NSImage.
+    // Try nativeImage first, then raw pasteboard buffers.
+    let image = clipboard.readImage();
+    if (image.isEmpty()) {
+      const formats = [
+        'public.png',
+        'image/png',
+        'public.jpeg',
+        'public.jpg',
+        'image/jpeg',
+        'public.tiff',
+        'image/tiff',
+      ];
+      for (const format of formats) {
+        try {
+          const buffer = clipboard.readBuffer(format);
+          if (!buffer || !buffer.length) continue;
+          const candidate = nativeImage.createFromBuffer(buffer);
+          if (!candidate.isEmpty()) {
+            image = candidate;
+            break;
+          }
+        } catch {
+          /* format not on pasteboard */
+        }
+      }
+    }
     if (image.isEmpty()) return { ok: false };
     const { width, height } = image.getSize();
     if (!width || !height) return { ok: false };
     if (width * height > 40_000_000) throw new Error('Use an image under 20 MB.');
     return { ok: true, dataUrl: image.toDataURL(), name: 'pasted.png' };
+  });
+
+  // Figma ⌘C puts proprietary HTML (figmeta/figma), not a PNG.
+  ipcMain.handle('clipboard:readHtml', async () => {
+    try {
+      let html = '';
+      try { html = clipboard.readHTML() || ''; } catch { /* ignore */ }
+      if (!html) {
+        try { html = clipboard.read('text/html') || ''; } catch { /* ignore */ }
+      }
+      if (!html) {
+        for (const format of ['public.html', 'Apple HTML pasteboard type', 'text/html']) {
+          try {
+            const buffer = clipboard.readBuffer(format);
+            if (buffer?.length) {
+              html = buffer.toString('utf8');
+              if (html) break;
+            }
+          } catch { /* format missing */ }
+        }
+      }
+      if (!html || typeof html !== 'string') return { ok: false };
+      return { ok: true, html };
+    } catch {
+      return { ok: false };
+    }
   });
 
   ipcMain.handle('shell:openExternal', async (_event, rawUrl) => {
@@ -295,6 +447,26 @@ app.whenReady().then(() => {
   registerBlendConvertIpc(ipcMain);
   registerCloudLibraryIpc(ipcMain);
   setupAutoUpdater();
+
+  /** DEV-only: read src/data/shippedTemplates.json so successive promotes accumulate. */
+  ipcMain.handle('dev:readShippedTemplates', async () => {
+    if (app.isPackaged) {
+      return { ok: false, reason: 'Modeling promote is only available in development builds' };
+    }
+    const target = path.join(__dirname, '../src/data/shippedTemplates.json');
+    try {
+      const contents = await fs.readFile(target, 'utf8');
+      if (contents.length > 8_000_000) {
+        return { ok: false, reason: 'Template pack is too large' };
+      }
+      return { ok: true, path: target, contents, missing: false };
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        return { ok: true, path: target, contents: null, missing: true };
+      }
+      return { ok: false, reason: error instanceof Error ? error.message : 'Could not read shipped templates' };
+    }
+  });
 
   /** DEV-only: promote compositions into src/data/shippedTemplates.json for the next build. */
   ipcMain.handle('dev:writeShippedTemplates', async (_event, contents) => {
@@ -355,7 +527,13 @@ app.whenReady().then(() => {
     return { ok: true, dataUrl: `data:${mime};base64,${buffer.toString('base64')}` };
   });
 
+  // Cold-launch from Finder / Explorer also puts the path on argv (non-macOS).
+  // On macOS, open-file usually wins and may have already filled pendingOpenPath.
+  const launchPath = projectPathFromArgv(process.argv);
+  if (launchPath) pendingOpenPath = launchPath;
+
   createWindow();
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

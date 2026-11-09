@@ -162,8 +162,10 @@ function PulsingScreenGlow({
 
   useEffect(() => () => mat.dispose(), [mat]);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock, invalidate }) => {
     mat.opacity = 0.42 + Math.sin(clock.elapsedTime * 5.5) * 0.2;
+    // Demand frameloop: keep the drop-highlight pulse alive while mounted.
+    invalidate();
   });
 
   return (
@@ -330,6 +332,7 @@ function DuoPhone({
   clayMode,
   mediaPlaying,
   dropHighlight = false,
+  lidOpen = 1,
 }: {
   device: DeviceModel;
   screenshot: string | null;
@@ -338,15 +341,19 @@ function DuoPhone({
   clayMode?: boolean;
   mediaPlaying?: boolean;
   dropHighlight?: boolean;
+  /** 1 = flat open, 0 = fully folded shut. */
+  lidOpen?: number;
 }) {
   const finish = finishHex ?? device.finish ?? '#c8ccd1';
   const halfW = 1.18;
   const height = 2.52;
-  const open = 0.95;
+  // Book fold: both wings meet at the hinge. 0 rad = flat open, π = closed.
+  const open = Math.min(1, Math.max(0, lidOpen));
+  const wingAngle = ((1 - open) * Math.PI) / 2;
 
   return (
     <group scale={0.95}>
-      <group position={[-0.015, 0, 0]} rotation={[0, open / 2, 0]}>
+      <group name="DuoWingL" position={[-0.015, 0, 0]} rotation={[0, wingAngle, 0]}>
         <group position={[-halfW / 2, 0, 0]}>
           <DuoHalf
             side="left"
@@ -362,7 +369,7 @@ function DuoPhone({
           />
         </group>
       </group>
-      <group position={[0.015, 0, 0]} rotation={[0, -open / 2, 0]}>
+      <group name="DuoWingR" position={[0.015, 0, 0]} rotation={[0, -wingAngle, 0]}>
         <group position={[halfW / 2, 0, 0]}>
           <DuoHalf
             side="right"
@@ -402,6 +409,7 @@ export default function ProceduralDevice({
   clayMode,
   mediaPlaying,
   dropHighlight = false,
+  lidOpen = 1,
 }: {
   device: DeviceModel;
   screenshot: string | null;
@@ -410,6 +418,7 @@ export default function ProceduralDevice({
   clayMode?: boolean;
   mediaPlaying?: boolean;
   dropHighlight?: boolean;
+  lidOpen?: number;
 }) {
   const group = useRef<THREE.Group>(null);
 
@@ -474,6 +483,7 @@ export default function ProceduralDevice({
         clayMode={clayMode}
         mediaPlaying={mediaPlaying}
         dropHighlight={dropHighlight}
+        lidOpen={lidOpen}
       />
     </group>
   );

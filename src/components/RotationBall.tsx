@@ -118,7 +118,7 @@ function prepareGizmos(rotate: ControlsHandle | null, translate: ControlsHandle 
   const rotateRoot = rotateGroups.gizmo?.rotate;
   const rotatePicker = rotateGroups.picker?.rotate;
   // Versioned so HMR clears leftover custom torus meshes / picker sizes.
-  const PREP = 'stock-arcs-v4';
+  const PREP = 'stock-arcs-v5';
   if (rotate && rotateRoot && rotatePicker && rotate.userData.gizmoPrepared !== PREP) {
     for (const child of [...rotateRoot.children]) {
       if (child.userData.customRing) child.removeFromParent();
@@ -148,6 +148,19 @@ function prepareGizmos(rotate: ControlsHandle | null, translate: ControlsHandle 
   if (translate && translateRoot && translatePicker && translate.userData.gizmoPrepared !== PREP) {
     dropHandles(translateRoot, TRANSLATE_DROP);
     dropHandles(translatePicker, TRANSLATE_DROP);
+    // Stock cones are thin in screen space; fatten invisible pickers so
+    // coloured arrows stay grabbable without needing to zoom in. Keep the
+    // boost radial (X/Z) so shafts don't overlap into free multi-axis drags.
+    for (const handle of translatePicker.children) {
+      handle.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh || mesh.userData.pickerEnlarged) return;
+        mesh.scale.x *= 2.2;
+        mesh.scale.z *= 2.2;
+        mesh.scale.y *= 1.15;
+        mesh.userData.pickerEnlarged = true;
+      });
+    }
     // Mark the whole picker tree (handle groups + cylinder meshes) so scene
     // raycasts classify arrow grabs as gizmo hits, not empty canvas / body.
     markGizmoHandles(translatePicker, 'translate');
@@ -557,7 +570,7 @@ export default function RotationBall({
 
   // Keep sizes stable during a drag — resizing mid-gesture breaks TC's plane math
   // and makes axis arrows feel like they stopped working.
-  const translateSize = mode === 'translate' ? 1.15 : 1.0;
+  const translateSize = mode === 'translate' ? 1.35 : 1.2;
   const rotateSize = mode === 'rotate' ? 0.48 : 0.42;
 
   return (

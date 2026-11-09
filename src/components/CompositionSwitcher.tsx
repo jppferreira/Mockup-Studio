@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, Copy, Trash2 } from 'lucide-react';
+import { Check, ChevronDown, Copy, Plus, Trash2 } from 'lucide-react';
 import TemplatePreview from './TemplatePreview';
 import type { CompositionTemplate } from '../lib/templates';
 
@@ -10,6 +10,10 @@ type CompositionSwitcherProps = {
   onApply: (template: CompositionTemplate) => void;
   /** Workspace toolset — Dev marks these as editable shipped layouts. */
   mode?: 'developer' | 'user';
+  /** Mint a blank shipped composition from the default sidepanel. */
+  onCreate?: () => void;
+  /** Mint a blank shipped device layout from the default sidepanel. */
+  onCreateLayout?: () => void;
   onDuplicate?: (template: CompositionTemplate) => void;
   onDelete?: (template: CompositionTemplate) => void;
 };
@@ -47,10 +51,13 @@ export default function CompositionSwitcher({
   activeId,
   onApply,
   mode = 'user',
+  onCreate,
+  onCreateLayout,
   onDuplicate,
   onDelete,
 }: CompositionSwitcherProps) {
   const isDev = mode === 'developer';
+  const canCreate = Boolean(onCreate || onCreateLayout);
   const [open, setOpen] = useState(false);
   const [box, setBox] = useState<MenuBox | null>(null);
   const [cursor, setCursor] = useState(0);
@@ -209,11 +216,7 @@ export default function CompositionSwitcher({
     : 'Choose a composition. Restages the shot. Your devices stay.';
 
   return (
-    <section className={`composition-switch ${open ? 'is-open' : ''}${isDev ? ' is-dev-toolset' : ''}`} ref={rootRef}>
-      <div className="composition-switch-head">
-        <span id={labelId}>{isDev ? 'Dev compositions' : 'Compositions'}</span>
-        <em>{isDev ? `Dev · ${templates.length}` : templates.length}</em>
-      </div>
+    <section className={`composition-switch is-compact ${open ? 'is-open' : ''}${isDev ? ' is-dev-toolset' : ''}`} ref={rootRef}>
       <button
         ref={triggerRef}
         type="button"
@@ -221,11 +224,13 @@ export default function CompositionSwitcher({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
+        aria-labelledby={labelId}
         aria-label={`Compositions. ${valueLabel}`}
         disabled={!templates.length}
         onClick={() => (open ? closeMenu(false) : openMenu())}
         onKeyDown={onTriggerKeyDown}
       >
+        <span className="composition-switch-label" id={labelId}>Composition</span>
         {selected ? (
           <>
             <span className="composition-switch-thumb" aria-hidden>
@@ -233,15 +238,14 @@ export default function CompositionSwitcher({
             </span>
             <span className="composition-switch-copy">
               <strong>{selected.label}</strong>
-              <span>{selected.description}</span>
             </span>
           </>
         ) : (
           <span className="composition-switch-copy">
-            <strong>Choose a composition</strong>
-            <span>Restages the shot. Your devices stay.</span>
+            <strong>Choose…</strong>
           </span>
         )}
+        <em className="composition-switch-count">{templates.length}</em>
         <ChevronDown size={14} className="composition-switch-chevron" aria-hidden />
       </button>
       {open && box && createPortal(
@@ -260,6 +264,40 @@ export default function CompositionSwitcher({
               ? 'Dev mode — apply, duplicate, or delete shipped layouts.'
               : 'Restages the shot. Duplicate copies into Yours.'}
           </p>
+          {canCreate && (
+            <div className="composition-switch-create-row" role="group" aria-label="Create library entry">
+              {onCreateLayout && (
+                <button
+                  type="button"
+                  className="composition-switch-create"
+                  title="Create a new device layout"
+                  aria-label="Create a new device layout"
+                  onClick={() => {
+                    closeMenu(false);
+                    onCreateLayout();
+                  }}
+                >
+                  <Plus size={13} strokeWidth={2.2} aria-hidden />
+                  New layout
+                </button>
+              )}
+              {onCreate && (
+                <button
+                  type="button"
+                  className="composition-switch-create"
+                  title="Create a new composition"
+                  aria-label="Create a new composition"
+                  onClick={() => {
+                    closeMenu(false);
+                    onCreate();
+                  }}
+                >
+                  <Plus size={13} strokeWidth={2.2} aria-hidden />
+                  New composition
+                </button>
+              )}
+            </div>
+          )}
           <div
             ref={listRef}
             id={listId}

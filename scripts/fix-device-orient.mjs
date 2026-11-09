@@ -49,7 +49,7 @@ function loadGltf(filePath) {
 function classify(id) {
   if (/ipad|tablet/.test(id)) return 'tablet';
   if (/macbook|laptop/.test(id)) return 'laptop';
-  if (/watch|chronograph|rolex/.test(id)) return 'watch';
+  if (/watch/.test(id)) return 'watch';
   if (/airpods|mdr_|skullcandy|jbl_|headphone/.test(id)) return 'headphones';
   if (/vision_pro|spatial/.test(id)) return 'spatial';
   return 'phone';

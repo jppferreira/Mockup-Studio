@@ -1,6 +1,6 @@
 import { useRef, useState, type ChangeEvent } from 'react';
 import {
-  Box, Download, LayoutTemplate, Palette, Plus, RefreshCw, Sparkles, Sun, Upload, X,
+  Box, Download, LayoutTemplate, Palette, Plus, RefreshCw, Sparkles, Sun, Trash2, Upload, X,
 } from 'lucide-react';
 import { importCustomDevices } from '../lib/customDevices';
 import { MATERIAL_PRESETS, type MaterialPresetId } from '../lib/materialPresets';
@@ -38,6 +38,8 @@ const STUDIO_SET_STOPS: { key: keyof GradientColors; label: string; hint: string
 export type PickedMaterial = {
   deviceInstanceId: string;
   materialName: string;
+  /** Mesh / node under the pointer — used by Remove part. */
+  meshName?: string;
   colorHex?: string;
 };
 
@@ -48,6 +50,8 @@ interface ModelingModePanelProps {
   compositionName: string;
   /** Active Devices/Scenes template id for this tab, when editing a shipped layout. */
   activeTemplateId: string | null;
+  /** Current free-orbit camera pose to bake into shipped templates. */
+  cameraOrbit?: CompositionTemplate['cameraOrbit'] | null;
   pickedMaterial: PickedMaterial | null;
   materialTweak: MaterialTweak | null;
   selectedProp: SceneProp | null;
@@ -60,6 +64,10 @@ interface ModelingModePanelProps {
   onClearMaterial: () => void;
   onApplyPreset: (presetId: MaterialPresetId) => void;
   onSetMaterialMap: (slot: 'mapDataUrl' | 'normalMapDataUrl', dataUrl: string | null) => void;
+  /** Hide the picked mesh / node from the device (Apple logos, emboss marks, stray parts). */
+  onRemovePickedMesh: () => void;
+  /** Restore every mesh removed on the picked device in this session / project. */
+  onRestoreHiddenMeshes: () => void;
   onPatchProp: (propId: string, patch: Partial<SceneProp>) => void;
   onUpdateGradient: (key: keyof GradientColors, hex: string) => void;
   onFocusStudioStop: (stop: StudioSetFocus) => void;
@@ -102,6 +110,7 @@ export default function ModelingModePanel({
   project,
   compositionName,
   activeTemplateId,
+  cameraOrbit = null,
   pickedMaterial,
   materialTweak,
   selectedProp,
@@ -112,6 +121,8 @@ export default function ModelingModePanel({
   onClearMaterial,
   onApplyPreset,
   onSetMaterialMap,
+  onRemovePickedMesh,
+  onRestoreHiddenMeshes,
   onPatchProp,
   onUpdateGradient,
   onFocusStudioStop,
@@ -188,9 +199,10 @@ export default function ModelingModePanel({
         label,
         project,
         category,
-        mode === 'update' && activeTemplateId
-          ? { id: activeTemplateId }
-          : undefined,
+        {
+          ...(mode === 'update' && activeTemplateId ? { id: activeTemplateId } : {}),
+          cameraOrbit,
+        },
       );
       const result = await shipCompositionTemplate(next);
       if (!result.ok) {
@@ -247,6 +259,14 @@ export default function ModelingModePanel({
   };
 
   const color = hexColor(materialTweak, pickedMaterial?.colorHex ?? '#c8ccd2');
+  const pickedDevice = pickedMaterial
+    ? project.devices.find((device) => device.id === pickedMaterial.deviceInstanceId) ?? null
+    : null;
+  const removedParts = pickedDevice?.hiddenMeshes ?? [];
+  const canRemovePickedMesh = Boolean(
+    pickedMaterial?.meshName
+    && !removedParts.includes(pickedMaterial.meshName),
+  );
   const propColor = selectedProp?.color && /^#[0-9a-fA-F]{6}$/.test(selectedProp.color)
     ? selectedProp.color
     : selectedProp?.kind === 'stage'
@@ -269,7 +289,7 @@ export default function ModelingModePanel({
 
       <section className="modeling-mode-section modeling-mode-material">
         <h4><Palette size={14} /> Material</h4>
-        <p>Tap a surface, backdrop, or stage — its colour highlights here.</p>
+        <p>Tap a surface to edit it — or Remove part for logos and stray meshes.</p>
 
         {pickedMaterial ? (
           <>
@@ -277,6 +297,41 @@ export default function ModelingModePanel({
               <strong>{pickedMaterial.materialName}</strong>
               <button type="button" className="text-button" onClick={onPickClear}>Deselect</button>
             </div>
+            {pickedMaterial.meshName && pickedMaterial.meshName !== pickedMaterial.materialName && (
+              <p className="modeling-mode-hint" style={{ marginTop: -4 }}>
+                Part <code>{pickedMaterial.meshName}</code>
+              </p>
+            )}
+
+            <div className="modeling-mode-chip-row" style={{ marginBottom: 8 }}>
+              <button
+                type="button"
+                className="text-button"
+                disabled={!canRemovePickedMesh}
+                title={canRemovePickedMesh
+                  ? `Remove “${pickedMaterial.meshName}” from this device`
+                  : 'Tap a mesh part to remove it'}
+                onClick={onRemovePickedMesh}
+              >
+                <Trash2 size={12} /> Remove part
+              </button>
+              {removedParts.length > 0 && (
+                <button
+                  type="button"
+                  className="text-button"
+                  title="Bring back every part removed on this device"
+                  onClick={onRestoreHiddenMeshes}
+                >
+                  Restore {removedParts.length} removed
+                </button>
+              )}
+            </div>
+            {removedParts.length > 0 && (
+              <p className="modeling-mode-hint">
+                Removed: {removedParts.slice(0, 4).map((name) => name).join(', ')}
+                {removedParts.length > 4 ? ` +${removedParts.length - 4}` : ''}
+              </p>
+            )}
 
             <label className="modeling-mode-color-field is-highlighted">
               <span>Colour</span>
@@ -637,8 +692,9 @@ export default function ModelingModePanel({
       <section className="modeling-mode-section">
         <h4><LayoutTemplate size={14} /> Ship for all users</h4>
         <p>
-          Writes <code>src/data/shippedTemplates.json</code> and updates Devices/Scenes
-          live — flip the workspace to <strong>User</strong> to verify the same layouts.
+          Push into the main Devices/Scenes templates
+          (<code>src/data/shippedTemplates.json</code>). Update overwrites the linked
+          layout; Ship as new adds one. Flip to <strong>User</strong> to verify.
         </p>
         {canUpdateExisting && (
           <p className="modeling-mode-active-id">

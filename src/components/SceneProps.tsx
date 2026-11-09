@@ -565,10 +565,12 @@ function ConcreteMaterial({ tint = TONE_CONCRETE, seed = 1 }: { tint?: string; s
  * `uv` tiles paper maps in world units; `shade` (uv2.x) blends floor → wall colour.
  */
 export function createCycloramaGeometry() {
-  const width = 12;
+  // Wide + deep floor so the front lip stays out of typical product framing —
+  // a short floor reads as a hard horizontal line and clips the PCSS cast.
+  const width = 22;
   const radius = 2.05;
   const centerZ = 0.15;
-  const floorFront = 3.2;
+  const floorFront = 10;
   const wallTop = 5.8;
   /** World metres per paper-texture repeat — keeps grain readable at studio scale. */
   const tile = 1.15;
@@ -814,10 +816,52 @@ function applyCycloramaVertexColors(
   color.needsUpdate = true;
 }
 
+/** Invisible PCSS receiver that shares the paper mesh — darkens floor, cove, and
+ *  wall without a coplanar catcher plate (those stripe the seamless). */
+function CycloramaShadowOverlay({
+  geometry,
+  opacity,
+  color,
+}: {
+  geometry: THREE.BufferGeometry;
+  opacity: number;
+  color: string;
+}) {
+  const mesh = useRef<THREE.Mesh>(null);
+  useLayoutEffect(() => {
+    const target = mesh.current;
+    if (!target) return;
+    target.layers.set(1);
+    target.raycast = () => null;
+  }, []);
+  if (opacity < 0.008) return null;
+  return (
+    <mesh
+      ref={mesh}
+      geometry={geometry}
+      layers={1}
+      receiveShadow
+      castShadow={false}
+      renderOrder={2}
+      userData={{ isStudioBackdrop: true, studioShadowCatcher: true }}
+    >
+      <shadowMaterial
+        transparent
+        opacity={THREE.MathUtils.clamp(opacity, 0, 0.88)}
+        color={color}
+        depthWrite={false}
+        toneMapped={false}
+        polygonOffset
+        polygonOffsetFactor={-1}
+        polygonOffsetUnits={-4}
+      />
+    </mesh>
+  );
+}
+
 /** Paper cyclorama used by the Soft Studio look and the studio backdrop prop.
- *  Kept unlit — softboxes wash meshStandard key shadows away, and coplanar
- *  catchers stripe the seamless. The floor card draws the silhouette;
- *  vertex colour only adds a wide faint pool into the cove. */
+ *  Unlit vertex colours keep the seamless flat; a ShadowMaterial overlay of the
+ *  same sweep receives the key PCSS so casts land on floor, cove, and wall. */
 export function CycloramaBackdrop({
   color,
   floor,
@@ -825,6 +869,8 @@ export function CycloramaBackdrop({
   onSelect,
   contactPoints = [],
   contactStrength = 0,
+  shadowOpacity = 0,
+  shadowColor = '#1a1c22',
 }: {
   color: string;
   floor?: string;
@@ -832,7 +878,7 @@ export function CycloramaBackdrop({
   onSelect?: () => void;
   contactPoints?: CycloramaContactPoint[];
   contactStrength?: number;
-  /** @deprecated Soft contact is ContactShadows; accepted for older call sites. */
+  /** ShadowMaterial overlay opacity (0 hides the receiver). */
   shadowOpacity?: number;
   shadowSoftness?: number;
   lightPosition?: Vec3;
@@ -859,23 +905,31 @@ export function CycloramaBackdrop({
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   return (
-    <mesh
-      geometry={geometry}
-      layers={1}
-      receiveShadow={false}
-      castShadow={false}
-      userData={{ isStudioBackdrop: true }}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSelect?.();
-      }}
-      onPointerDown={(event) => {
-        // Claim the tap so orbit / device grab don't steal backdrop colour edits.
-        if (event.button === 0) event.stopPropagation();
-      }}
-    >
-      <meshBasicMaterial vertexColors toneMapped={false} />
-    </mesh>
+    <group>
+      <mesh
+        geometry={geometry}
+        layers={1}
+        receiveShadow={false}
+        castShadow={false}
+        userData={{ isStudioBackdrop: true }}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect?.();
+        }}
+        onPointerDown={(event) => {
+          // Claim the tap so orbit / device grab don't steal backdrop colour edits.
+          if (event.button === 0) event.stopPropagation();
+        }}
+      >
+        {/* Unlit paper — wrap lights must not wash the overlay stain. */}
+        <meshBasicMaterial vertexColors toneMapped={false} />
+      </mesh>
+      <CycloramaShadowOverlay
+        geometry={geometry}
+        opacity={shadowOpacity}
+        color={shadowColor}
+      />
+    </group>
   );
 }
 

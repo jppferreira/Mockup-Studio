@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Pixel Watch preview</title>
+  <style>
+    html, body { margin: 0; background: #f4f1ec; height: 100%; }
+    canvas { width: 100vw; height: 100vh; display: block; }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+    const params = new URLSearchParams(location.search);
+    const view = params.get('view') || 'front';
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(1);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#f3f0ea');
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    const camera = new THREE.PerspectiveCamera(32, window.innerWidth / window.innerHeight, 0.1, 100);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+    const key = new THREE.DirectionalLight(0xfff6ea, 2.4);
+    key.position.set(-2.2, 4.5, 5);
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0xdde7ff, 0.7);
+    fill.position.set(3, 1.5, -2);
+    scene.add(fill);
+
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync('./models/pixel_watch.glb');
+    const root = gltf.scene;
+    root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(root);
+    const size = box.getSize(new THREE.Vector3());
+    const scale = 3 / Math.max(size.y, 0.001);
+    root.scale.setScalar(scale);
+    root.updateMatrixWorld(true);
+    const center = new THREE.Box3().setFromObject(root).getCenter(new THREE.Vector3());
+    root.position.sub(center);
+    scene.add(root);
+
+    const aim = new THREE.Vector3(0.15, 0.05, 0.72);
+    const views = {
+      front: { eye: [0.55, 0.22, 3.55], aim },
+      side: { eye: [3.6, 0.15, 0.55], aim: new THREE.Vector3(0, 0, 0.2) },
+      back: { eye: [-0.35, 0.2, -2.15], aim },
+      three: { eye: [1.85, 0.72, 2.85], aim },
+    };
+    const shot = views[view] || views.three;
+    camera.position.set(shot.eye[0], shot.eye[1], shot.eye[2]);
+    camera.lookAt(shot.aim);
+    controls.target.copy(shot.aim);
+    controls.update();
+
+    function tick() {
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    }
+    tick();
+    window.__ready = true;
+  </script>
+</body>
+</html>

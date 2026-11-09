@@ -1,12 +1,12 @@
 import {
-  Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  Suspense, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type MutableRefObject, type ReactNode,
 } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, TransformControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { getDevice, type DeviceUv } from '../lib/devices';
+import { DEVICE_MODEL_PACK_VERSION, getDevice, type DeviceUv } from '../lib/devices';
 import { applyLidOpen, setupLidRig, type LidRig } from '../lib/deviceLid';
 import { applyProgressiveEdgeBlur } from '../lib/edgeBlur';
 import { accentPair, useAccentTheme } from '../lib/accentTheme';
@@ -15,7 +15,13 @@ import {
   renderOutputGain,
   setRenderGradeGain,
 } from '../lib/renderRealism';
-import { installProgressiveShadowShader } from '../lib/progressiveShadows';
+import {
+  installProgressiveShadowShader,
+  refreshShadowMaterials,
+  releaseProgressiveShadowProfile,
+  retainProgressiveShadowProfile,
+  type ProgressiveShadowProfile,
+} from '../lib/progressiveShadows';
 import { useScreenEmissiveMap } from '../lib/useScreenTexture';
 import {
   applySurfaceLook,
@@ -32,6 +38,7 @@ import ExtrudedText from './ExtrudedText';
 import ExtrudedShape from './ExtrudedShape';
 import { AnnotationDrawController, ModelAnnotationLayer, type AnnotationMark } from './ModelAnnotations';
 import {
+  StudioAmbientOcclusion,
   StudioDepthOfField,
   StudioExposure,
   StudioHdri,
@@ -45,7 +52,9 @@ import LightTranslateGizmo from './LightTranslateGizmo';
 import { STUDIO_DEVICE_HEIGHT } from '../lib/studioEnvironment';
 import {
   collectCasterBounds,
+  DEFAULT_SHADOW_COLOR,
   fitDirectionalShadowCamera,
+  opacityToShadowStrength,
   resolveKeyShadowMapSize,
   shadowIntensityCurve,
   softnessToPenumbra,
@@ -57,6 +66,9 @@ import {
   type GradientColors, type MockupProject, type ShadowQuality, type Vec3,
 } from '../types';
 import { STUDIO_FLOOR_Y } from '../lib/studioEnvironment';
+
+/** Live preview DPR — Retina 2× is expensive with shadows + grade; thumbs still pass pixelRatio. */
+const LIVE_CANVAS_DPR: [number, number] = [1, 1.5];
 
 
 export type CaptureApi = {
@@ -85,6 +97,8 @@ export type ViewGesture = 'pan' | 'zoom' | 'rotate' | 'longpress' | 'swipe';
 export type MaterialPickPayload = {
   deviceInstanceId: string;
   materialName: string;
+  /** Mesh / node name under the pointer — used by DEV “Remove part”. */
+  meshName?: string;
   /** Current authored hex when readable from the hit material */
   colorHex?: string;
 };
@@ -381,15 +395,32 @@ async function applyMaterialTextureTweaks(
   if (jobs.length) await Promise.all(jobs);
 }
 
-function materialFromHit(hit: THREE.Intersection): { material: THREE.Material; name: string } | null {
+function isBrandLogoName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  return (
+    /^apple$/i.test(trimmed)
+    || /(?:^|[_\s.-])(?:apple\s*)?logo(?:$|[_\s.-])/i.test(trimmed)
+    || /apple[\s_-]*logo/i.test(trimmed)
+  );
+}
+
+function materialFromHit(hit: THREE.Intersection): {
+  material: THREE.Material;
+  name: string;
+  meshName: string;
+} | null {
   const mesh = hit.object as THREE.Mesh;
   if (!mesh?.isMesh) return null;
   const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   const index = typeof hit.face?.materialIndex === 'number' ? hit.face.materialIndex : 0;
   const mat = mats[Math.min(Math.max(0, index), mats.length - 1)];
   if (!mat) return null;
-  const name = (mat.name && mat.name.trim()) || (mesh.name && mesh.name.trim()) || 'Material';
-  return { material: mat, name };
+  const meshName = (mesh.name && mesh.name.trim())
+    || (mesh.parent?.name && mesh.parent.name.trim())
+    || '';
+  const name = (mat.name && mat.name.trim()) || meshName || 'Material';
+  return { material: mat, name, meshName: meshName || name };
 }
 
 function highlightMaterialSelection(
@@ -604,7 +635,82 @@ function isDisplayScreenMaterialName(name: string): boolean {
   return /^(screen|display|oled|lcd)([._-]?\d+)?$/.test(lower);
 }
 
+/** Mesh names that are the replaceable display panel (not Glass_Screen covers). */
+function isScreenMeshName(name: string): boolean {
+  const lower = (name || '').toLowerCase().trim();
+  if (!lower || /glass/.test(lower)) return false;
+  return /^(fold_)?screen([._-]?\d+)?$/.test(lower) || /^(display)([._-]?\d+)?$/.test(lower);
+}
+
+/**
+ * Pack GLBs often share one atlas material between body + Screen mesh (Black / Graphite).
+ * Clone that material onto screen meshes only so painting the display never wipes body color.
+ */
+function isolateScreenMaterials(
+  root: THREE.Object3D,
+  preferredName: string,
+): THREE.MeshStandardMaterial | null {
+  type Slot = { mesh: THREE.Mesh; index: number; mat: THREE.Material };
+  const screenSlots: Slot[] = [];
+  const bodyUsers = new Set<THREE.Material>();
+
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const onScreen = isScreenMeshName(mesh.name);
+    mats.forEach((mat, index) => {
+      if (!mat) return;
+      if (onScreen) screenSlots.push({ mesh, index, mat });
+      else bodyUsers.add(mat);
+    });
+  });
+
+  if (screenSlots.length === 0) return null;
+
+  const pickSlot = () => {
+    const preferred = screenSlots.find((s) => s.mat.name === preferredName);
+    if (preferred) return preferred;
+    const named = screenSlots.find((s) => isDisplayScreenMaterialName(s.mat.name || ''));
+    if (named) return named;
+    return screenSlots[0];
+  };
+
+  const primary = pickSlot();
+  const sharedWithBody = bodyUsers.has(primary.mat);
+  let screenMat = primary.mat as THREE.MeshStandardMaterial;
+
+  if (sharedWithBody) {
+    const clone = primary.mat.clone() as THREE.MeshStandardMaterial;
+    // Keep a display-looking name so lockMaterials / screen pipelines accept it,
+    // without renaming the authored body material the clone came from.
+    clone.name = isDisplayScreenMaterialName(preferredName)
+      || (/screen|display|oled|lcd/i.test(preferredName) && !/glass/i.test(preferredName))
+      ? preferredName
+      : 'Screen';
+    clone.userData = { ...clone.userData, isolatedDisplay: true };
+    const replace = new Set(
+      screenSlots
+        .filter((s) => s.mat === primary.mat)
+        .map((s) => s.mesh),
+    );
+    for (const mesh of replace) {
+      if (Array.isArray(mesh.material)) {
+        mesh.material = mesh.material.map((m) => (m === primary.mat ? clone : m));
+      } else {
+        mesh.material = clone;
+      }
+    }
+    screenMat = clone;
+  }
+
+  return screenMat;
+}
+
 function findScreenMaterial(root: THREE.Object3D, preferredName: string): THREE.MeshStandardMaterial | null {
+  const isolated = isolateScreenMaterials(root, preferredName);
+  if (isolated) return isolated;
+
   let preferred: THREE.MeshStandardMaterial | null = null;
   let fallback: THREE.MeshStandardMaterial | null = null;
   root.traverse((obj) => {
@@ -818,13 +924,24 @@ function ScreenDropHighlight({
     };
   }, [active, root, material]);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock, invalidate }) => {
+    if (!matsRef.current.length && !screenMatRef.current) return;
     const pulse = 0.5 + Math.sin(clock.elapsedTime * 5.5) * 0.18;
     for (const mat of matsRef.current) mat.opacity = pulse;
     const screenMat = screenMatRef.current;
     if (screenMat) screenMat.emissiveIntensity = 0.9 + Math.sin(clock.elapsedTime * 5.5) * 0.35;
+    // Demand frameloop: keep pulsing while the drop highlight is mounted.
+    invalidate();
   });
 
+  return null;
+}
+
+/** Keeps the demand frameloop alive while media / continuous contact shadows need frames. */
+function DemandKeepAlive({ active }: { active: boolean }) {
+  useFrame(({ invalidate }) => {
+    if (active) invalidate();
+  });
   return null;
 }
 
@@ -853,6 +970,9 @@ function GltfDeviceContent({
   lidOpen = 1,
   dropHighlight = false,
   materialTweaks,
+  hiddenMeshes,
+  /** DEV modeling: keep brand marks visible so they can be removed from the panel. */
+  preserveBrandMarks = false,
   selectedMaterialName = null,
 }: {
   url: string;
@@ -867,6 +987,8 @@ function GltfDeviceContent({
   lidOpen?: number;
   dropHighlight?: boolean;
   materialTweaks?: Record<string, Record<string, number | boolean | string | null>>;
+  hiddenMeshes?: string[];
+  preserveBrandMarks?: boolean;
   selectedMaterialName?: string | null;
 }) {
   const device = getDevice(deviceId);
@@ -884,13 +1006,23 @@ function GltfDeviceContent({
   }, [device.tweaks, materialTweaks]);
   const { scene, animations } = useGLTF(url);
   const lidRigRef = useRef<LidRig | null>(null);
+  const hiddenMeshKey = (hiddenMeshes ?? []).join('\0');
   const root = useMemo(() => {
     const hasSkin = Boolean(scene.getObjectByProperty('isSkinnedMesh', true));
     const cloned = (hasSkin ? cloneSkinned(scene) : scene.clone(true)) as THREE.Object3D;
     const map = new Map<THREE.Material, THREE.Material>();
-    const hidden = new Set(device.hideNodes ?? []);
+    // DEV modeling keeps library hideNodes / auto logos visible so parts can be
+    // removed from the panel. User mode still applies the authored cleanup.
+    const hidden = new Set([
+      ...(preserveBrandMarks ? [] : (device.hideNodes ?? [])),
+      ...(hiddenMeshes ?? []),
+    ]);
     const drop: THREE.Object3D[] = [];
     cloned.traverse((obj) => {
+      const autoLogo = !preserveBrandMarks && obj.name && isBrandLogoName(obj.name);
+      if (hidden.has(obj.name) || autoLogo) {
+        obj.visible = false;
+      }
       const mesh = obj as THREE.Mesh;
       if (!mesh.isMesh) return;
       if (hidden.has(mesh.name)) mesh.visible = false;
@@ -922,7 +1054,9 @@ function GltfDeviceContent({
       poseOpenAnimation(cloned, animations);
     }
     return cloned;
-  }, [scene, animations, device.lid, device.screenMat, device.hideNodes, device.dropNameIncludes]);
+    // hiddenMeshKey stands in for hiddenMeshes contents without array-identity churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scene, animations, device.lid, device.screenMat, device.hideNodes, device.dropNameIncludes, hiddenMeshKey, preserveBrandMarks]);
 
   useLayoutEffect(() => {
     if (!lidRigRef.current) return;
@@ -971,7 +1105,8 @@ function GltfDeviceContent({
       : findScreenMaterial(root, device.screenMat);
     if (found && device.lockMaterials) {
       const name = found.name || '';
-      const looksLikeScreen = isDisplayScreenMaterialName(name)
+      const looksLikeScreen = Boolean(found.userData?.isolatedDisplay)
+        || isDisplayScreenMaterialName(name)
         || (/screen|display|oled|lcd/i.test(name) && !/glass/i.test(name));
       if (!looksLikeScreen) found = null;
     }
@@ -980,7 +1115,18 @@ function GltfDeviceContent({
       // shared GLB texture atlas onto the display (Apple logos / camera circles).
       const authoredEmissive = (found.emissiveMap || null) as THREE.Texture | null;
       const uvReference = (authoredEmissive || found.map || null) as THREE.Texture | null;
-      const screenMaterial = upgradeToPhysical(root, found);
+      // Isolated display clones must not run replaceMaterialEverywhere on the body.
+      const screenMaterial = found.userData?.isolatedDisplay
+        ? ((found as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial
+          ? found as THREE.MeshPhysicalMaterial
+          : (() => {
+            const phys = physicalFromAuthored(found);
+            phys.name = found.name;
+            phys.userData = { ...found.userData, glassUpgraded: true, isolatedDisplay: true };
+            replaceMaterialEverywhere(root, found, phys);
+            return phys;
+          })())
+        : upgradeToPhysical(root, found);
       screenMaterial.emissive = new THREE.Color(0xffffff);
       screenMaterial.emissiveIntensity = 1;
       screenMaterial.toneMapped = false;
@@ -1152,12 +1298,20 @@ function pickGrabTarget(
     }
   }
   if (gizmoDistance === Number.POSITIVE_INFINITY) return { object, gizmoWins: false };
-  // Empty canvas / floor beside the model: always leave OrbitControls alone.
-  // Ring pickers sit closer than the orbit floor near the phone, so a
-  // distance test freezes the camera for nearby empty drags (often with no
-  // real handle drag either — dead gesture). A lone gizmo hit into void
-  // (no floor/backdrop along the ray) still means the pointer is on a handle.
+  // Empty canvas / floor beside the model: leave OrbitControls alone for rotate
+  // rings — fat tori sit closer than the orbit floor near the phone, so a
+  // naive distance test freezes the camera on nearby empty drags. Translate
+  // arrows intentionally stick past the silhouette into floor/backdrop space;
+  // if we suppress those too, the coloured handles only work when zoomed in
+  // enough that the ray also hits the body. A lone gizmo hit into void (no
+  // floor/backdrop along the ray) still means the pointer is on a handle.
   if (!object) {
+    if (
+      translateGizmoDistance < Number.POSITIVE_INFINITY
+      && translateGizmoDistance <= solidDistance + 0.05
+    ) {
+      return { object: null, gizmoWins: true };
+    }
     return {
       object: null,
       gizmoWins: solidDistance === Number.POSITIVE_INFINITY,
@@ -1165,10 +1319,11 @@ function pickGrabTarget(
   }
   // Axis arrows sit on / just behind the body silhouette. If we only let the
   // closer hit win, suppressGesture kills the coloured arrows and the body
-  // free-rotate steals left/right/up/down moves.
+  // free-rotate steals left/right/up/down moves. Keep a generous slack so
+  // tips beside the body still win when the gizmo is large on screen.
   if (
     translateGizmoDistance < Number.POSITIVE_INFINITY
-    && translateGizmoDistance <= object.distance + 0.5
+    && translateGizmoDistance <= object.distance + 1.25
   ) {
     return { object, gizmoWins: true };
   }
@@ -1523,6 +1678,7 @@ function DeviceGrabController({
               onPickMaterialRef.current?.({
                 deviceInstanceId: deviceId,
                 materialName: resolved.name,
+                meshName: resolved.meshName,
                 colorHex: hex ? `#${hex}` : undefined,
               });
             };
@@ -1609,6 +1765,7 @@ function DeviceGrabController({
           pendingMaterial = {
             deviceInstanceId: target.id,
             materialName: resolved.name,
+            meshName: resolved.meshName,
             colorHex: hex ? `#${hex}` : undefined,
           };
         }
@@ -1761,6 +1918,7 @@ function DeviceModelView({
   selectedOverlayId = null,
   onSelectOverlay,
   selectedMaterialName = null,
+  preserveBrandMarks = false,
 }: {
   instance: DeviceInstance;
   screenshot: string | null;
@@ -1780,6 +1938,7 @@ function DeviceModelView({
   selectedOverlayId?: string | null;
   onSelectOverlay?: (id: string) => void;
   selectedMaterialName?: string | null;
+  preserveBrandMarks?: boolean;
 }) {
   const device = getDevice(instance.deviceId);
   const positionRef = useRef<THREE.Group>(null);
@@ -1874,6 +2033,7 @@ function DeviceModelView({
               clayMode={clayMode}
               mediaPlaying={mediaPlaying}
               dropHighlight={dropHighlight}
+              lidOpen={instance.lidOpen ?? 1}
             />
           ) : device.url ? (
             <GltfDeviceContent
@@ -1890,6 +2050,8 @@ function DeviceModelView({
               lidOpen={instance.lidOpen ?? 1}
               dropHighlight={dropHighlight}
               materialTweaks={instance.materialTweaks}
+              hiddenMeshes={instance.hiddenMeshes}
+              preserveBrandMarks={preserveBrandMarks}
               selectedMaterialName={selectedMaterialName}
             />
           ) : null}
@@ -2158,6 +2320,7 @@ function KeyLightRig({
   castShadow,
   shadowSoftness,
   shadowOpacity,
+  shadowDistance = 3.6,
   shadowQuality = 'auto',
   shadowExportBoost = false,
   gizmoActive,
@@ -2172,6 +2335,7 @@ function KeyLightRig({
   castShadow: boolean;
   shadowSoftness: number;
   shadowOpacity: number;
+  shadowDistance?: number;
   shadowQuality?: ShadowQuality;
   shadowExportBoost?: boolean;
   gizmoActive: boolean;
@@ -2187,6 +2351,9 @@ function KeyLightRig({
   const boundsRef = useRef(new THREE.Box3());
   const lastFitKey = useRef('');
   const fitFrame = useRef(0);
+  const pcssProfile: ProgressiveShadowProfile = mode === 'interactive' && !shadowExportBoost
+    ? 'interactive'
+    : 'studio';
 
   useLayoutEffect(() => {
     const light = lightRef.current;
@@ -2194,7 +2361,21 @@ function KeyLightRig({
     light.position.set(position.x, position.y, position.z);
     light.target.position.set(target.x, target.y, target.z);
     light.target.updateMatrixWorld();
+    // Layer 1 = cyclorama paper. Key must reach it so PCSS darkens devices/shapes on the set.
+    light.layers.enable(1);
   }, [position.x, position.y, position.z, target.x, target.y, target.z]);
+
+  useEffect(() => {
+    // Lighter PCSS while orbiting; full filter once every canvas idles into studio.
+    // Ref-counted so split view does not thrash the shared ShaderChunk.
+    const changed = retainProgressiveShadowProfile(pcssProfile);
+    if (changed) refreshShadowMaterials(scene);
+    return () => {
+      if (releaseProgressiveShadowProfile(pcssProfile)) {
+        refreshShadowMaterials(scene);
+      }
+    };
+  }, [pcssProfile, scene]);
 
   useEffect(() => {
     const light = lightRef.current;
@@ -2208,9 +2389,11 @@ function KeyLightRig({
     // produces a contact-hardening penumbra. Scale with map size so the
     // world-space penumbra stays the same at 2048 and 4096.
     light.shadow.radius = penumbra.emitterSize * (size / 2048);
-    light.shadow.bias = -0.0002;
-    light.shadow.normalBias = 0.025;
-    light.shadow.blurSamples = size >= 2048 ? 12 : 8;
+    // Slightly stronger normal bias as the emitter grows — kills acne without peter-panning.
+    const softnessT = THREE.MathUtils.smoothstep(0.2, 14, shadowSoftness);
+    light.shadow.bias = -0.00018;
+    light.shadow.normalBias = THREE.MathUtils.lerp(0.022, 0.05, softnessT);
+    light.shadow.blurSamples = size >= 2048 ? 16 : 8;
     // 0 fades the cast out; 1 is the soft default core; above 1 crushes soft
     // penumbras that never fully occlude (shader clamps the darkened result).
     light.shadow.intensity = Math.max(0, shadowIntensityCurve(shadowOpacity, 1, 2.6));
@@ -2244,7 +2427,12 @@ function KeyLightRig({
       target,
       boundsRef.current,
       STUDIO_FLOOR_Y,
-      { padding: 1.4, minExtent: 1.6, maxExtent: 16 },
+      {
+        padding: 1.35 + Math.min(0.45, shadowDistance * 0.04),
+        minExtent: 1.6,
+        // Wide enough that cove / wall projections of a standing phone stay in-map.
+        maxExtent: THREE.MathUtils.clamp(16 + shadowDistance * 0.85, 16, 24),
+      },
     );
     if (!fitted) return;
     const key = [
@@ -2293,15 +2481,65 @@ function KeyLightRig({
   );
 }
 
+/** OrbitControls keeps pending rotate/pan deltas on these fields. */
+type OrbitControlsLike = {
+  enableDamping?: boolean;
+  target: THREE.Vector3;
+  update: () => void;
+  _sphericalDelta?: { set: (radius: number, phi: number, theta: number) => void };
+  _panOffset?: THREE.Vector3;
+  _scale?: number;
+};
+
+/** Drop leftover inertia when the controls expose it (three.js native OrbitControls). */
+function clearOrbitInertia(controls: OrbitControlsLike | null | undefined) {
+  if (!controls) return;
+  controls._sphericalDelta?.set(0, 0, 0);
+  controls._panOffset?.set(0, 0, 0);
+  if (typeof controls._scale === 'number') controls._scale = 1;
+}
+
+/**
+ * Put the camera back where a gesture started.
+ * drei/three-stdlib keeps rotate deltas in a closure, so one damping-off update()
+ * applies+clears them (leaving a wrong pose). Re-stamp the start pose after that
+ * so empty-canvas taps do not jump.
+ */
+function restoreCameraPose(
+  camera: THREE.Camera,
+  controls: OrbitControlsLike | null | undefined,
+  position: THREE.Vector3,
+  target: THREE.Vector3,
+) {
+  if (!controls) {
+    camera.position.copy(position);
+    return;
+  }
+  clearOrbitInertia(controls);
+  const wasDamping = controls.enableDamping;
+  controls.enableDamping = false;
+  camera.position.copy(position);
+  controls.target.copy(target);
+  controls.update();
+  // Deltas are zero now — write the intended pose again so it sticks.
+  camera.position.copy(position);
+  controls.target.copy(target);
+  controls.update();
+  controls.enableDamping = wasDamping ?? true;
+}
+
 /** Instant pose write — damping off so format/device re-centers never ease. */
 function snapCameraPose(
   camera: THREE.Camera,
-  controls: { enableDamping?: boolean; target: THREE.Vector3; update: () => void } | null | undefined,
+  controls: OrbitControlsLike | null | undefined,
   position: Vec3,
   focus: Vec3,
 ) {
   const wasDamping = controls?.enableDamping;
-  if (controls) controls.enableDamping = false;
+  if (controls) {
+    clearOrbitInertia(controls);
+    controls.enableDamping = false;
+  }
   camera.position.set(position.x, position.y, position.z);
   camera.lookAt(focus.x, focus.y, focus.z);
   if (camera instanceof THREE.PerspectiveCamera) camera.updateProjectionMatrix();
@@ -2612,14 +2850,19 @@ function CameraRig({
     const tapSlop = () => (pointerType === 'touch' || pointerType === 'pen' ? 14 : 6);
 
     const restoreTapPose = () => {
-      const orbit = controls.current;
-      camera.position.copy(orbitStartPos.current);
-      if (!orbit) return;
-      const wasDamping = orbit.enableDamping;
-      orbit.enableDamping = false;
-      orbit.target.copy(orbitStartTarget.current);
-      orbit.update();
-      orbit.enableDamping = wasDamping ?? true;
+      restoreCameraPose(camera, controls.current, orbitStartPos.current, orbitStartTarget.current);
+    };
+
+    const commitOrbitDrag = () => {
+      if (orbitDragCommittedRef.current) return;
+      orbitDragCommittedRef.current = true;
+      // Rotate pivots around the device — snap look-at only once this is a real drag.
+      // Doing it in onStart made empty-canvas taps jump whenever the view was panned.
+      const zooming = gestureZoomRef.current || dragZoomRef.current;
+      if (!dragPanRef.current && !zooming && controls.current && userOrbitingRef.current) {
+        const f = focusRef.current;
+        controls.current.target.set(f.x, f.y, f.z);
+      }
     };
 
     const onPointerDown = (event: PointerEvent) => {
@@ -2638,8 +2881,15 @@ function CameraRig({
     };
     const onPointerMove = (event: PointerEvent) => {
       if (!tracking || orbitDragCommittedRef.current) return;
-      if (Math.hypot(event.clientX - startX, event.clientY - startY) < tapSlop()) return;
-      orbitDragCommittedRef.current = true;
+      if (Math.hypot(event.clientX - startX, event.clientY - startY) < tapSlop()) {
+        // Run after OrbitControls' document listener so its rotate delta is cleared.
+        requestAnimationFrame(() => {
+          if (!tracking || orbitDragCommittedRef.current) return;
+          restoreTapPose();
+        });
+        return;
+      }
+      commitOrbitDrag();
     };
     const onPointerUp = () => {
       if (!tracking) return;
@@ -2647,6 +2897,10 @@ function CameraRig({
       if (orbitDragCommittedRef.current) return;
       // Tap with no real drag — put the camera back and drop any damping spin.
       restoreTapPose();
+      requestAnimationFrame(() => {
+        if (orbitDragCommittedRef.current) return;
+        restoreTapPose();
+      });
     };
     const onWheel = () => {
       orbitDragCommittedRef.current = true;
@@ -2728,14 +2982,7 @@ function CameraRig({
     if (!userOrbitingRef.current) return;
     const committed = orbitDragCommittedRef.current;
     if (!committed) {
-      camera.position.copy(orbitStartPos.current);
-      if (controls.current) {
-        const wasDamping = controls.current.enableDamping;
-        controls.current.enableDamping = false;
-        controls.current.target.copy(orbitStartTarget.current);
-        controls.current.update();
-        controls.current.enableDamping = wasDamping ?? true;
-      }
+      restoreCameraPose(camera, controls.current, orbitStartPos.current, orbitStartTarget.current);
       userOrbitingRef.current = false;
       settlingRef.current = false;
       shadowBusyRef.current?.setBusy(false);
@@ -2815,13 +3062,9 @@ function CameraRig({
         settlingRef.current = false;
         shadowBusyRef.current?.setBusy(true);
         if (settleTimer.current != null) window.clearTimeout(settleTimer.current);
-        // Rotate pivots around the device. Zoom / pan must keep the current
-        // look-at so dolly stays centered on what the user is viewing.
-        const zooming = gestureZoomRef.current || dragZoomRef.current;
-        if (!dragPanRef.current && !zooming && controls.current) {
-          const f = focusRef.current;
-          controls.current.target.set(f.x, f.y, f.z);
-        }
+        // Do not snap the look-at here. Empty-canvas taps fire onStart before
+        // tap-slop commits; recentering the target made the camera jump.
+        // Real rotate drags snap the target once movement passes tap-slop.
         onOrbitStartRef.current?.();
       }}
       onChange={() => {
@@ -3030,36 +3273,31 @@ function CaptureBridge({
       }
     };
 
-    const presentedImage = () => new Promise<string>((resolve, reject) => {
-      // toDataURL of a WebGL canvas is blank until Chromium copies the presented frame back.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          try {
-            const src = gl.domElement;
-            if (src.width < 2 || src.height < 2) throw new Error('Thumbnail canvas has no pixels');
-            const out = document.createElement('canvas');
-            out.width = src.width;
-            out.height = src.height;
-            const c2d = out.getContext('2d', { willReadFrequently: true });
-            if (!c2d) throw new Error('Could not create export canvas');
-            c2d.drawImage(src, 0, 0);
-            const probe = c2d.getImageData(0, 0, Math.min(48, out.width), Math.min(28, out.height)).data;
-            let sum = 0;
-            let n = 0;
-            for (let i = 0; i < probe.length; i += 4) {
-              sum += (probe[i] + probe[i + 1] + probe[i + 2]) / 3;
-              n += 1;
-            }
-            const mean = n ? sum / n : 0;
-            if (mean < 24) throw new Error('Presented thumbnail was blank');
-            const url = out.toDataURL('image/webp', 0.82);
-            resolve(url.startsWith('data:image/webp') ? url : out.toDataURL('image/png'));
-          } catch (error) {
-            reject(error);
-          }
-        });
-      });
-    });
+    const presentedImage = async () => {
+      // preserveDrawingBuffer is off for live preview — force a render and read
+      // synchronously before the browser clears the drawing buffer.
+      scene.updateMatrixWorld(true);
+      gl.render(scene, camera);
+      const src = gl.domElement;
+      if (src.width < 2 || src.height < 2) throw new Error('Thumbnail canvas has no pixels');
+      const out = document.createElement('canvas');
+      out.width = src.width;
+      out.height = src.height;
+      const c2d = out.getContext('2d', { willReadFrequently: true });
+      if (!c2d) throw new Error('Could not create export canvas');
+      c2d.drawImage(src, 0, 0);
+      const probe = c2d.getImageData(0, 0, Math.min(48, out.width), Math.min(28, out.height)).data;
+      let sum = 0;
+      let n = 0;
+      for (let i = 0; i < probe.length; i += 4) {
+        sum += (probe[i] + probe[i + 1] + probe[i + 2]) / 3;
+        n += 1;
+      }
+      const mean = n ? sum / n : 0;
+      if (mean < 24) throw new Error('Presented thumbnail was blank');
+      const url = out.toDataURL('image/webp', 0.82);
+      return url.startsWith('data:image/webp') ? url : out.toDataURL('image/png');
+    };
 
     captureRef.current = {
       toPresentedImage: presentedImage,
@@ -3250,6 +3488,7 @@ function SceneDevices({
             selectedMaterialName={
               selectedMaterialDeviceId === instance.id ? selectedMaterialName : null
             }
+            preserveBrandMarks={materialEditEnabled}
           />
         );
       })}
@@ -3316,7 +3555,7 @@ function SceneDevices({
   );
 }
 
-export default function DeviceCanvas({
+function DeviceCanvasImpl({
   project,
   captureRef,
   gizmoMode = 'rotate',
@@ -3424,9 +3663,12 @@ export default function DeviceCanvas({
   return (
     <Canvas
       key={canvasId}
-      dpr={pixelRatio ?? [1, 2]}
+      // Idle scenes should not burn GPU — orbit / gizmos / playback call invalidate().
+      frameloop="demand"
+      dpr={pixelRatio ?? LIVE_CANVAS_DPR}
       shadows
-      gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'high-performance' }}
+      // preserveDrawingBuffer off for live fill-rate; CaptureBridge renders then reads sync.
+      gl={{ antialias: true, alpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' }}
       camera={{ position: [0, 0, EYE_CAMERA_DISTANCE], fov: EYE_PERSPECTIVE_FOV, near: 0.1, far: 100 }}
       style={{ width: '100%', height: '100%', background: studioPreset.clearColor, display: 'block' }}
       onCreated={({ gl }) => {
@@ -3435,7 +3677,7 @@ export default function DeviceCanvas({
         gl.toneMappingExposure = toneMappingExposure;
         // Rebuilds the shared shadow chunk from stock + PCSS so every canvas
         // (split view, thumbnails, exports) and HMR cycle lands on the same shader.
-        installProgressiveShadowShader();
+        installProgressiveShadowShader('studio');
         gl.shadowMap.enabled = true;
         // PCSS (contact-hardening) for mesh-to-mesh and floor cast; ContactShadows adds a light foot kiss.
         gl.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -3444,6 +3686,7 @@ export default function DeviceCanvas({
       onPointerMissed={() => onClearSelection?.()}
     >
       <StudioShadowInteractionProvider exportBoost={shadowExportBoost} busyExternal={shadowBusy}>
+        <DemandKeepAlive active={shadowBusy} />
         <Background
           preset={project.background}
           colors={project.background === 'transparent' ? null : project.gradientColors}
@@ -3458,6 +3701,9 @@ export default function DeviceCanvas({
           amount={project.depthOfField ? (project.depthOfFieldAmount ?? DEFAULT_PROJECT.depthOfFieldAmount) : 0}
           focus={resolvedFocus}
         />
+        <StudioAmbientOcclusion
+          amount={project.ambientOcclusion ?? DEFAULT_PROJECT.ambientOcclusion}
+        />
         <EnableBackdropPicking />
         <StudioLighting
           preset={studioPreset}
@@ -3469,6 +3715,9 @@ export default function DeviceCanvas({
           shadowOpacity={project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity}
           shadowType={project.shadowType ?? DEFAULT_PROJECT.shadowType}
           shadowContact={project.shadowContact ?? DEFAULT_PROJECT.shadowContact}
+          shadowContactEnabled={project.shadowContactEnabled !== false}
+          shadowDistance={project.shadowDistance ?? DEFAULT_PROJECT.shadowDistance}
+          shadowColor={project.shadowColor ?? studioPreset.shadow.color ?? DEFAULT_SHADOW_COLOR}
           shadowQuality={project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality}
           shadowExportBoost={shadowExportBoost}
           showGroundBase={showGroundBase}
@@ -3493,6 +3742,7 @@ export default function DeviceCanvas({
             }
             shadowSoftness={project.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness}
             shadowOpacity={project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity}
+            shadowDistance={project.shadowDistance ?? DEFAULT_PROJECT.shadowDistance}
             shadowQuality={project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality}
             shadowExportBoost={shadowExportBoost}
             gizmoActive={lightGizmoActive && gizmoActive && keyIntensity > 0.001}
@@ -3525,16 +3775,25 @@ export default function DeviceCanvas({
               onGizmoTargets={bindPropGizmoTargets}
               gizmoDraggingRef={sharedGizmoDraggingRef}
               backdropFloor={project.gradientColors.edge}
-              backdropShadowOpacity={Math.min(
-                0.68,
-                Math.max(0.18, project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity)
-                  * studioPreset.shadow.opacityScale
-                  * 1.25,
-              )}
+              backdropShadowOpacity={(
+                (project.shadowType ?? DEFAULT_PROJECT.shadowType) === 'off'
+                || (project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity) <= 0.01
+              )
+                ? 0
+                : THREE.MathUtils.clamp(
+                  opacityToShadowStrength(
+                    (project.shadowOpacity ?? DEFAULT_PROJECT.shadowOpacity)
+                      * studioPreset.shadow.opacityScale
+                      * 1.12,
+                    1,
+                  ).catcher * 1.3,
+                  0,
+                  0.86,
+                )}
               backdropShadowSoftness={project.shadowSoftness ?? DEFAULT_PROJECT.shadowSoftness}
               backdropLightPosition={lightPosition}
               backdropLightTarget={resolvedFocus}
-              backdropShadowColor={studioPreset.shadow.color}
+              backdropShadowColor={project.shadowColor ?? studioPreset.shadow.color}
             />
             <ExtrudedText
               overlays={project.overlays}
@@ -3612,6 +3871,121 @@ export default function DeviceCanvas({
   );
 }
 
+/** Ignore callback identity — App recreates lambdas often for UI-only state. */
+function canvasDataEqual(prev: Props, next: Props): boolean {
+  const keys = new Set([
+    ...Object.keys(prev),
+    ...Object.keys(next),
+  ]) as Set<keyof Props>;
+  for (const key of keys) {
+    if (typeof prev[key] === 'function' || typeof next[key] === 'function') continue;
+    if (prev[key] !== next[key]) return false;
+  }
+  return true;
+}
+
+const MemoDeviceCanvas = memo(DeviceCanvasImpl, canvasDataEqual);
+
+/**
+ * Always update a props ref so memoized callbacks stay fresh, while the heavy
+ * canvas tree only re-renders when data props change (project, playhead, etc.).
+ */
+export default function DeviceCanvas(props: Props) {
+  const propsRef = useRef(props);
+  propsRef.current = props;
+  const stableCallbacks = useMemo(() => ({
+    onSharedOrbitChange: (orbit: NonNullable<Props['sharedOrbit']>) => {
+      propsRef.current.onSharedOrbitChange?.(orbit);
+    },
+    onCameraCommit: (position: Vec3) => {
+      propsRef.current.onCameraCommit?.(position);
+    },
+    onOrbitStart: () => {
+      propsRef.current.onOrbitStart?.();
+    },
+    onSelectDevice: (payload: DeviceSelectPayload) => {
+      propsRef.current.onSelectDevice?.(payload);
+    },
+    onSelectProp: (id: string) => {
+      propsRef.current.onSelectProp?.(id);
+    },
+    onSelectBackdrop: () => {
+      propsRef.current.onSelectBackdrop?.();
+    },
+    onSelectSky: () => {
+      propsRef.current.onSelectSky?.();
+    },
+    onSelectFloor: () => {
+      propsRef.current.onSelectFloor?.();
+    },
+    onSelectOverlay: (id: string) => {
+      propsRef.current.onSelectOverlay?.(id);
+    },
+    onHoverDevice: (id: string | null) => {
+      propsRef.current.onHoverDevice?.(id);
+    },
+    onDragTargetDevice: (id: string | null) => {
+      propsRef.current.onDragTargetDevice?.(id);
+    },
+    onDeviceContextMenu: (payload: DeviceSelectPayload) => {
+      propsRef.current.onDeviceContextMenu?.(payload);
+    },
+    onClearSelection: () => {
+      propsRef.current.onClearSelection?.();
+    },
+    onRotateDevice: (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => {
+      propsRef.current.onRotateDevice?.(id, rotation, opts);
+    },
+    onMoveDevice: (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => {
+      propsRef.current.onMoveDevice?.(id, position, opts);
+    },
+    onMoveProp: (id: string, position: Vec3) => {
+      propsRef.current.onMoveProp?.(id, position);
+    },
+    onRotateProp: (id: string, rotation: Vec3) => {
+      propsRef.current.onRotateProp?.(id, rotation);
+    },
+    onSelectEmpty: (target: 'sky' | 'floor' | 'backdrop') => {
+      propsRef.current.onSelectEmpty?.(target);
+    },
+    onGizmoDraggingChange: (dragging: boolean) => {
+      propsRef.current.onGizmoDraggingChange?.(dragging);
+    },
+    onLightPositionChange: (position: Vec3) => {
+      propsRef.current.onLightPositionChange?.(position);
+    },
+    onSceneLightPositionChange: (id: string, position: Vec3) => {
+      propsRef.current.onSceneLightPositionChange?.(id, position);
+    },
+    onSelectSceneLight: (id: string) => {
+      propsRef.current.onSelectSceneLight?.(id);
+    },
+    onSelectKeyLight: () => {
+      propsRef.current.onSelectKeyLight?.();
+    },
+    onSpacePanDrag: () => {
+      propsRef.current.onSpacePanDrag?.();
+    },
+    onSwipe: (direction: 'left' | 'right') => {
+      propsRef.current.onSwipe?.(direction);
+    },
+    onLongPress: (point: { clientX: number; clientY: number }) => {
+      propsRef.current.onLongPress?.(point);
+    },
+    onAnnotation: (mark: AnnotationMark) => {
+      propsRef.current.onAnnotation?.(mark);
+    },
+    onSceneReady: () => {
+      propsRef.current.onSceneReady?.();
+    },
+    onPickMaterial: (payload: MaterialPickPayload) => {
+      propsRef.current.onPickMaterial?.(payload);
+    },
+  }), []);
+
+  return <MemoDeviceCanvas {...props} {...stableCallbacks} />;
+}
+
 // One common phone only — preloading a stack of 10–25MB GLBs at once makes
 // Electron abort fetches, and drei then caches those failures forever.
-useGLTF.preload('./models/iphone_17_pro.glb');
+useGLTF.preload(`./models/iphone_17_pro.glb?v=${DEVICE_MODEL_PACK_VERSION}`);

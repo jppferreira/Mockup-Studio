@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Glasses, Headphones, Laptop, LayoutGrid, Monitor, Smartphone, Tablet, UserRound, Watch, Wrench,
 } from 'lucide-react';
@@ -26,6 +26,7 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
 import AccentThemePicker from './AccentThemePicker';
 import CloudSyncPanel, { type CloudTarget } from './CloudSyncPanel';
 import type { CloudLibraryStatus, CloudProjectEntry } from '../lib/cloudLibrary';
+import { syncButtonLabel } from '../lib/cloudLibrary';
 import { isDesktopApp } from '../lib/phoneMirror';
 import type { RecentProjectEntry } from '../lib/recentProjects';
 import type { RecentScreenshot } from '../lib/recentScreenshots';
@@ -131,6 +132,7 @@ export default function ProjectsDashboard({
   onSetToolset,
   onExplorePro,
   onFeedback,
+  onShowOnboarding,
   deviceUnlocked,
 }: {
   recentProjects: RecentProjectEntry[];
@@ -163,6 +165,7 @@ export default function ProjectsDashboard({
   onSetToolset?: (toolset: 'developer' | 'user') => void;
   onExplorePro: () => void;
   onFeedback: () => void;
+  onShowOnboarding?: () => void;
   deviceUnlocked: (deviceId: string) => boolean;
 }) {
   const [section, setSection] = useState<DashSection>('projects');
@@ -170,8 +173,10 @@ export default function ProjectsDashboard({
   const [sort, setSort] = useState<SortMode>('edited');
   const [sortOpen, setSortOpen] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
+  const [syncMenuOpen, setSyncMenuOpen] = useState(false);
   const [deviceFilter, setDeviceFilter] = useState<DeviceCategoryFilter>('all');
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>('devices');
+  const syncMenuRef = useRef<HTMLDivElement>(null);
   const desktop = isDesktopApp();
 
   useEffect(() => {
@@ -183,6 +188,15 @@ export default function ProjectsDashboard({
     window.addEventListener('pointerdown', close);
     return () => window.removeEventListener('pointerdown', close);
   }, [sortOpen, menuId]);
+
+  useEffect(() => {
+    if (!syncMenuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!syncMenuRef.current?.contains(event.target as Node)) setSyncMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [syncMenuOpen]);
 
   const projects = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -253,38 +267,69 @@ export default function ProjectsDashboard({
         </div>
         <span className="dash-header-rule" aria-hidden />
         <span className="dash-header-label">Your workspace</span>
-        {toolsetSwitchAvailable && onSetToolset && (
-          <div
-            className={`workspace-view-toggle dash-header-view-toggle${isDeveloperToolset ? ' is-dev' : ' is-user'}`}
-            role="group"
-            aria-label="Workspace view"
-          >
+        <div className="dash-header-actions">
+          {toolsetSwitchAvailable && onSetToolset && (
+            <div
+              className={`workspace-view-toggle dash-header-view-toggle${isDeveloperToolset ? ' is-dev' : ' is-user'}`}
+              role="group"
+              aria-label="Workspace view"
+            >
+              <button
+                type="button"
+                className={isDeveloperToolset ? 'is-active' : ''}
+                aria-pressed={Boolean(isDeveloperToolset)}
+                title="Dev view — templates & compositions open in edit mode"
+                onClick={() => {
+                  onSetToolset('developer');
+                  setSection('templates');
+                  setTemplateCategory('scenes');
+                }}
+              >
+                <Wrench size={12} strokeWidth={2.2} aria-hidden />
+                Dev
+              </button>
+              <button
+                type="button"
+                className={!isDeveloperToolset ? 'is-active' : ''}
+                aria-pressed={!isDeveloperToolset}
+                title="User view — browse the customer template library"
+                onClick={() => onSetToolset('user')}
+              >
+                <UserRound size={12} strokeWidth={2.2} aria-hidden />
+                User view
+              </button>
+            </div>
+          )}
+          <div className="sync-menu-wrap dash-sync-menu" ref={syncMenuRef}>
             <button
               type="button"
-              className={isDeveloperToolset ? 'is-active' : ''}
-              aria-pressed={Boolean(isDeveloperToolset)}
-              title="Dev view — templates & compositions open in edit mode"
-              onClick={() => {
-                onSetToolset('developer');
-                setSection('templates');
-                setTemplateCategory('scenes');
-              }}
+              className={`sync-status ${cloud?.configured && !cloud.missing ? 'is-on' : ''}`}
+              aria-expanded={syncMenuOpen}
+              aria-haspopup="dialog"
+              title={cloud?.configured
+                ? `Saving to ${cloud.folderLabel || cloud.label}`
+                : 'Save to iCloud Drive or Google Drive'}
+              onClick={() => setSyncMenuOpen((open) => !open)}
             >
-              <Wrench size={12} strokeWidth={2.2} aria-hidden />
-              Dev
+              {syncButtonLabel(cloud)}
             </button>
-            <button
-              type="button"
-              className={!isDeveloperToolset ? 'is-active' : ''}
-              aria-pressed={!isDeveloperToolset}
-              title="User view — browse the customer template library"
-              onClick={() => onSetToolset('user')}
-            >
-              <UserRound size={12} strokeWidth={2.2} aria-hidden />
-              User view
-            </button>
+            {syncMenuOpen && (
+              <CloudSyncPanel
+                cloud={cloud}
+                busy={cloudBusy}
+                variant="menu"
+                onUse={(target) => {
+                  onCloudUse(target);
+                  setSyncMenuOpen(false);
+                }}
+                onStop={() => {
+                  onCloudStop();
+                  setSyncMenuOpen(false);
+                }}
+              />
+            )}
           </div>
-        )}
+        </div>
       </header>
 
       <div className="dash-body">
@@ -402,13 +447,6 @@ export default function ProjectsDashboard({
 
           {section === 'projects' && (
             <>
-              <CloudSyncPanel
-                cloud={cloud}
-                busy={cloudBusy}
-                variant="banner"
-                onUse={onCloudUse}
-                onStop={onCloudStop}
-              />
               <div className="dash-section-row">
                 <h2>{cloud?.configured ? 'Synced projects' : 'Recent projects'}</h2>
                 <span>{projects.length === 1 ? '1 project' : `${projects.length} projects`}</span>
@@ -746,6 +784,12 @@ export default function ProjectsDashboard({
                 <strong>Send feedback</strong>
                 <span>Tell us what the studio should do next</span>
               </button>
+              {onShowOnboarding && (
+                <button type="button" className="dash-setting" onClick={onShowOnboarding}>
+                  <strong>Replay onboarding</strong>
+                  <span>Preview the intro screens again</span>
+                </button>
+              )}
             </div>
           )}
 

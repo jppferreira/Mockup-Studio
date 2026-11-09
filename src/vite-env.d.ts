@@ -25,6 +25,11 @@ interface Window {
   mockupDesktop?: {
     saveProject: (contents: string, proposedName: string) => Promise<{ canceled: boolean; path?: string }>;
     openProject: () => Promise<{ canceled: boolean; contents?: string; path?: string }>;
+    /** Open a `.mockup` path handed over by Finder / Explorer. */
+    openProjectPath?: (filePath: string) => Promise<{ contents: string; path: string }>;
+    /** Consume a cold-launch open path that arrived before the renderer mounted. */
+    takePendingOpen?: () => Promise<string | null>;
+    onOpenFromOs?: (handler: (filePath: string) => void) => () => void;
     cloudStatus: () => Promise<CloudLibraryStatus>;
     cloudUse: (provider: 'icloud' | 'google-drive') => Promise<{ canceled: boolean; status: CloudLibraryStatus }>;
     cloudPick: () => Promise<{ canceled: boolean; status: CloudLibraryStatus }>;
@@ -47,6 +52,14 @@ interface Window {
       path: string;
       updatedAt: number;
       unchanged: boolean;
+    }>;
+    /** DEV-only: read src/data/shippedTemplates.json before promote so edits accumulate. */
+    devReadShippedTemplates?: () => Promise<{
+      ok: boolean;
+      path?: string;
+      contents?: string | null;
+      missing?: boolean;
+      reason?: string;
     }>;
     /** DEV-only: write src/data/shippedTemplates.json so templates ship with the next build. */
     devWriteShippedTemplates?: (contents: string) => Promise<{
@@ -75,6 +88,7 @@ interface Window {
       percent?: number;
     }) => void) => () => void;
     readClipboardImage?: () => Promise<{ ok: boolean; dataUrl?: string; name?: string }>;
+    readClipboardHtml?: () => Promise<{ ok: boolean; html?: string }>;
     ensureCameraAccess?: () => Promise<{ granted: boolean; status?: string; reason?: string }>;
     figmaRequest?: (apiPath: string, token: string) => Promise<{ status: number; body: string }>;
     figmaFetchImage?: (

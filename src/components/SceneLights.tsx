@@ -1,14 +1,39 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
+import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import type { SceneLight, Vec3 } from '../types';
+import { resolveSceneLightShadowMapSize } from '../lib/studioShadows';
 import LightTranslateGizmo from './LightTranslateGizmo';
+import { useStudioShadowInteraction } from './StudioEnvironment';
 
 let rectAreaReady = false;
 function ensureRectAreaLights() {
   if (rectAreaReady) return;
   RectAreaLightUniformsLib.init();
   rectAreaReady = true;
+}
+
+function useAdaptiveShadowMap(
+  lightRef: RefObject<THREE.Light | null>,
+  castShadow: boolean,
+) {
+  const gl = useThree((s) => s.gl);
+  const interaction = useStudioShadowInteraction();
+  const mode = interaction?.mode ?? 'studio';
+
+  useEffect(() => {
+    const light = lightRef.current as (THREE.Light & { shadow?: THREE.LightShadow }) | null;
+    if (!light?.shadow || !castShadow) return;
+    const size = resolveSceneLightShadowMapSize(mode, false, gl.capabilities.maxTextureSize || 2048);
+    light.shadow.mapSize.set(size, size);
+    light.shadow.needsUpdate = true;
+    if (light.shadow.map && (light.shadow.map.width !== size || light.shadow.map.height !== size)) {
+      light.shadow.map.dispose();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (light.shadow as any).map = null;
+    }
+  }, [lightRef, castShadow, mode, gl]);
 }
 
 function AimingAreaLight({ light }: { light: SceneLight }) {
@@ -38,6 +63,7 @@ function AimingAreaLight({ light }: { light: SceneLight }) {
 
 function AimingDirectionalLight({ light }: { light: SceneLight }) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
+  useAdaptiveShadowMap(lightRef, Boolean(light.castShadow));
   useLayoutEffect(() => {
     const node = lightRef.current;
     if (!node) return;
@@ -56,7 +82,7 @@ function AimingDirectionalLight({ light }: { light: SceneLight }) {
       intensity={light.intensity}
       position={[light.position.x, light.position.y, light.position.z]}
       castShadow={light.castShadow}
-      shadow-mapSize={[2048, 2048]}
+      shadow-mapSize={[1024, 1024]}
       shadow-bias={-0.00025}
       shadow-normalBias={0.04}
       shadow-radius={4.5}
@@ -66,6 +92,7 @@ function AimingDirectionalLight({ light }: { light: SceneLight }) {
 
 function AimingSpotLight({ light }: { light: SceneLight }) {
   const lightRef = useRef<THREE.SpotLight>(null);
+  useAdaptiveShadowMap(lightRef, Boolean(light.castShadow));
   useLayoutEffect(() => {
     const node = lightRef.current;
     if (!node) return;
@@ -88,7 +115,7 @@ function AimingSpotLight({ light }: { light: SceneLight }) {
       angle={light.angle}
       penumbra={Math.max(0.35, light.penumbra)}
       castShadow={light.castShadow}
-      shadow-mapSize={[2048, 2048]}
+      shadow-mapSize={[1024, 1024]}
       shadow-bias={-0.00025}
       shadow-normalBias={0.04}
       shadow-radius={4.5}
@@ -109,7 +136,7 @@ function SceneLightNode({ light }: { light: SceneLight }) {
       distance={light.distance}
       decay={light.decay}
       castShadow={light.castShadow}
-      shadow-mapSize={[1024, 1024]}
+      shadow-mapSize={[512, 512]}
       shadow-bias={-0.0002}
     />
   );
