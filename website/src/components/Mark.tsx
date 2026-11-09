@@ -1,6 +1,6 @@
 const logoSrc = `${import.meta.env.BASE_URL}logo.png`;
 
-/** Mockup Studio mark — overlapping glass cards. */
+/** mokstudio mark — overlapping glass cards. */
 export function Mark({ size = 36, glow = false }: { size?: number; glow?: boolean }) {
   return (
     <span

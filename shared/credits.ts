@@ -415,7 +415,7 @@ export const MODEL_CREDITS: ModelCredit[] = [
 ];
 
 export const CREDITS_INTRO =
-  'The 3D device models shipped with Mockup Studio are third-party assets, mostly from Sketchfab under Creative Commons Attribution 4.0 (CC BY 4.0). They are not covered by the app’s proprietary license — reuse them under their own terms and keep attribution.';
+  'The 3D device models shipped with mokstudio are third-party assets, mostly from Sketchfab under Creative Commons Attribution 4.0 (CC BY 4.0). They are not covered by the app’s proprietary license — reuse them under their own terms and keep attribution.';
 
 export const CREDITS_DISCLAIMER =
-  'These models are fan-made visualizations and are not official manufacturer assets. “iPhone”, “MacBook”, “iPad”, “AirPods”, “Apple Watch”, and “Vision Pro” are trademarks of Apple Inc. “Galaxy” is a trademark of Samsung Electronics. “Pixel” is a trademark of Google LLC. “Switch” is a trademark of Nintendo. Mockup Studio is not affiliated with or endorsed by these companies.';
+  'These models are fan-made visualizations and are not official manufacturer assets. Product and brand names identify compatible or represented devices only. “iPhone”, “MacBook”, “iPad”, “AirPods”, “Apple Watch”, and “Vision Pro” are trademarks of Apple Inc. “Galaxy” is a trademark of Samsung Electronics. “Pixel” is a trademark of Google LLC. “Switch” is a trademark of Nintendo. mokstudio is an independent product and is not affiliated with, endorsed by, or sponsored by Apple Inc., Samsung Electronics, Google LLC, or any other device manufacturer. All trademarks belong to their respective owners. Removing logos and adding disclaimers does not eliminate trademark, design, copyright, or licensing risk — obtain legal review before commercial release.';

@@ -7,7 +7,7 @@ const {
   decodeProjectFile, encodeProjectFile, isProjectFileName, stripProjectExtension,
 } = require('./projectFile.cjs');
 
-const LIBRARY_FOLDER_NAME = 'Mockup Studio';
+const LIBRARY_FOLDER_NAME = 'mokstudio';
 const CONFIG_NAME = 'cloud-library.json';
 const TEMPLATES_FILE_NAME = 'templates.library.json';
 const MAX_BYTES = 45_000_000;
@@ -102,8 +102,8 @@ function providerLabel(provider) {
 }
 
 function folderLabel(provider, dir) {
-  if (provider === 'icloud') return 'iCloud Drive/Mockup Studio';
-  if (provider === 'google-drive') return 'Google Drive/Mockup Studio';
+  if (provider === 'icloud') return 'iCloud Drive/mokstudio';
+  if (provider === 'google-drive') return 'Google Drive/mokstudio';
   const homeDir = home();
   if (dir.startsWith(homeDir + path.sep)) return dir.slice(homeDir.length + 1);
   return dir;

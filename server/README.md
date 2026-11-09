@@ -38,7 +38,7 @@ npm run fulfill:dev
 2. In `server/.env` set:
    - `RESEND_API_KEY=re_...`
    - `FEEDBACK_INBOX=hello@jppferreira.com` (delivery address)
-   - `LICENSE_EMAIL_FROM="Mockup Studio <onboarding@resend.dev>"` for sandbox, or a verified domain sender for production
+   - `LICENSE_EMAIL_FROM="mokstudio <onboarding@resend.dev>"` for sandbox, or a verified domain sender for production
 3. In the app / website `.env.local` set `VITE_FULFILL_API_URL=http://127.0.0.1:8787` (or your production fulfill URL).
 4. Restart `npm run fulfill:dev`. Without `RESEND_API_KEY`, `/feedback` still returns `ok` and prints a dry-run to the server console.
 

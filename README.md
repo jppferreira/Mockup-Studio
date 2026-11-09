@@ -1,4 +1,4 @@
-# Mockup Studio
+# mokstudio
 
 A local-first **Electron + React + Three.js** 3D smartphone mockup editor for macOS. This is a runnable starter/MVP (source code), **not** a signed or notarised macOS binary.
 

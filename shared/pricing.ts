@@ -1,5 +1,5 @@
 /**
- * Single source of truth for Mockup Studio pricing + entitlements.
+ * Single source of truth for mokstudio pricing + entitlements.
  * Used by the marketing website and the desktop app so prices / “what you get” stay in sync.
  */
 

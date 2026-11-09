@@ -153,8 +153,8 @@ export function ContactModal({ open, onClose, intent = 'contact' }: Props) {
         <h2 id={titleId}>{intent === 'feedback' ? 'Send feedback' : 'Contact us'}</h2>
         <p className="contact-modal-lede">
           {intent === 'feedback'
-            ? 'Bugs, ideas, or a quick note about Mockup Studio — we read every message.'
-            : 'Questions about Mockup Studio, licensing, or the Mac build? Send a note and we’ll get back to you.'}
+            ? 'Bugs, ideas, or a quick note about mokstudio — we read every message.'
+            : 'Questions about mokstudio, licensing, or the Mac build? Send a note and we’ll get back to you.'}
         </p>
 
         {status === 'sent' ? (

@@ -33,7 +33,7 @@ export default function CloudSyncPanel({
         <>
           <strong>Sync folder unavailable</strong>
           <p>
-            {label} is not available right now. Turn it back on and Mockup Studio will keep saving to {cloud.folderLabel}.
+            {label} is not available right now. Turn it back on and mokstudio will keep saving to {cloud.folderLabel}.
           </p>
           <div className="sync-actions">
             <button type="button" disabled={busy} onClick={() => onUse('pick')}>Choose a folder</button>
@@ -55,7 +55,7 @@ export default function CloudSyncPanel({
         <>
           <strong>Save to iCloud or Google Drive</strong>
           <p>
-            Pick a folder those apps already sync. Mockup Studio saves your projects and templates there automatically. Nothing is uploaded to Mockup Studio.
+            Pick a folder those apps already sync. mokstudio saves your projects and templates there automatically. Nothing is uploaded to mokstudio.
           </p>
           <div className="sync-actions">
             <button type="button" disabled={busy} onClick={() => onUse('icloud')}>iCloud Drive</button>
@@ -67,7 +67,7 @@ export default function CloudSyncPanel({
         <>
           <strong>Save to iCloud or Google Drive</strong>
           <p>
-            Pick a folder those apps already sync. Mockup Studio saves your projects and templates there automatically. Nothing is uploaded to Mockup Studio.
+            Pick a folder those apps already sync. mokstudio saves your projects and templates there automatically. Nothing is uploaded to mokstudio.
           </p>
           <div className="sync-actions">
             <button

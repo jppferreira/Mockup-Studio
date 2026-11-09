@@ -1,4 +1,4 @@
-/** GitHub releases for Mockup Studio downloads. */
+/** GitHub releases for mokstudio downloads. */
 
 export const RELEASES_REPO = 'jppferreira/Mockup-Studio';
 export const RELEASES_API = `https://api.github.com/repos/${RELEASES_REPO}/releases`;
@@ -27,7 +27,7 @@ export interface AppRelease {
 export const FALLBACK_RELEASES: AppRelease[] = [
   {
     tag: 'v0.1.0',
-    name: 'Mockup Studio 0.1.0',
+    name: 'mokstudio 0.1.0',
     publishedAt: '2026-11-04T11:23:17Z',
     prerelease: false,
     htmlUrl: `https://github.com/${RELEASES_REPO}/releases/tag/v0.1.0`,

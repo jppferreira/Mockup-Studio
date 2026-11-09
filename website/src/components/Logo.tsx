@@ -37,7 +37,7 @@ export function Logo({
     <>
       <Mark size={size} glow={glow} />
       <span className="logo-word">
-        Mockup Studio
+        mokstudio
         {showBeta ? <span className="beta-badge">Beta</span> : null}
       </span>
     </>

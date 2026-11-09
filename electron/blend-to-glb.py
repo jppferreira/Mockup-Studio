@@ -1,4 +1,4 @@
-"""Open a .blend and export a packed GLB (used by Mockup Studio Electron).
+"""Open a .blend and export a packed GLB (used by mokstudio Electron).
 
 Usage:
   blender --background --python electron/blend-to-glb.py -- \\

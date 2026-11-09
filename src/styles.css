@@ -122,6 +122,148 @@ html[data-accent="purple"] {
   --tone-f4f7f2: #f3f0f9;
 }
 
+html[data-accent="green"] {
+  --accent: #5cecb6;
+  --accent-hover: #7af0c4;
+  --accent-soft: #c5f2b6;
+  --accent-button: #b7e8a8;
+  --accent-button-hover: #d4f7ca;
+  --accent-focus: #a6ebae;
+  --accent-ink: #10231c;
+  --accent-dark: #174531;
+  --accent-dark-2: #1a3f32;
+  --accent-ring: #e4f5dc;
+  --accent-hover-text: #eaffdf;
+  --accent-hover-bg: #1b2a1d;
+  --accent-line: #2d7b5b;
+  --accent-badge: #152418;
+  --accent-badge-line: #4f8f4a66;
+  --accent-glow: #121d1588;
+  --accent-chip: #24352c;
+  --accent-chip-line: #6f8f6a;
+}
+
+html[data-accent="coral"] {
+  --accent: #ff7a66;
+  --accent-hover: #ff9485;
+  --accent-soft: #ffb3a6;
+  --accent-button: #ffc4b8;
+  --accent-button-hover: #ffd8d0;
+  --accent-focus: #ffb8ac;
+  --accent-ink: #2a1410;
+  --accent-dark: #4a241c;
+  --accent-dark-2: #5c2e24;
+  --accent-ring: #f6e4e0;
+  --accent-hover-text: #fff1ed;
+  --accent-hover-bg: #3a221c;
+  --accent-line: #d45a48;
+  --accent-badge: #3a221c;
+  --accent-badge-line: #d47a6c66;
+  --accent-glow: #2a181488;
+  --accent-chip: #4a2e28;
+  --accent-chip-line: #d47a6c;
+  --tone-10231c: #231610;
+  --tone-121d15: #1d1512;
+  --tone-152418: #241915;
+  --tone-163328: #341e15;
+  --tone-174531: #462416;
+  --tone-1a3f32: #402519;
+  --tone-1b2a1d: #2a1f1b;
+  --tone-1f2a22: #2a221f;
+  --tone-243028: #302724;
+  --tone-24352c: #352924;
+  --tone-245c45: #5d3423;
+  --tone-28392e: #392d28;
+  --tone-283c2d: #3c2e28;
+  --tone-29372d: #372d29;
+  --tone-29634f: #643a28;
+  --tone-2a3a30: #3a2f2a;
+  --tone-2c3a30: #3a302c;
+  --tone-2d7b5b: #7d442b;
+  --tone-2f6b56: #6d402e;
+  --tone-304635: #47362f;
+  --tone-334638: #463933;
+  --tone-35453a: #453a35;
+  --tone-3a4a3c: #4a3f3a;
+  --tone-4a6a4a: #6b5149;
+  --tone-4b6750: #68534a;
+  --tone-4f6f4c: #70544b;
+  --tone-4f8f4a: #915948;
+  --tone-598565: #866358;
+  --tone-5a7a58: #7b5f57;
+  --tone-5f7f5c: #80645b;
+  --tone-6a8f66: #906f65;
+  --tone-6a8f68: #907167;
+  --tone-6a9270: #937369;
+  --tone-6f8f6a: #907269;
+  --tone-6f9b63: #9c6f62;
+  --tone-6fbf7a: #b98575;
+  --tone-7a9a74: #9b7c73;
+  --tone-7aa58f: #a2867d;
+  --tone-7dcea0: #c89383;
+  --tone-7ea87a: #a5877d;
+  --tone-7ec96a: #c28471;
+  --tone-7fbf74: #b9887a;
+  --tone-81b88c: #b49085;
+  --tone-8edc8d: #d6a393;
+  --tone-8fb88a: #b5978d;
+  --tone-8fbf84: #bb9488;
+  --tone-8fd47a: #cd9381;
+  --tone-9ad593: #d0a598;
+  --tone-9bb894: #b59e97;
+  --tone-a2d59f: #d1aea3;
+  --tone-a4b9a1: #b7a8a3;
+  --tone-a6ebae: #e6b7ab;
+  --tone-a7baa9: #b9aca8;
+  --tone-a9d9a4: #d5b2a8;
+  --tone-b4d7ab: #d4b6ae;
+  --tone-b5eca5: #e7b6aa;
+  --tone-b6efaa: #eabbaf;
+  --tone-b6f0a8: #ebbaad;
+  --tone-b7d7ae: #d4b8b1;
+  --tone-b7e8a8: #e3b8ad;
+  --tone-b8e9ad: #e4bcb2;
+  --tone-b8f0a8: #ebbaad;
+  --tone-b9d7b0: #d4bab3;
+  --tone-b9f2ad: #edbeb2;
+  --tone-baf5aa: #efbcb0;
+  --tone-bfe8b6: #e4c2ba;
+  --tone-c2d6c4: #d5c7c4;
+  --tone-c3ecb9: #e8c5bd;
+  --tone-c5d4a8: #d1b4ab;
+  --tone-c5d4bc: #d2c2be;
+  --tone-c5f3b8: #efc6bc;
+  --tone-c8f5ba: #f1c8be;
+  --tone-c9edbf: #eacac2;
+  --tone-d4f7ca: #f4d5cd;
+  --tone-d4f9ca: #f5d6ce;
+  --tone-d5e2d1: #e1d5d2;
+  --tone-d5ffe1: #f9e1db;
+  --tone-d6e8d0: #e6d6d2;
+  --tone-d7e6d3: #e5d8d4;
+  --tone-d7efcf: #edd7d1;
+  --tone-d7f0cb: #edd4ce;
+  --tone-d7f0cf: #eed7d1;
+  --tone-d7f7cb: #f4d6ce;
+  --tone-d7f8ea: #f6dfd9;
+  --tone-d8f7cb: #f4d6ce;
+  --tone-d9ffe4: #fae4de;
+  --tone-dde8dc: #e7dfdd;
+  --tone-dff1dd: #f0e2de;
+  --tone-e4eee1: #ede4e2;
+  --tone-e4f3df: #f2e4e0;
+  --tone-e4f5dc: #f3e2de;
+  --tone-e7f6df: #f4e5e1;
+  --tone-e7ffe2: #fbeae6;
+  --tone-e8f6e2: #f5e7e4;
+  --tone-eaf0eb: #f0ebea;
+  --tone-eaf9eb: #f8eeeb;
+  --tone-eaffdf: #fbe8e3;
+  --tone-eef2ef: #f2efee;
+  --tone-eef3ef: #f3efee;
+  --tone-f4f7f2: #f7f3f2;
+}
+
 /* Registered so a theme change can interpolate every accent token. */
 @property --accent {
   syntax: "<color>";
@@ -10603,6 +10745,87 @@ button.dash-setting:hover { border-color: #4c5362; }
   font-size: 13px;
   line-height: 18px;
 }
+.dash-setting.dash-legal {
+  gap: 8px;
+}
+.dash-setting.dash-legal span {
+  font-size: 12px;
+  line-height: 1.55;
+}
+.dash-legal-meta {
+  margin-top: 2px;
+  color: var(--dash-dim) !important;
+  font-size: 11px !important;
+}
+.dash-legal-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.dash-legal-link {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent, #8ecf7a);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dash-legal-link:hover {
+  color: #e8ecef;
+}
+.help-legal {
+  margin: 0 0 18px;
+  padding: 14px 0 0;
+  border-top: 1px solid #2a2e36;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.help-legal h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #e8ecef;
+}
+.help-legal p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #979da4;
+}
+.help-legal-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.help-legal-links button,
+.export-legal-note button {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--tone-b9f2ad, #b9f2ad);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.export-legal-note {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #32363a;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #8b9199;
+}
 .dash-footer {
   margin-top: auto;
   padding-top: 22px;
@@ -11467,7 +11690,7 @@ button.dash-setting:hover { border-color: #4c5362; }
 .accent-theme-options {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-top: 10px;
 }
@@ -11476,7 +11699,7 @@ button.dash-setting:hover { border-color: #4c5362; }
   top: 0;
   bottom: 0;
   left: 0;
-  width: calc((100% - 16px) / 3);
+  width: calc((100% - 24px) / 4);
   border-radius: 10px;
   border: 1px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -11514,6 +11737,7 @@ button.dash-setting:hover { border-color: #4c5362; }
 }
 .accent-swatch.is-green { background: #5cecb6; }
 .accent-swatch.is-purple { background: #b794ff; }
+.accent-swatch.is-coral { background: #ff7a66; }
 .accent-theme-native {
   position: absolute;
   inset: 0;
@@ -11576,8 +11800,15 @@ html[data-accent="purple"] .dash-card-art img,
 html[data-accent="purple"] .dash-card-chevron,
 html[data-accent="purple"] .dash-new img,
 html[data-accent="purple"] .scene-tree-row.is-selected img,
+html[data-accent="coral"] .dash-nav-item.is-active img,
+html[data-accent="coral"] .dash-upgrade > img,
+html[data-accent="coral"] .dash-card-art img,
+html[data-accent="coral"] .dash-card-chevron,
+html[data-accent="coral"] .dash-new img,
+html[data-accent="coral"] .scene-tree-row.is-selected img,
 html[data-accent="green"] .dash-nav-item:not(.is-active) img,
-html[data-accent="purple"] .dash-nav-item:not(.is-active) img {
+html[data-accent="purple"] .dash-nav-item:not(.is-active) img,
+html[data-accent="coral"] .dash-nav-item:not(.is-active) img {
   transition: filter 480ms ease;
 }
 html[data-accent="green"] .dash-nav-item.is-active img,
@@ -11596,10 +11827,19 @@ html[data-accent="purple"] .dash-new img,
 html[data-accent="purple"] .scene-tree-row.is-selected img {
   filter: hue-rotate(0deg) saturate(1);
 }
+html[data-accent="coral"] .dash-nav-item.is-active img,
+html[data-accent="coral"] .dash-upgrade > img,
+html[data-accent="coral"] .dash-card-art img,
+html[data-accent="coral"] .dash-card-chevron,
+html[data-accent="coral"] .dash-new img,
+html[data-accent="coral"] .scene-tree-row.is-selected img {
+  filter: hue-rotate(105deg) saturate(1.12);
+}
 html[data-accent="green"] .dash-nav-item:not(.is-active) img {
   filter: grayscale(0) brightness(1);
 }
-html[data-accent="purple"] .dash-nav-item:not(.is-active) img {
+html[data-accent="purple"] .dash-nav-item:not(.is-active) img,
+html[data-accent="coral"] .dash-nav-item:not(.is-active) img {
   filter: grayscale(1) brightness(1.15);
 }
 html[data-accent="custom"] .dash-nav-item.is-active img,

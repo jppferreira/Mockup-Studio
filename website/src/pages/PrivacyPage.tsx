@@ -12,7 +12,7 @@ export function PrivacyPage() {
           <p className="section-kicker">Privacy</p>
           <h1>Local-first, on purpose.</h1>
           <p className="page-lede">
-            Mockup Studio is built to keep screenshots and project files on your Mac. No account is required to open a scene.
+            mokstudio is built to keep screenshots and project files on your Mac. No account is required to open a scene.
           </p>
         </header>
 

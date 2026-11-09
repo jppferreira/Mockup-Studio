@@ -10,7 +10,7 @@ export function AppScreenshot({ style }: { style?: CSSProperties }) {
           src={`${import.meta.env.BASE_URL}app-screenshot.jpg?v=4`}
           width={1024}
           height={648}
-          alt="Mockup Studio app showing a 3D iPhone mockup, scene presets, and animation timeline"
+          alt="mokstudio app showing a 3D iPhone mockup, scene presets, and animation timeline"
           decoding="async"
           fetchPriority="high"
         />

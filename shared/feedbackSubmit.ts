@@ -61,13 +61,13 @@ async function fetchWithTimeout(url: string, init: RequestInit, ms = SEND_TIMEOU
 
 function mailtoHref(payload: FeedbackSubmitPayload, inbox: string): string {
   const kind = payload.intent === 'contact' ? 'contact' : 'feedback';
-  const subject = encodeURIComponent(`Mockup Studio ${kind} — ${payload.topic}`);
+  const subject = encodeURIComponent(`mokstudio ${kind} — ${payload.topic}`);
   const body = encodeURIComponent(
     [
       `Topic: ${payload.topic}`,
       payload.name ? `Name: ${payload.name}` : null,
       payload.email ? `Reply-to: ${payload.email}` : 'Reply-to: (not provided)',
-      payload.appVersion ? `App: Mockup Studio ${payload.appVersion}` : null,
+      payload.appVersion ? `App: mokstudio ${payload.appVersion}` : null,
       payload.platform ? `Platform: ${payload.platform}` : null,
       '',
       payload.message,
@@ -86,7 +86,7 @@ async function tryFulfillApi(
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
-      name: payload.name || 'Mockup Studio user',
+      name: payload.name || 'mokstudio user',
       email: payload.email || undefined,
       message: payload.message,
       topic: payload.topic,
@@ -109,7 +109,7 @@ async function tryFormSubmit(payload: FeedbackSubmitPayload, inbox: string): Pro
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
-        name: payload.name || payload.email || 'Mockup Studio user',
+        name: payload.name || payload.email || 'mokstudio user',
         email: payload.email || 'noreply@mokstudio.io',
         message: payload.message,
         topic: payload.topic,
@@ -117,7 +117,7 @@ async function tryFormSubmit(payload: FeedbackSubmitPayload, inbox: string): Pro
         appVersion: payload.appVersion,
         platform: payload.platform,
         userAgent: payload.userAgent,
-        _subject: `Mockup Studio ${payload.intent === 'contact' ? 'contact' : 'feedback'} — ${payload.topic}`,
+        _subject: `mokstudio ${payload.intent === 'contact' ? 'contact' : 'feedback'} — ${payload.topic}`,
         _template: 'table',
         _captcha: 'false',
         ...(payload.email ? { _replyto: payload.email } : {}),

@@ -22,11 +22,11 @@ export function ThanksPage() {
       <main className="page">
         <header className="page-hero">
           <p className="section-kicker">Checkout</p>
-          <h1>Thanks for supporting Mockup Studio.</h1>
+          <h1>Thanks for supporting mokstudio.</h1>
           <p className="page-lede">
             {plan.name} is {plan.priceLabel}
             {planId === 'update_pass' ? '/year' : ' one-time'}. Your payment receipt comes from the store;
-            your signed license key is emailed by Mockup Studio right after payment clears.
+            your signed license key is emailed by mokstudio right after payment clears.
           </p>
         </header>
 
@@ -34,10 +34,10 @@ export function ThanksPage() {
           <ol>
             <li>
               <strong>Check your inbox</strong>
-              <span>Open the Mockup Studio license email (separate from the store receipt).</span>
+              <span>Open the mokstudio license email (separate from the store receipt).</span>
             </li>
             <li>
-              <strong>Open Mockup Studio</strong>
+              <strong>Open mokstudio</strong>
               <span>In the app, choose License in the left panel.</span>
             </li>
             <li>

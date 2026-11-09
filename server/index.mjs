@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Mockup Studio license fulfillment server.
+ * mokstudio license fulfillment server.
  *
  * Endpoints:
  *   GET  /health

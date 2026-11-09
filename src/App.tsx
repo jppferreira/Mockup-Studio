@@ -32,6 +32,13 @@ import FeedbackModal from './components/FeedbackModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
 import LicenseModal from './components/LicenseModal';
 import UpdateBanner from './components/UpdateBanner';
+import { getCheckoutConfig } from '@shared/checkout';
+import {
+  APP_ABOUT_SUMMARY,
+  EXPORT_USAGE_NOTICE,
+  MODEL_LICENSING_NOTICE,
+  NON_AFFILIATION_DISCLAIMER,
+} from '@shared/legal';
 import SvgExplodeModal from './components/SvgExplodeModal';
 import ProgressiveBlurOverlay from './components/ProgressiveBlurOverlay';
 import LightDirectionControl, { lightToSpherical, sphericalToLight } from './components/LightDirectionControl';
@@ -114,6 +121,7 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
   watch: Watch,
   headphones: Headphones,
   glasses: Glasses,
+  cuboid: Cuboid,
 };
 import { createOverlay, drawOverlays, flatShapeOf, overlayVisibleAt, pathOffsets, type FlatShape, type SceneOverlay } from './lib/overlays';
 import {
@@ -2762,7 +2770,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       const message = error instanceof Error ? error.message : 'Could not check iCloud or Google Drive';
       notifyRef.current(
         message.includes('No handler')
-          ? 'Restart Mockup Studio, then tap Sync again.'
+          ? 'Restart mokstudio, then tap Sync again.'
           : message,
       );
     });
@@ -5355,8 +5363,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         <button
           type="button"
           className="brand-area"
-          title="Mockup Studio 3D"
-          aria-label="Mockup Studio 3D"
+          title="mokstudio"
+          aria-label="mokstudio"
           onClick={goToRecentProjects}
         >
           <img className="brand-mark" src="./splash/logo.png" alt="" width={22} height={22} />
@@ -9248,6 +9256,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               <p className="export-warning">Add keyframes on the timeline before exporting video or GIF.</p>
             )}
             {exportProgress && <p className="export-progress">{exportProgress}</p>}
+            <p className="export-legal-note">{EXPORT_USAGE_NOTICE}</p>
             <div className="export-modal-actions"><button className="button subtle-button" disabled={exporting} onClick={() => setExportOpen(false)}>Cancel</button>
               <button
                 className="button primary-button"
@@ -9281,6 +9290,45 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               <div><SlidersHorizontal size={17} /><span>Rings rotate on one axis; coloured arrows slide on X / Y / Z. Drag the device body to tumble freely, Shift+drag to reposition. Add more devices from Device → Add device, then Save as template (⇧⌘S) under Templates → Yours.</span></div>
               <div><Gauge size={17} /><span>Space play/pause · long-press & drag to multi-select keys · set Ease on selection · Delete removes selected.</span></div>
               <div><Command size={17} /><span>⌘N Blank file · ⌘S Save · File menu → Save as / Duplicate / Export as · ⇧⌘S Save as template · ⌘Z Undo · ⌘D Add device · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab · . hide panels.</span></div>
+            </div>
+            <div className="help-legal" id="settings-legal">
+              <h3>Legal</h3>
+              <p>{NON_AFFILIATION_DISCLAIMER}</p>
+              <p>{EXPORT_USAGE_NOTICE}</p>
+              <p>{MODEL_LICENSING_NOTICE}</p>
+              <div className="help-legal-links">
+                {([
+                  ['Terms', '/terms'],
+                  ['Privacy', '/privacy'],
+                  ['Credits', '/credits'],
+                ] as const).map(([label, path]) => (
+                  <button
+                    key={path}
+                    type="button"
+                    onClick={() => {
+                      const url = `${getCheckoutConfig().siteUrl}${path}`;
+                      void (async () => {
+                        try {
+                          if (window.mockupDesktop?.openExternal) {
+                            await window.mockupDesktop.openExternal(url);
+                            return;
+                          }
+                        } catch {
+                          /* fall through */
+                        }
+                        window.open(url, '_blank', 'noopener,noreferrer');
+                      })();
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="help-legal" id="settings-about">
+              <h3>About</h3>
+              <p>{APP_ABOUT_SUMMARY}</p>
+              <p>mokstudio · 0.1.0</p>
             </div>
             <div className="help-modal-actions">
               <button

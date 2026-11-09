@@ -152,7 +152,7 @@ function dccError(ext: string): Error {
   const label = DCC_LABEL[ext] ?? `.${ext}`;
   if (ext === 'blend') {
     return new Error(
-      'Blender (.blend) needs the desktop app with Blender installed. Export glTF (.glb) instead, or open this drop in Mockup Studio for Mac.',
+      'Blender (.blend) needs the desktop app with Blender installed. Export glTF (.glb) instead, or open this drop in mokstudio for Mac.',
     );
   }
   return new Error(

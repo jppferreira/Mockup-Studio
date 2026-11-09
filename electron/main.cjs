@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const { existsSync, appendFileSync } = require('node:fs');
 const path = require('node:path');
 
-const APP_NAME = 'Mockup Studio 3D';
+const APP_NAME = 'mokstudio';
 app.setName(APP_NAME);
 
 const { decodeProjectFile, encodeProjectFile, isProjectFileName } = require('./projectFile.cjs');
@@ -232,7 +232,7 @@ app.whenReady().then(() => {
         return {
           granted: false,
           status,
-          reason: 'Camera access is blocked. Open System Settings → Privacy & Security → Camera and enable Mockup Studio.',
+          reason: 'Camera access is blocked. Open System Settings → Privacy & Security → Camera and enable mokstudio.',
         };
       }
       const granted = await systemPreferences.askForMediaAccess('camera');
@@ -256,10 +256,10 @@ app.whenReady().then(() => {
     const libraryDir = await getLibraryDir();
     const baseName = `${sanitizeName(proposedName)}.mockup`;
     const { canceled, filePath } = await dialog.showSaveDialog({
-      title: 'Save Mockup Studio project',
+      title: 'Save mokstudio project',
       defaultPath: libraryDir ? path.join(libraryDir, baseName) : baseName,
       filters: [
-        { name: 'Mockup Studio Project', extensions: ['mockup'] },
+        { name: 'mokstudio Project', extensions: ['mockup'] },
         { name: 'Legacy JSON', extensions: ['json'] },
       ],
     });
@@ -278,11 +278,11 @@ app.whenReady().then(() => {
   ipcMain.handle('project:open', async () => {
     const libraryDir = await getLibraryDir();
     const { canceled, filePaths } = await dialog.showOpenDialog({
-      title: 'Open Mockup Studio project',
+      title: 'Open mokstudio project',
       defaultPath: libraryDir || undefined,
       properties: ['openFile'],
       filters: [
-        { name: 'Mockup Studio Project', extensions: ['mockup', 'json'] },
+        { name: 'mokstudio Project', extensions: ['mockup', 'json'] },
         { name: 'All Files', extensions: ['*'] },
       ],
     });
@@ -295,7 +295,7 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('project:openPath', async (_event, filePath) => {
-    if (!isOpenableProjectPath(filePath)) throw new Error('Not a Mockup Studio project file');
+    if (!isOpenableProjectPath(filePath)) throw new Error('Not a mokstudio project file');
     const resolved = path.resolve(filePath);
     if (!existsSync(resolved)) throw new Error('That project file no longer exists');
     const stat = await fs.stat(resolved);

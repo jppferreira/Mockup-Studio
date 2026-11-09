@@ -6,6 +6,7 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { OrbitControls, TransformControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { hideBrandMarks, isBrandLogoObject } from '../lib/brandMarks';
 import { getDevice, type DeviceUv } from '../lib/devices';
 import { useDeviceModelUrl } from '../lib/useDeviceModelUrl';
 import { applyLidOpen, setupLidRig, type LidRig } from '../lib/deviceLid';
@@ -396,15 +397,6 @@ async function applyMaterialTextureTweaks(
   if (jobs.length) await Promise.all(jobs);
 }
 
-function isBrandLogoName(name: string): boolean {
-  const trimmed = name.trim();
-  if (!trimmed) return false;
-  return (
-    /^apple$/i.test(trimmed)
-    || /(?:^|[_\s.-])(?:apple\s*)?logo(?:$|[_\s.-])/i.test(trimmed)
-    || /apple[\s_-]*logo/i.test(trimmed)
-  );
-}
 
 function materialFromHit(hit: THREE.Intersection): {
   material: THREE.Material;
@@ -1014,14 +1006,17 @@ function GltfDeviceContent({
     const map = new Map<THREE.Material, THREE.Material>();
     // DEV modeling keeps library hideNodes / auto logos visible so parts can be
     // removed from the panel. User mode still applies the authored cleanup.
+    const libraryHide = preserveBrandMarks ? [] : (device.hideNodes ?? []);
     const hidden = new Set([
-      ...(preserveBrandMarks ? [] : (device.hideNodes ?? [])),
+      ...libraryHide,
       ...(hiddenMeshes ?? []),
     ]);
+    if (!preserveBrandMarks) {
+      hideBrandMarks(cloned, { hideNodes: libraryHide });
+    }
     const drop: THREE.Object3D[] = [];
     cloned.traverse((obj) => {
-      const autoLogo = !preserveBrandMarks && obj.name && isBrandLogoName(obj.name);
-      if (hidden.has(obj.name) || autoLogo) {
+      if (hidden.has(obj.name) || (!preserveBrandMarks && isBrandLogoObject(obj))) {
         obj.visible = false;
       }
       const mesh = obj as THREE.Mesh;

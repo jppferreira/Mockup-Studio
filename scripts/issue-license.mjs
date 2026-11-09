@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Issue signed Mockup Studio license keys (Ed25519).
+ * Issue signed mokstudio license keys (Ed25519).
  *
  * Usage:
  *   node scripts/issue-license.mjs --init          # create keypair (once)

@@ -1,4 +1,4 @@
-/** Mockup Studio project container: MKUP + version + gzip(JSON). */
+/** mokstudio project container: MKUP + version + gzip(JSON). */
 
 export const MOCKUP_EXTENSION = 'mockup';
 export const MOCKUP_LEGACY_EXTENSION = 'mockup.json';
@@ -46,14 +46,14 @@ export async function decodeMockupFile(bytes: Uint8Array): Promise<string> {
   if (isMagic(bytes)) {
     const version = bytes[4];
     if (version !== MOCKUP_VERSION) {
-      throw new Error(`Unsupported Mockup Studio file version (${version}).`);
+      throw new Error(`Unsupported mokstudio file version (${version}).`);
     }
     const jsonBytes = await gunzipBytes(bytes.subarray(5));
     return new TextDecoder().decode(jsonBytes);
   }
   const text = new TextDecoder().decode(bytes).replace(/^\uFEFF/, '').trim();
   if (!text.startsWith('{')) {
-    throw new Error('This is not a valid Mockup Studio project.');
+    throw new Error('This is not a valid mokstudio project.');
   }
   return text;
 }

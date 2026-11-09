@@ -7,14 +7,14 @@
  * keep the generic "Electron" name.
  *
  * The Dock label follows the .app filename, so we rename Electron.app →
- * "Mockup Studio 3D.app" and rewrite electron/path.txt to match.
+ * "mokstudio.app" and rewrite electron/path.txt to match.
  */
 const { execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const APP_NAME = 'Mockup Studio 3D';
+const APP_NAME = 'mokstudio';
 const APP_ID = 'studio.mockup.desktop';
 const BUNDLE_NAME = `${APP_NAME}.app`;
 const root = path.join(__dirname, '..');

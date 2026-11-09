@@ -51,9 +51,9 @@ export function checkoutHref(plan: PaidPlanId, config = getCheckoutConfig()): st
         : PLAN_PRICES_GBP.update_pass;
   const label =
     plan === 'pro' ? 'Pro' : plan === 'pro_max' ? 'Pro Max' : 'Update Pass';
-  const subject = encodeURIComponent(`Mockup Studio ${label} (£${price})`);
+  const subject = encodeURIComponent(`mokstudio ${label} (£${price})`);
   const body = encodeURIComponent(
-    `Hi — I'd like to buy Mockup Studio ${label} (£${price}).\n\nPlease send a checkout link or license key.\n`,
+    `Hi — I'd like to buy mokstudio ${label} (£${price}).\n\nPlease send a checkout link or license key.\n`,
   );
   return `mailto:${config.salesEmail}?subject=${subject}&body=${body}`;
 }

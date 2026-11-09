@@ -16,6 +16,10 @@ import {
   type LicenseState,
 } from '../lib/license';
 import { getCheckoutConfig } from '@shared/checkout';
+import {
+  MODEL_LICENSING_NOTICE,
+  NON_AFFILIATION_DISCLAIMER,
+} from '@shared/legal';
 
 interface Props {
   open: boolean;
@@ -210,8 +214,9 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
           )}
         </form>
 
+        <p className="license-hint">{NON_AFFILIATION_DISCLAIMER}</p>
         <p className="license-hint">
-          Device models are third-party CC BY assets —{' '}
+          {MODEL_LICENSING_NOTICE}{' '}
           <button type="button" className="license-inline-link" onClick={() => void openExternal(creditsUrl)}>
             Credits
           </button>

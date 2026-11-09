@@ -1,6 +1,6 @@
 # Device model credits
 
-Third-party GLBs shipped with Mockup Studio. Prefer CC BY 4.0; keep attribution.
+Third-party GLBs shipped with mokstudio. Prefer CC BY 4.0; keep attribution.
 
 ## MacBook Pro & MacBook Air
 
@@ -52,9 +52,10 @@ Third-party GLBs shipped with Mockup Studio. Prefer CC BY 4.0; keep attribution.
 | `apple_watch_ultra_2.glb` | Apple Watch Ultra 2 — Bundled from Sketchfab CC BY download. | Polyman_3D | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-watch-ultra-2-f33263c457664b43909200c5ed5e6fa2) |
 | `apple_watch_series_9.glb` | Apple Watch Series 9 — Bundled from Sketchfab CC BY download. Kept as a library asset. | Polyman_3D | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | [Open on Sketchfab](https://sketchfab.com/3d-models/apple-watch-series-9-b6d698e718bb425a97057767f0cede47) |
 
-## Licensed commercial packs (redistribution OK)
+## Licensed commercial packs — needs legal review
 
 Converted from licensed DCC packs (FBX/OBJ → GLB). Source archives live outside the repo.
+**Do not assume** that a rendering or SaaS licence permits redistribution or every commercial use in a mockup generator. Flagged in-app as `needs_review`. Original source files are not offered for download.
 
 | File | Model | Notes |
 | --- | --- | --- |

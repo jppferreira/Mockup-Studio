@@ -403,6 +403,155 @@ function DuoPhone({
   );
 }
 
+function GenericPhone({
+  device,
+  screenshot,
+  liveStream,
+  finishHex,
+  clayMode,
+  mediaPlaying,
+  dropHighlight = false,
+}: {
+  device: DeviceModel;
+  screenshot: string | null;
+  liveStream?: MediaStream | null;
+  finishHex?: string;
+  clayMode?: boolean;
+  mediaPlaying?: boolean;
+  dropHighlight?: boolean;
+}) {
+  const finish = finishHex ?? device.finish ?? '#c8ccd1';
+  const width = 1.28;
+  const height = 2.62;
+  return (
+    <group>
+      <RoundedBox args={[width, height, 0.11]} radius={0.11} smoothness={10} castShadow receiveShadow>
+        <TitaniumMaterial color={finish} clayMode={clayMode} />
+      </RoundedBox>
+      <RoundedBox args={[width - 0.04, height - 0.05, 0.012]} radius={0.09} smoothness={8} position={[0, 0, 0.055]}>
+        <GlassBezel />
+      </RoundedBox>
+      <ScreenPlane
+        width={width - 0.12}
+        height={height - 0.14}
+        radius={0.08}
+        position={[0, 0, 0.068]}
+        screenshot={screenshot}
+        liveStream={liveStream}
+        screenSize={device.screenSize}
+        mediaPlaying={mediaPlaying}
+        dropHighlight={dropHighlight}
+      />
+      {!clayMode && (
+        <RoundedBox args={[width - 0.12, height - 0.14, 0.004]} radius={0.075} smoothness={6} position={[0, 0, 0.074]}>
+          <GlassSheet />
+        </RoundedBox>
+      )}
+      <group position={[-0.28, 0.82, -0.065]}>
+        <RoundedBox args={[0.42, 0.42, 0.04]} radius={0.1} smoothness={8} castShadow>
+          <TitaniumMaterial color={finish} />
+        </RoundedBox>
+      </group>
+    </group>
+  );
+}
+
+function GenericTablet({
+  device,
+  screenshot,
+  liveStream,
+  finishHex,
+  clayMode,
+  mediaPlaying,
+  dropHighlight = false,
+}: {
+  device: DeviceModel;
+  screenshot: string | null;
+  liveStream?: MediaStream | null;
+  finishHex?: string;
+  clayMode?: boolean;
+  mediaPlaying?: boolean;
+  dropHighlight?: boolean;
+}) {
+  const finish = finishHex ?? device.finish ?? '#d2d5da';
+  const width = 2.05;
+  const height = 2.72;
+  return (
+    <group>
+      <RoundedBox args={[width, height, 0.09]} radius={0.08} smoothness={10} castShadow receiveShadow>
+        <TitaniumMaterial color={finish} clayMode={clayMode} />
+      </RoundedBox>
+      <ScreenPlane
+        width={width - 0.14}
+        height={height - 0.14}
+        radius={0.05}
+        position={[0, 0, 0.05]}
+        screenshot={screenshot}
+        liveStream={liveStream}
+        screenSize={device.screenSize}
+        mediaPlaying={mediaPlaying}
+        dropHighlight={dropHighlight}
+      />
+      {!clayMode && (
+        <RoundedBox args={[width - 0.14, height - 0.14, 0.004]} radius={0.045} smoothness={6} position={[0, 0, 0.056]}>
+          <GlassSheet />
+        </RoundedBox>
+      )}
+    </group>
+  );
+}
+
+function GenericLaptop({
+  device,
+  screenshot,
+  liveStream,
+  finishHex,
+  clayMode,
+  mediaPlaying,
+  dropHighlight = false,
+  lidOpen = 1,
+}: {
+  device: DeviceModel;
+  screenshot: string | null;
+  liveStream?: MediaStream | null;
+  finishHex?: string;
+  clayMode?: boolean;
+  mediaPlaying?: boolean;
+  dropHighlight?: boolean;
+  lidOpen?: number;
+}) {
+  const finish = finishHex ?? device.finish ?? '#b8bcc0';
+  const width = 3.05;
+  const depth = 2.1;
+  const open = Math.min(1, Math.max(0, lidOpen));
+  const lidAngle = -((1 - open) * Math.PI * (110 / 180) + open * Math.PI * (100 / 180));
+  return (
+    <group>
+      <RoundedBox args={[width, 0.06, depth]} radius={0.03} smoothness={6} castShadow receiveShadow position={[0, 0, 0]}>
+        <TitaniumMaterial color={finish} clayMode={clayMode} />
+      </RoundedBox>
+      <group name="GenericLid" position={[0, 0.03, -depth / 2]} rotation={[lidAngle, 0, 0]}>
+        <group position={[0, 0.95, 0.04]}>
+          <RoundedBox args={[width, 1.9, 0.05]} radius={0.03} smoothness={6} castShadow>
+            <TitaniumMaterial color={finish} clayMode={clayMode} />
+          </RoundedBox>
+          <ScreenPlane
+            width={width - 0.16}
+            height={1.72}
+            radius={0.03}
+            position={[0, 0, 0.03]}
+            screenshot={screenshot}
+            liveStream={liveStream}
+            screenSize={device.screenSize}
+            mediaPlaying={mediaPlaying}
+            dropHighlight={dropHighlight}
+          />
+        </group>
+      </group>
+    </group>
+  );
+}
+
 export default function ProceduralDevice({
   device,
   screenshot,
@@ -423,6 +572,7 @@ export default function ProceduralDevice({
   lidOpen?: number;
 }) {
   const group = useRef<THREE.Group>(null);
+  const style = device.procedural ?? 'phone';
 
   useLayoutEffect(() => {
     const root = group.current;
@@ -473,20 +623,29 @@ export default function ProceduralDevice({
       }
       refreshWorld();
     }
-  }, [device.id]);
+  }, [device.id, style]);
+
+  const common = {
+    device,
+    screenshot,
+    liveStream,
+    finishHex,
+    clayMode,
+    mediaPlaying,
+    dropHighlight,
+  };
 
   return (
     <group ref={group}>
-      <DuoPhone
-        device={device}
-        screenshot={screenshot}
-        liveStream={liveStream}
-        finishHex={finishHex}
-        clayMode={clayMode}
-        mediaPlaying={mediaPlaying}
-        dropHighlight={dropHighlight}
-        lidOpen={lidOpen}
-      />
+      {style === 'duo' ? (
+        <DuoPhone {...common} lidOpen={lidOpen} />
+      ) : style === 'tablet' ? (
+        <GenericTablet {...common} />
+      ) : style === 'laptop' ? (
+        <GenericLaptop {...common} lidOpen={lidOpen} />
+      ) : (
+        <GenericPhone {...common} />
+      )}
     </group>
   );
 }

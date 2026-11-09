@@ -24,11 +24,11 @@ export function buildConfirmationEmail(opts) {
   const download = downloadUrl();
   const reissue = opts.reason === 'reissue';
   const subject = reissue
-    ? `Your new Mockup Studio ${label} license key`
-    : `Your Mockup Studio ${label} license key`;
+    ? `Your new mokstudio ${label} license key`
+    : `Your mokstudio ${label} license key`;
   const intro = reissue
-    ? `Here is a new license key for Mockup Studio ${label} (reissued after verification).`
-    : `Thanks for buying Mockup Studio ${label}.`;
+    ? `Here is a new license key for mokstudio ${label} (reissued after verification).`
+    : `Thanks for buying mokstudio ${label}.`;
   const text = [
     intro,
     '',
@@ -37,7 +37,7 @@ export function buildConfirmationEmail(opts) {
     '',
     'Install & activate:',
     `1. Download the Mac app: ${download}`,
-    '2. Open Mockup Studio → License (left panel).',
+    '2. Open mokstudio → License (left panel).',
     '3. Paste the key above and click Activate.',
     '',
     reissue
@@ -48,7 +48,7 @@ export function buildConfirmationEmail(opts) {
     `Terms: ${site}/terms`,
     opts.orderId ? `Order reference: ${opts.orderId}` : '',
     '',
-    '— Mockup Studio',
+    '— mokstudio',
   ]
     .filter(Boolean)
     .join('\n');
@@ -62,7 +62,7 @@ export function buildConfirmationEmail(opts) {
     <p><strong>Install &amp; activate</strong></p>
     <ol>
       <li>Download the Mac app: <a href="${download}">${download}</a></li>
-      <li>Open Mockup Studio → <strong>License</strong> (left panel).</li>
+      <li>Open mokstudio → <strong>License</strong> (left panel).</li>
       <li>Paste the key and click <strong>Activate</strong>.</li>
     </ol>
     <p>
@@ -85,7 +85,7 @@ export function buildConfirmationEmail(opts) {
  */
 async function sendRawEmail(message) {
   const apiKey = process.env.RESEND_API_KEY?.trim();
-  const from = process.env.LICENSE_EMAIL_FROM?.trim() || 'Mockup Studio <onboarding@resend.dev>';
+  const from = process.env.LICENSE_EMAIL_FROM?.trim() || 'mokstudio <onboarding@resend.dev>';
 
   if (!apiKey) {
     console.log('\n——— LICENSE EMAIL (dry-run — set RESEND_API_KEY to send) ———');
@@ -139,9 +139,9 @@ export async function sendLicenseEmail(opts) {
  */
 export async function sendRecoverCodeEmail(opts) {
   const site = siteUrl();
-  const subject = 'Your Mockup Studio recovery code';
+  const subject = 'Your mokstudio recovery code';
   const text = [
-    'Use this code to reissue your Mockup Studio license key:',
+    'Use this code to reissue your mokstudio license key:',
     '',
     opts.code,
     '',
@@ -149,13 +149,13 @@ export async function sendRecoverCodeEmail(opts) {
     opts.orderId ? `Order reference: ${opts.orderId}` : '',
     '',
     `Recover page: ${site}/recover`,
-    '— Mockup Studio',
+    '— mokstudio',
   ]
     .filter(Boolean)
     .join('\n');
 
   const html = `
-    <p>Use this code to reissue your Mockup Studio license key:</p>
+    <p>Use this code to reissue your mokstudio license key:</p>
     <p style="font-family:ui-monospace,Menlo,monospace;font-size:28px;letter-spacing:0.2em;padding:12px 14px;background:#111;color:#e8ecef;border-radius:8px;display:inline-block;">
       ${opts.code}
     </p>
@@ -191,15 +191,15 @@ export async function sendFeedbackEmail(opts) {
   );
   const intent = opts.intent === 'contact' ? 'contact' : 'feedback';
   const topic = String(opts.topic || 'Other').trim() || 'Other';
-  const name = String(opts.name || '').trim() || 'Mockup Studio user';
+  const name = String(opts.name || '').trim() || 'mokstudio user';
   const replyTo = String(opts.replyTo || '').trim();
-  const subject = `Mockup Studio ${intent} — ${topic}${replyTo ? ` · ${replyTo}` : ''}`;
+  const subject = `mokstudio ${intent} — ${topic}${replyTo ? ` · ${replyTo}` : ''}`;
   const text = [
     `Topic: ${topic}`,
     `Intent: ${intent}`,
     `From: ${name}`,
     replyTo ? `Reply-to: ${replyTo}` : 'Reply-to: (not provided)',
-    opts.appVersion ? `App: Mockup Studio ${opts.appVersion}` : null,
+    opts.appVersion ? `App: mokstudio ${opts.appVersion}` : null,
     opts.platform ? `Platform: ${opts.platform}` : null,
     opts.userAgent ? `User-Agent: ${opts.userAgent}` : null,
     '',
@@ -213,13 +213,13 @@ export async function sendFeedbackEmail(opts) {
     <p><strong>From:</strong> ${escapeHtml(name)}${
       replyTo ? ` &lt;${escapeHtml(replyTo)}&gt;` : ''
     }</p>
-    ${opts.appVersion ? `<p><strong>App:</strong> Mockup Studio ${escapeHtml(opts.appVersion)}</p>` : ''}
+    ${opts.appVersion ? `<p><strong>App:</strong> mokstudio ${escapeHtml(opts.appVersion)}</p>` : ''}
     ${opts.platform ? `<p><strong>Platform:</strong> ${escapeHtml(opts.platform)}</p>` : ''}
     <pre style="white-space:pre-wrap;font-family:ui-sans-serif,system-ui,sans-serif;background:#111;color:#e8ecef;padding:14px;border-radius:8px;">${escapeHtml(String(opts.message || '').trim())}</pre>
   `.trim();
 
   const apiKey = process.env.RESEND_API_KEY?.trim();
-  const from = process.env.LICENSE_EMAIL_FROM?.trim() || 'Mockup Studio <onboarding@resend.dev>';
+  const from = process.env.LICENSE_EMAIL_FROM?.trim() || 'mokstudio <onboarding@resend.dev>';
 
   if (!apiKey) {
     console.log('\n——— FEEDBACK EMAIL (dry-run — set RESEND_API_KEY to send) ———');

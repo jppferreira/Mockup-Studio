@@ -25,13 +25,13 @@ function decodeProjectFile(buf) {
   if (isMockupBinary(bytes)) {
     const version = bytes[4];
     if (version !== VERSION) {
-      throw new Error(`Unsupported Mockup Studio file version (${version}).`);
+      throw new Error(`Unsupported mokstudio file version (${version}).`);
     }
     return zlib.gunzipSync(bytes.subarray(5)).toString('utf8');
   }
   const text = bytes.toString('utf8').replace(/^\uFEFF/, '').trim();
   if (!text.startsWith('{')) {
-    throw new Error('This is not a valid Mockup Studio project.');
+    throw new Error('This is not a valid mokstudio project.');
   }
   return text;
 }

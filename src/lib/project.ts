@@ -144,7 +144,7 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
 }
 
 export function validateProject(value: unknown): MockupProject {
-  if (!value || typeof value !== 'object') throw new Error('This is not a valid Mockup Studio project.');
+  if (!value || typeof value !== 'object') throw new Error('This is not a valid mokstudio project.');
   const input = value as Partial<MockupProject>;
   if (input.version !== 1) throw new Error('Unsupported project version.');
   if (typeof input.name !== 'string') throw new Error('Project name is invalid.');

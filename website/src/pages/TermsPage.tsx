@@ -1,5 +1,10 @@
 import { Link } from 'react-router-dom';
 import { PLAN_PRICES_GBP, formatGbp } from '@shared/pricing';
+import {
+  EXPORT_USAGE_NOTICE,
+  MODEL_LICENSING_NOTICE,
+  NON_AFFILIATION_DISCLAIMER,
+} from '@shared/legal';
 import { DownloadButton } from '../components/DownloadButton';
 import { Reveal } from '../components/Reveal';
 import { SiteChrome } from '../components/SiteChrome';
@@ -8,7 +13,7 @@ const SECTIONS = [
   {
     title: 'Agreement',
     copy:
-      'By downloading, installing, or using Mockup Studio you agree to these Terms and the proprietary LICENSE shipped with the app. If you do not agree, do not use the software.',
+      'By downloading, installing, or using mokstudio you agree to these Terms and the proprietary LICENSE shipped with the app. If you do not agree, do not use the software.',
   },
   {
     title: 'Plans and entitlements',
@@ -31,7 +36,7 @@ const SECTIONS = [
   {
     title: 'Mac App Store (if offered later)',
     copy:
-      'If Mockup Studio is also distributed on the Mac App Store, purchases and unlocks made through Apple are governed by Apple’s Licensed Application End User License Agreement, App Store terms, and Apple’s refund rules, in addition to these Terms for the product itself. In-app unlocks on a Mac App Store build use Apple In-App Purchase rather than external checkout.',
+      'If mokstudio is also distributed on the Mac App Store, purchases and unlocks made through Apple are governed by Apple’s Licensed Application End User License Agreement, App Store terms, and Apple’s refund rules, in addition to these Terms for the product itself. In-app unlocks on a Mac App Store build use Apple In-App Purchase rather than external checkout.',
   },
   {
     title: 'Your content',
@@ -39,14 +44,21 @@ const SECTIONS = [
       'Screenshots, project files, and exports you create remain yours. We do not claim ownership of your work. The desktop app is designed to keep project contents on your Mac.',
   },
   {
+    title: 'Non-affiliation',
+    copy: NON_AFFILIATION_DISCLAIMER,
+  },
+  {
     title: 'Third-party models and trademarks',
-    copy:
-      'Bundled 3D device models are third-party assets (typically CC BY 4.0). See Credits. Device and brand names are trademarks of their owners. Mockup Studio is not affiliated with or endorsed by Apple Inc., Samsung Electronics, or Google LLC.',
+    copy: MODEL_LICENSING_NOTICE,
+  },
+  {
+    title: 'Export and usage',
+    copy: EXPORT_USAGE_NOTICE,
   },
   {
     title: 'Restrictions',
     copy:
-      'You may not redistribute the app source or binaries, crack or forge license keys, strip model attribution, or use Free-plan output for commercial client work, ads, or store listings.',
+      'You may not redistribute the app source or binaries, crack or forge license keys, redistribute original 3D model source files, strip model attribution, or use Free-plan output for commercial client work, ads, or store listings.',
   },
   {
     title: 'No warranty',
@@ -67,7 +79,7 @@ export function TermsPage() {
           <p className="section-kicker">Terms</p>
           <h1>Terms of use</h1>
           <p className="page-lede">
-            Buyer-facing license terms for Mockup Studio — freemium Mac app, direct download today, Mac App Store optional later.
+            Buyer-facing license terms for mokstudio — freemium Mac app, direct download today, Mac App Store optional later.
           </p>
         </header>
 

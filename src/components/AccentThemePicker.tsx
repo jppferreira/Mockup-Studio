@@ -4,12 +4,15 @@ import { useAccentTheme, type AccentTheme } from '../lib/accentTheme';
 const OPTIONS: { id: Exclude<AccentTheme, 'custom'>; label: string }[] = [
   { id: 'green', label: 'Green' },
   { id: 'purple', label: 'Purple' },
+  { id: 'coral', label: 'Coral' },
 ];
 
 export default function AccentThemePicker({ compact = false }: { compact?: boolean }) {
   const [theme, setTheme, color] = useAccentTheme();
   const [draft, setDraft] = useState(color);
-  const index = theme === 'custom' ? 2 : Math.max(0, OPTIONS.findIndex((option) => option.id === theme));
+  const index = theme === 'custom'
+    ? OPTIONS.length
+    : Math.max(0, OPTIONS.findIndex((option) => option.id === theme));
 
   useEffect(() => setDraft(color), [color]);
 

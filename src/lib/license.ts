@@ -254,6 +254,8 @@ export function entitlementsFor(tier: LicenseTier) {
 /** True for the freemium starter set (and custom imports). Paid catalog devices are Pro. */
 export function isFreeDevice(deviceId: string): boolean {
   if (deviceId.startsWith('custom-')) return true;
+  // Brand-free procedural shapes — always available; no licensed mesh download.
+  if (deviceId.startsWith('generic_')) return true;
   return (FREE_DEVICE_IDS as readonly string[]).includes(deviceId);
 }
 

@@ -4,7 +4,7 @@
   "version": "0.1.1",
   "license": "UNLICENSED",
   "description": "Local-first 3D device mockup studio for macOS",
-  "productName": "Mockup Studio 3D",
+  "productName": "mokstudio",
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
@@ -55,7 +55,7 @@
   },
   "build": {
     "appId": "studio.mockup.desktop",
-    "productName": "Mockup Studio 3D",
+    "productName": "mokstudio",
     "directories": {
       "output": "release"
     },
@@ -73,8 +73,8 @@
     "fileAssociations": [
       {
         "ext": "mockup",
-        "name": "Mockup Studio Project",
-        "description": "Mockup Studio Project",
+        "name": "mokstudio Project",
+        "description": "mokstudio Project",
         "mimeType": "application/x-mockup-studio",
         "role": "Editor",
         "rank": "Owner"
@@ -88,7 +88,7 @@
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.plist",
       "extendInfo": {
-        "NSCameraUsageDescription": "Mockup Studio uses camera access to mirror your iPhone or iPad screen over USB into the 3D mockup."
+        "NSCameraUsageDescription": "mokstudio uses camera access to mirror your iPhone or iPad screen over USB into the 3D mockup."
       },
       "target": [
         {

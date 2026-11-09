@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Glasses, Headphones, Laptop, LayoutGrid, Monitor, Smartphone, Tablet, UserRound, Watch, Wrench,
+  Cuboid, Glasses, Headphones, Laptop, LayoutGrid, Monitor, Smartphone, Tablet, UserRound, Watch, Wrench,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { hasAnimation } from '../lib/animation';
@@ -12,6 +12,13 @@ import {
   type DeviceCategoryIconKey,
   type DeviceModel,
 } from '../lib/devices';
+import {
+  APP_ABOUT_SUMMARY,
+  EXPORT_USAGE_NOTICE,
+  MODEL_LICENSING_NOTICE,
+  NON_AFFILIATION_DISCLAIMER,
+} from '@shared/legal';
+import { getCheckoutConfig } from '@shared/checkout';
 
 const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
   'layout-grid': LayoutGrid,
@@ -22,6 +29,7 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
   watch: Watch,
   headphones: Headphones,
   glasses: Glasses,
+  cuboid: Cuboid,
 };
 import AccentThemePicker from './AccentThemePicker';
 import CloudSyncPanel, { type CloudTarget } from './CloudSyncPanel';
@@ -265,7 +273,7 @@ export default function ProjectsDashboard({
       <header className="dash-header">
         <div className="dash-brand">
           <img className="dash-logo" src="./splash/logo.png" alt="" width={28} height={28} />
-          <strong>Mockup Studio</strong>
+          <strong>mokstudio</strong>
           <span className="dash-beta-badge" aria-label="Beta">Beta</span>
         </div>
         <span className="dash-header-rule" aria-hidden />
@@ -791,6 +799,48 @@ export default function ProjectsDashboard({
                   <span>Highlight each workspace section again</span>
                 </button>
               )}
+
+              <div className="dash-setting dash-legal" id="settings-about">
+                <strong>About</strong>
+                <span>{APP_ABOUT_SUMMARY}</span>
+                <span className="dash-legal-meta">mokstudio · 0.1.0</span>
+              </div>
+
+              <div className="dash-setting dash-legal" id="settings-legal">
+                <strong>Legal</strong>
+                <span>{NON_AFFILIATION_DISCLAIMER}</span>
+                <span>{EXPORT_USAGE_NOTICE}</span>
+                <span>{MODEL_LICENSING_NOTICE}</span>
+                <div className="dash-legal-links">
+                  {([
+                    ['Terms', '/terms'],
+                    ['Privacy', '/privacy'],
+                    ['Credits', '/credits'],
+                  ] as const).map(([label, path]) => (
+                    <button
+                      key={path}
+                      type="button"
+                      className="dash-legal-link"
+                      onClick={() => {
+                        const url = `${getCheckoutConfig().siteUrl}${path}`;
+                        void (async () => {
+                          try {
+                            if (window.mockupDesktop?.openExternal) {
+                              await window.mockupDesktop.openExternal(url);
+                              return;
+                            }
+                          } catch {
+                            /* fall through */
+                          }
+                          window.open(url, '_blank', 'noopener,noreferrer');
+                        })();
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 

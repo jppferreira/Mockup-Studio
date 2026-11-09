@@ -195,7 +195,7 @@ export function RecoverPage() {
                 Dry-run key: <code>{devKey}</code>
               </p>
             )}
-            <p>Open Mockup Studio → License → paste the new key. Remove any old license first if needed.</p>
+            <p>Open mokstudio → License → paste the new key. Remove any old license first if needed.</p>
           </Reveal>
         )}
 

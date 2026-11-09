@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-export type AccentTheme = 'green' | 'purple' | 'custom';
+export type AccentTheme = 'green' | 'purple' | 'coral' | 'custom';
 
 export const ACCENT_THEME_KEY = 'mockup-studio-accent';
 export const ACCENT_COLOR_KEY = 'mockup-studio-accent-color';
@@ -9,9 +9,10 @@ export const DEFAULT_CUSTOM_ACCENT = '#3b82f6';
 export type AccentPair = { accent: string; soft: string };
 
 /** Bright accent used by canvas strokes and 3D selection. Matches `--accent`. */
-export const ACCENT_HEX: Record<'green' | 'purple', AccentPair> = {
+export const ACCENT_HEX: Record<'green' | 'purple' | 'coral', AccentPair> = {
   green: { accent: '#5cecb6', soft: '#c5f2b6' },
   purple: { accent: '#b794ff', soft: '#d4c4ff' },
+  coral: { accent: '#ff7a66', soft: '#ffb3a6' },
 };
 
 export type AccentSelection = { theme: AccentTheme; color: string };
@@ -29,7 +30,7 @@ export function normalizeHex(input: string | null | undefined): string {
 export function readAccentTheme(): AccentTheme {
   try {
     const value = localStorage.getItem(ACCENT_THEME_KEY);
-    if (value === 'green' || value === 'purple' || value === 'custom') return value;
+    if (value === 'green' || value === 'purple' || value === 'coral' || value === 'custom') return value;
   } catch {
     /* private mode */
   }
@@ -47,6 +48,7 @@ export function readAccentColor(): string {
 export function accentPair(theme: AccentTheme, color = readAccentColor()): AccentPair {
   if (theme === 'green') return ACCENT_HEX.green;
   if (theme === 'purple') return ACCENT_HEX.purple;
+  if (theme === 'coral') return ACCENT_HEX.coral;
   const accent = normalizeHex(color);
   return { accent, soft: deriveAccent(accent)['--accent-soft'] };
 }
@@ -233,7 +235,7 @@ export function useAccentTheme() {
     applyAccentTheme(theme, color);
     const onChange = (event: Event) => {
       const next = (event as CustomEvent<AccentSelection>).detail;
-      if (!next || (next.theme !== 'green' && next.theme !== 'purple' && next.theme !== 'custom')) return;
+      if (!next || (next.theme !== 'green' && next.theme !== 'purple' && next.theme !== 'coral' && next.theme !== 'custom')) return;
       setTheme(next.theme);
       setColor(normalizeHex(next.color));
     };

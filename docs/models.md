@@ -47,3 +47,5 @@ The UI already locks Pro devices; the Edge Function enforces the same rule so fr
 ## Rights
 
 Do not publish the GLBs on GitHub, in public buckets, or as release assets. Customer installs only receive models they are entitled to, through the gated signed-URL path.
+
+Do **not** offer downloads of original 3D model source files. A rendering or SaaS licence does not automatically permit redistribution or every commercial use — see `docs/ip-legal-audit.md` and in-app `licenseClarity` flags.

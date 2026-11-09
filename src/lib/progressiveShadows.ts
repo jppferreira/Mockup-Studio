@@ -134,7 +134,7 @@ export function installProgressiveShadowShader(
   const shader = buildProgressiveShadowChunk(profile);
   if (!shader) {
     if (!THREE.ShaderChunk.shadowmap_pars_fragment.includes(MARKER)) {
-      console.warn('[Mockup Studio] Unsupported Three.js shadow chunk, retaining PCF shadows.');
+      console.warn('[mokstudio] Unsupported Three.js shadow chunk, retaining PCF shadows.');
     }
     THREE.ShaderChunk.shadowmap_pars_fragment = cleanShadowmapParsFragment;
     const changed = activeProfile !== profile;

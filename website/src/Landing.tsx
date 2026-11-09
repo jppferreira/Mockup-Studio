@@ -231,7 +231,7 @@ export function Landing() {
         <Reveal as="section" className="download" id="download">
           <div className="download-panel">
             <p className="section-kicker">Get the app</p>
-            <h2>Download Mockup Studio for Mac.</h2>
+            <h2>Download mokstudio for Mac.</h2>
             <p>
               Free for Apple Silicon. Upgrade in-app to Pro ({PLANS.find((p) => p.id === 'pro')?.priceLabel}) or Pro Max (
               {PLANS.find((p) => p.id === 'pro_max')?.priceLabel}) when you need the full library and motion export.

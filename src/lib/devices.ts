@@ -53,14 +53,24 @@ export type BuiltinDeviceId =
   | 'macbook_pro_m5'
   | 'imac_24'
   | 'imac_m4'
-  | 'apple_homeview';
+  | 'apple_homeview'
+  | 'generic_smartphone'
+  | 'generic_tablet'
+  | 'generic_laptop';
 
 /** Built-in id, or a user-imported custom model id (`custom-…`). */
 export type DeviceId = BuiltinDeviceId | (string & {});
 
 export type DevicePlatform = 'ios' | 'android';
 export type DeviceKind = 'gltf' | 'procedural';
-export type ProceduralStyle = 'duo';
+export type ProceduralStyle = 'duo' | 'phone' | 'tablet' | 'laptop';
+
+/**
+ * Commercial-use clarity for the purchased / credited mesh.
+ * `needs_review` = pack terms do not clearly permit a commercial mockup generator.
+ * Does not constitute legal advice.
+ */
+export type ModelLicenseClarity = 'cc_by' | 'commercial_pack' | 'procedural' | 'needs_review';
 
 /** Picker filter groups for the Device inspector. */
 export type DeviceCategoryId =
@@ -70,7 +80,8 @@ export type DeviceCategoryId =
   | 'desktops'
   | 'watches'
   | 'headphones'
-  | 'spatial';
+  | 'spatial'
+  | 'generic';
 
 export type DeviceCategoryFilter = 'all' | DeviceCategoryId;
 
@@ -83,6 +94,7 @@ export const DEVICE_CATEGORY_TABS: ReadonlyArray<{ id: DeviceCategoryFilter; lab
   { id: 'watches', label: 'Watches' },
   { id: 'headphones', label: 'Headphones' },
   { id: 'spatial', label: 'Spatial' },
+  { id: 'generic', label: 'Generic' },
 ];
 
 /** Lucide icon name key used by the Device panel category tabs. */
@@ -94,7 +106,8 @@ export type DeviceCategoryIconKey =
   | 'monitor'
   | 'watch'
   | 'headphones'
-  | 'glasses';
+  | 'glasses'
+  | 'cuboid';
 
 export const DEVICE_CATEGORY_ICON: Record<DeviceCategoryFilter, DeviceCategoryIconKey> = {
   all: 'layout-grid',
@@ -105,6 +118,7 @@ export const DEVICE_CATEGORY_ICON: Record<DeviceCategoryFilter, DeviceCategoryIc
   watches: 'watch',
   headphones: 'headphones',
   spatial: 'glasses',
+  generic: 'cuboid',
 };
 
 export interface DeviceUv {
@@ -169,18 +183,31 @@ export interface DeviceModel {
   dropNameIncludes?: string[];
   /** Optional laptop lid open/close rig */
   lid?: DeviceLidConfig;
+  /**
+   * Licence clarity for commercial mockup-generator use.
+   * `needs_review` must be checked with counsel before relying on the mesh commercially.
+   */
+  licenseClarity?: ModelLicenseClarity;
+  /** Short note shown in Legal / Credits context when clarity is limited. */
+  licenseNote?: string;
 }
 
 export function categoryOfDevice(device: Pick<DeviceModel, 'id' | 'category'>): DeviceCategoryId {
   if (device.category) return device.category;
   const id = String(device.id);
+  if (/^generic_/.test(id)) return 'generic';
   if (/ipad|tablet|\btab_/.test(id)) return 'tablets';
-  if (/imac|desktop|studio_display/.test(id)) return 'desktops';
+  if (/imac|desktop|studio_display|homeview/.test(id)) return 'desktops';
   if (/macbook|laptop/.test(id)) return 'laptops';
   if (/watch/.test(id)) return 'watches';
   if (/airpods|mdr_|skullcandy|jbl_|headphone/.test(id)) return 'headphones';
   if (/vision_pro|spatial/.test(id)) return 'spatial';
   return 'phones';
+}
+
+/** Devices whose pack / Sketchfab terms do not clearly permit SaaS mockup use. */
+export function deviceNeedsLicenseReview(device: Pick<DeviceModel, 'licenseClarity'>): boolean {
+  return device.licenseClarity === 'needs_review' || device.licenseClarity === 'commercial_pack';
 }
 
 export function filterDevicesByCategory(
@@ -212,6 +239,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
       'jpGaQNgTtEGkTfo', 'sxNzrmuTqVeaXdg', 'xNrofRCqOXXHVZt',
       'ZQfGMLaFcpPaLMU', 'EszxgwYUTxbhBrC', 'HGhEhpqSBZRnjHC',
     ],
+    licenseClarity: 'cc_by',
+    licenseNote: 'No separate logo mesh found — check albedo for baked marks before release.',
   },
   {
     id: 'iphone_16_pro_max',
@@ -227,11 +256,12 @@ export const DEVICE_MODELS: DeviceModel[] = [
     glassMats: ['glass.002', 'lensinglass'],
     // Metal squares glued to the bottom edge of the Sketchfab mesh + back Apple logo.
     hideNodes: ['Plane.013_metaL.001_0', 'Plane.014_metaL.001_0', 'Cube.014_apple logo.001_0'],
+    licenseClarity: 'cc_by',
   },
   {
     id: 'iphone_17_pro',
     label: 'iPhone 17 Pro',
-    subtitle: 'iOS · Device pack',
+    subtitle: 'iOS',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_17_pro.glb',
@@ -242,11 +272,12 @@ export const DEVICE_MODELS: DeviceModel[] = [
     glassMats: ['glass', 'camera glass', 'flash glass', 'lens'],
     lockMaterials: true,
     hideNodes: ['Cube'],
+    licenseClarity: 'cc_by',
   },
   {
     id: 'iphone_17_pro_max',
     label: 'iPhone 17 Pro Max',
-    subtitle: 'iOS · Device pack',
+    subtitle: 'iOS',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_17_pro_max.glb',
@@ -257,11 +288,12 @@ export const DEVICE_MODELS: DeviceModel[] = [
     glassMats: ['camera glass.1', 'flash glass', 'lens.1'],
     lockMaterials: true,
     hideNodes: ['Cube'],
+    licenseClarity: 'cc_by',
   },
   {
     id: 'iphone_duo',
     label: 'iPhone Duo',
-    subtitle: 'iOS · Textured foldable',
+    subtitle: 'iOS · Foldable concept',
     platform: 'ios',
     kind: 'gltf',
     category: 'phones',
@@ -310,6 +342,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [0, Math.PI, 0],
     uv: { flipY: true },
     glassMats: ['CamGlass', 'Lens'],
+    hideNodes: ['BackBody..001_Logo_0'],
+    licenseClarity: 'cc_by',
     tweaks: {
       CamGlass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.05, transparent: true },
       Bezel: {
@@ -333,6 +367,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [0, 0, 0],
     uv: { flipY: true },
     glassMats: ['Material.011', 'Material.021', 'Material.018', 'Lens'],
+    // Google wordmark lives on material Google.002 (Object_10) — auto-hidden by brandMarks.
+    licenseClarity: 'cc_by',
     tweaks: {
       'Material.011': { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.04, transparent: true },
       'Material.021': { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.04, transparent: true },
@@ -353,6 +389,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [0, Math.PI, 0],
     uv: { flipY: true },
     glassMats: ['CamGlass', 'Lens'],
+    hideNodes: ['BackBody..001_Logo_0'],
+    licenseClarity: 'cc_by',
     tweaks: {
       CamGlass: { roughness: 1, metalness: 0, envMapIntensity: 0, opacity: 0.05, transparent: true },
       Bezel: {
@@ -367,7 +405,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
   {
     id: 'iphone_13_pro_max',
     label: 'iPhone 13 Pro Max',
-    subtitle: 'iOS · SceneView / DatSketch',
+    subtitle: 'iOS',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_13_pro_max.glb',
@@ -377,11 +415,12 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: { flipY: true, mirrorX: true },
     glassMats: ['Glass', 'Screen_Glass', 'Camera_Glass', 'Gray_Glass', 'Black_Glass', 'Lens'],
     hideNodes: ['Apple Logo', 'Apple Logo_Logo_0'],
+    licenseClarity: 'cc_by',
   },
   {
     id: 'galaxy_s21_ultra',
     label: 'Galaxy S21 Ultra',
-    subtitle: 'Android · SceneView / DatSketch',
+    subtitle: 'Android',
     platform: 'android',
     kind: 'gltf',
     url: './models/galaxy_s21_ultra.glb',
@@ -390,11 +429,13 @@ export const DEVICE_MODELS: DeviceModel[] = [
     rot: [0, Math.PI, 0],
     uv: { flipY: true },
     glassMats: ['Glass', 'Lens', 'Lens.001'],
+    hideNodes: ['Logo', 'Logo_BodyFrame_0'],
+    licenseClarity: 'cc_by',
   },
   {
     id: 'ipad_mini_6',
     label: 'iPad mini 6',
-    subtitle: 'iPadOS · SceneView / DatSketch',
+    subtitle: 'iPadOS',
     platform: 'ios',
     kind: 'gltf',
     url: './models/ipad_mini_6.glb',
@@ -404,11 +445,12 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: { mirrorX: true, flipY: true },
     glassMats: ['CamGlass', 'Lens'],
     hideNodes: ['iPad Mini_BaseColorLogo_0'],
+    licenseClarity: 'cc_by',
   },
   {
     id: 'macbook_pro_13_2020',
     label: 'MacBook Pro 13″ (2020)',
-    subtitle: 'macOS · Timblewee / SceneView',
+    subtitle: 'macOS',
     platform: 'ios',
     kind: 'gltf',
     url: './models/macbook_pro_13_2020.glb',
@@ -512,7 +554,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
   {
     id: 'jbl_tour_one_m3',
     label: 'JBL Tour One M3',
-    subtitle: 'Audio · CC BY',
+    subtitle: 'Audio',
     platform: 'android',
     kind: 'gltf',
     category: 'headphones',
@@ -521,9 +563,11 @@ export const DEVICE_MODELS: DeviceModel[] = [
     screenSize: { width: 1024, height: 1024 },
     rot: [0, 0, 0],
     uv: {},
-    glassMats: ['Button_Glossy', 'Ring', 'Icons', 'JBL_Logo_Outer'],
+    glassMats: ['Button_Glossy', 'Ring', 'Icons'],
+    hideNodes: ['JBL_Logo_Inner_14', 'Button_Logo_19', 'JBL_Logo_Outer_21'],
     hasScreen: false,
     lockMaterials: true,
+    licenseClarity: 'cc_by',
   },
   {
     id: 'macbook_pro_m3_16',
@@ -602,7 +646,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
   {
     id: 'iphone_18_pro_max',
     label: 'iPhone 18 Pro Max',
-    subtitle: 'iOS · Device pack',
+    subtitle: 'iOS',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_18_pro_max.glb',
@@ -613,11 +657,12 @@ export const DEVICE_MODELS: DeviceModel[] = [
     glassMats: ['Glass'],
     lockMaterials: true,
     hideNodes: ['Apple'],
+    licenseClarity: 'cc_by',
   },
   {
     id: 'iphone_18_pro',
     label: 'iPhone 18 Pro',
-    subtitle: 'iOS · Device pack',
+    subtitle: 'iOS',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_18_pro.glb',
@@ -628,11 +673,12 @@ export const DEVICE_MODELS: DeviceModel[] = [
     glassMats: ['Glass'],
     lockMaterials: true,
     hideNodes: ['Apple'],
+    licenseClarity: 'cc_by',
   },
   {
     id: 'iphone_18',
     label: 'iPhone 18',
-    subtitle: 'iOS · Ranguel',
+    subtitle: 'iOS · Concept',
     platform: 'ios',
     kind: 'gltf',
     url: './models/iphone_18.glb',
@@ -672,7 +718,7 @@ export const DEVICE_MODELS: DeviceModel[] = [
   {
     id: 'apple_vision_pro',
     label: 'Apple Vision Pro',
-    subtitle: 'visionOS · DextonOfficial',
+    subtitle: 'visionOS · Spatial headset',
     platform: 'ios',
     kind: 'gltf',
     url: './models/apple_vision_pro.glb',
@@ -682,11 +728,12 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: {},
     glassMats: ['NLAQCwOxsrAPIlV', 'LlnrRvRtBSKKJtZ', 'FOugkDgsmvxAjLB', 'nctcFIvFhZfKDLQ'],
     lockMaterials: true,
+    licenseClarity: 'cc_by',
   },
   {
     id: 'apple_watch_ultra_2',
     label: 'Apple Watch Ultra 2',
-    subtitle: 'watchOS · Polyman_3D',
+    subtitle: 'watchOS',
     platform: 'ios',
     kind: 'gltf',
     url: './models/apple_watch_ultra_2.glb',
@@ -727,6 +774,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: { planar: true },
     glassMats: ['Glass'],
     lockMaterials: true,
+    licenseClarity: 'needs_review',
+    licenseNote: 'Commercial pack GLB — verify licence covers a commercial mockup generator.',
   },
   {
     id: 'galaxy_z_fold8',
@@ -742,6 +791,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: { planar: true },
     glassMats: ['Glass', 'Glass.001'],
     lockMaterials: true,
+    licenseClarity: 'needs_review',
+    licenseNote: 'Commercial pack GLB — verify licence covers a commercial mockup generator.',
     // Left cover + half of the spanning inner screen swing closed around Y.
     lid: {
       mode: 'fold',
@@ -766,6 +817,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: { planar: true },
     glassMats: ['Glass', 'Glass.001'],
     lockMaterials: true,
+    licenseClarity: 'needs_review',
+    licenseNote: 'Commercial pack GLB — verify licence covers a commercial mockup generator.',
     lid: {
       mode: 'fold',
       wing: ['Base_L', 'Screen_02', 'Glass_Screen_02', 'Lens_02'],
@@ -777,8 +830,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
   },
   {
     id: 'apple_homeview',
-    label: 'Apple HomeView',
-    subtitle: 'HomeOS · Concept',
+    label: 'HomeView',
+    subtitle: 'Desktop · Concept display',
     platform: 'ios',
     kind: 'gltf',
     category: 'desktops',
@@ -791,6 +844,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     glassMats: ['Camera:0:0:0 #1', 'Camera:0:0:0 #2', 'Camera:0:0:0 #3'],
     lockMaterials: true,
     hideNodes: ['logo', 'logo.001', 'logo.002'],
+    licenseClarity: 'needs_review',
+    licenseNote: 'Commercial pack asset — confirm SaaS / mockup-generator rights before commercial release.',
   },
   {
     id: 'apple_watch_series_12',
@@ -806,6 +861,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: {},
     glassMats: ['frame gold', 'crown ring gold'],
     lockMaterials: true,
+    licenseClarity: 'needs_review',
+    licenseNote: 'Converted from a commercial DCC pack — redistribution OK note is unverified for SaaS mockup use.',
   },
   {
     id: 'pixel_fold',
@@ -821,6 +878,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: {},
     glassMats: ['Glass'],
     lockMaterials: true,
+    licenseClarity: 'needs_review',
+    licenseNote: 'Commercial pack GLB — verify licence covers a commercial mockup generator.',
     lid: {
       mode: 'fold',
       wing: [
@@ -851,6 +910,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: {},
     glassMats: ['glass'],
     lockMaterials: true,
+    licenseClarity: 'needs_review',
+    licenseNote: 'Commercial pack FBX → GLB — confirm mockup-generator rights.',
     // Source pack used a vivid blue rubber placeholder + chrome metals.
     tweaks: {
       Brass: { metalness: 1, roughness: 0.35, envMapIntensity: 0.55 },
@@ -875,6 +936,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     glassMats: ['transparent glass', 'foggy glass', 'camera lens'],
     lockMaterials: true,
     hideNodes: ['Cube_1'],
+    licenseClarity: 'needs_review',
+    licenseNote: 'Apple Products 2026 pack FBX — confirm SaaS / mockup-generator rights.',
   },
   {
     id: 'macbook_pro_m5',
@@ -892,6 +955,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     lockMaterials: true,
     hideNodes: ['Cube', 'Extrude', 'Extrude_2'],
     lid: { mode: 'hinge', nodes: ['rotate_screen', 'screen', 'black bezel'], closeAngle: 1.55, hingeZ: 'max' },
+    licenseClarity: 'needs_review',
+    licenseNote: 'Apple Products 2026 pack FBX — confirm SaaS / mockup-generator rights.',
   },
   {
     id: 'imac_24',
@@ -909,6 +974,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     lockMaterials: true,
     // GLB ships seven colorways in a row; keep the origin iMac only.
     dropNameIncludes: ['Plane003', 'Plane004', 'Plane005', 'Plane006', 'Plane007', 'Plane008'],
+    licenseClarity: 'needs_review',
+    licenseNote: 'Commercial iMac colors pack — confirm mockup-generator rights.',
   },
   {
     id: 'imac_m4',
@@ -924,6 +991,54 @@ export const DEVICE_MODELS: DeviceModel[] = [
     uv: {},
     glassMats: ['pearly glass cyan'],
     lockMaterials: true,
+    licenseClarity: 'needs_review',
+    licenseNote: 'Apple Products 2026 pack FBX — confirm SaaS / mockup-generator rights.',
+  },
+  {
+    id: 'generic_smartphone',
+    label: 'Smartphone',
+    subtitle: 'Generic · No brand marks',
+    platform: 'ios',
+    kind: 'procedural',
+    category: 'generic',
+    procedural: 'phone',
+    finish: '#c8ccd1',
+    screenMat: 'ProceduralScreen',
+    screenSize: { width: 1170, height: 2532 },
+    rot: [0, 0, 0],
+    uv: {},
+    licenseClarity: 'procedural',
+  },
+  {
+    id: 'generic_tablet',
+    label: 'Tablet',
+    subtitle: 'Generic · No brand marks',
+    platform: 'ios',
+    kind: 'procedural',
+    category: 'generic',
+    procedural: 'tablet',
+    finish: '#d2d5da',
+    screenMat: 'ProceduralScreen',
+    screenSize: { width: 1668, height: 2388 },
+    rot: [0, 0, 0],
+    uv: {},
+    licenseClarity: 'procedural',
+  },
+  {
+    id: 'generic_laptop',
+    label: 'Laptop',
+    subtitle: 'Generic · No brand marks',
+    platform: 'ios',
+    kind: 'procedural',
+    category: 'generic',
+    procedural: 'laptop',
+    finish: '#b8bcc0',
+    screenMat: 'ProceduralScreen',
+    screenSize: { width: 2560, height: 1600 },
+    rot: [0, 0, 0],
+    uv: {},
+    lid: { mode: 'hinge', nodes: ['GenericLid'], closeAngle: Math.PI * (110 / 180) },
+    licenseClarity: 'procedural',
   },
 ];
 

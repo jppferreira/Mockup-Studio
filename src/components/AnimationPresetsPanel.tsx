@@ -1,8 +1,9 @@
 import {
-  Suspense, useMemo, useRef, useState,
+  Suspense, useEffect, useMemo, useRef, useState,
 } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { ContactShadows, PerspectiveCamera, useGLTF } from '@react-three/drei';
+import { hideBrandMarks } from '../lib/brandMarks';
 import * as THREE from 'three';
 import { ANIMATION_PRESETS, applyAnimationPreset, type AnimationPreset } from '../lib/animationPresets';
 import { evaluateAnimation, evaluateCamera } from '../lib/animation';
@@ -42,16 +43,20 @@ function PreviewFallback({ color = '#3d8f72' }: { color?: string }) {
 
 function FittedGltfModel({
   url,
+  deviceId,
   clayMode = false,
   colorHex,
 }: {
   url: string;
+  deviceId: DeviceId;
   clayMode?: boolean;
   colorHex?: string;
 }) {
   const { scene } = useGLTF(url);
   const fitted = useMemo(() => {
     const clone = scene.clone(true);
+    const device = getDevice(deviceId);
+    hideBrandMarks(clone, { hideNodes: device.hideNodes });
     clone.traverse((obj) => {
       const mesh = obj as THREE.Mesh;
       if (!mesh.isMesh) return;
@@ -88,7 +93,7 @@ function FittedGltfModel({
     const fittedCenter = fitted.getCenter(new THREE.Vector3());
     clone.position.sub(fittedCenter);
     return clone;
-  }, [scene, clayMode, colorHex]);
+  }, [scene, deviceId, clayMode, colorHex]);
 
   return <primitive object={fitted} />;
 }
@@ -107,7 +112,7 @@ function PreviewModel({
   if (modelUrl.url) {
     return (
       <Suspense fallback={<PreviewFallback color={colorHex || '#3d8f72'} />}>
-        <FittedGltfModel url={modelUrl.url} clayMode={clayMode} colorHex={colorHex} />
+        <FittedGltfModel url={modelUrl.url} deviceId={deviceId} clayMode={clayMode} colorHex={colorHex} />
       </Suspense>
     );
   }
