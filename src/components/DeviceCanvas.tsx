@@ -34,6 +34,7 @@ import {
   type ReflectionStyle,
 } from '../lib/reflectionStyle';
 import ProceduralDevice from './ProceduralDevice';
+import ScreenLayerExplosion from './ScreenLayerExplosion';
 import RotationBall, { type GizmoControl, type GizmoMode, type GizmoTargets } from './RotationBall';
 import SceneProps from './SceneProps';
 import ExtrudedText from './ExtrudedText';
@@ -1992,9 +1993,17 @@ function DeviceModelView({
   const positionRef = useRef<THREE.Group>(null);
   const rotationRef = useRef<THREE.Group>(null);
   const scaleRef = useRef<THREE.Group>(null);
+  const [explosionHost, setExplosionHost] = useState<THREE.Group | null>(null);
   const pointer = useRef({ x: 0, y: 0, moved: false });
+  const screenLayers = instance.screenLayers ?? [];
+  const layerExplosion = instance.layerExplosion ?? 0;
 
   const radians = (d: number) => (d * Math.PI) / 180;
+
+  useLayoutEffect(() => {
+    const node = scaleRef.current;
+    setExplosionHost((current) => (current === node ? current : node));
+  });
 
   useLayoutEffect(() => {
     const positionGroup = positionRef.current;
@@ -2104,6 +2113,11 @@ function DeviceModelView({
             />
           ) : null}
           </ReflectionDriveContext.Provider>
+          <ScreenLayerExplosion
+            host={explosionHost}
+            layers={screenLayers}
+            amount={layerExplosion}
+          />
           <ModelAnnotationLayer
             deviceId={instance.id}
             overlays={overlays}

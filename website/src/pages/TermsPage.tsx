@@ -5,7 +5,6 @@ import {
   MODEL_LICENSING_NOTICE,
   NON_AFFILIATION_DISCLAIMER,
 } from '@shared/legal';
-import { DownloadButton } from '../components/DownloadButton';
 import { Reveal } from '../components/Reveal';
 import { SiteChrome } from '../components/SiteChrome';
 
@@ -100,9 +99,9 @@ export function TermsPage() {
         </Reveal>
 
         <Reveal as="section" className="page-cta">
-          <DownloadButton className="btn btn-primary" fallbackHref="/#download">
-            Download Free
-          </DownloadButton>
+          <Link className="btn btn-primary" to="/#beta">
+            Sign up to beta
+          </Link>
           <Link className="btn btn-ghost" to="/pricing">
             See pricing
           </Link>

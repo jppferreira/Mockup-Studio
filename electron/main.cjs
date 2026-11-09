@@ -545,12 +545,13 @@ function sanitizeName(name) {
 
 function sanitizeExt(extension) {
   const ext = String(extension || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (['png', 'webp', 'webm', 'mp4', 'gif', 'json'].includes(ext)) return ext;
+  if (['png', 'webp', 'webm', 'mp4', 'mov', 'gif', 'json'].includes(ext)) return ext;
   return 'bin';
 }
 
 function mediaFilters(ext, mimeType) {
   if (ext === 'mp4') return [{ name: 'MP4 Video', extensions: ['mp4'] }, { name: 'All Files', extensions: ['*'] }];
+  if (ext === 'mov') return [{ name: 'QuickTime Movie', extensions: ['mov'] }, { name: 'All Files', extensions: ['*'] }];
   if (ext === 'webm') return [{ name: 'WebM Video', extensions: ['webm'] }, { name: 'All Files', extensions: ['*'] }];
   if (ext === 'gif') return [{ name: 'GIF Animation', extensions: ['gif'] }, { name: 'All Files', extensions: ['*'] }];
   if (ext === 'png') return [{ name: 'PNG Image', extensions: ['png'] }];

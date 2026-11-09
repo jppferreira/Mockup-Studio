@@ -191,6 +191,18 @@ export function removeRecentProject(id: string): RecentProjectEntry[] {
   return next;
 }
 
+/** Merge cloud rows into local recents, keeping the newer copy per local_id. */
+export function mergeRecentFromCloud(cloudEntries: RecentProjectEntry[]): RecentProjectEntry[] {
+  const byId = new Map(loadRecentProjects().map((entry) => [entry.id, entry]));
+  for (const remote of cloudEntries) {
+    const existing = byId.get(remote.id);
+    if (!existing || remote.updatedAt >= existing.updatedAt) byId.set(remote.id, remote);
+  }
+  const next = [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_RECENT);
+  writeRecent(next);
+  return next;
+}
+
 export function formatRecentTime(timestamp: number) {
   const delta = Date.now() - timestamp;
   const mins = Math.floor(delta / 60_000);

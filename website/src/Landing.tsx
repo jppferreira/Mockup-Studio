@@ -6,22 +6,30 @@ import { Logo } from './components/Logo';
 import { Reveal } from './components/Reveal';
 import { PLANS, PRICING_TAGLINE, UPDATE_PASS } from '@shared/pricing';
 import { CheckoutButton } from './components/CheckoutButton';
-import { DownloadButton } from './components/DownloadButton';
+import { BetaSignupForm } from './components/BetaSignupForm';
+import { BetaSignupModal } from './components/BetaSignupModal';
 import { FeatureIcon, type FeatureIlloStyle } from './components/FeatureIcon';
 import { FEATURES, HEADLINE_OPTIONS, STEPS } from './content';
+import { useHeroTilt } from './hooks/useHeroTilt';
 import { useParallax } from './hooks/useParallax';
-import { isMacDownloadConfigured } from '@shared/download';
 
 type HeroLayout = 'stack' | 'side';
 
 export function Landing() {
   const parallax = useParallax();
+  const heroTilt = useHeroTilt();
   const activeCopy = HEADLINE_OPTIONS[0];
   const [contactOpen, setContactOpen] = useState(false);
   const [contactIntent, setContactIntent] = useState<ContactIntent>('contact');
+  const [betaOpen, setBetaOpen] = useState(false);
+  const [betaSource, setBetaSource] = useState('hero');
   const openContact = (intent: ContactIntent = 'contact') => {
     setContactIntent(intent);
     setContactOpen(true);
+  };
+  const openBeta = (source: string) => {
+    setBetaSource(source);
+    setBetaOpen(true);
   };
   const [heroLayout, setHeroLayout] = useState<HeroLayout>('stack');
   const [illoStyle, setIlloStyle] = useState<FeatureIlloStyle>('charcoal');
@@ -52,9 +60,9 @@ export function Landing() {
               Contact
             </button>
           </nav>
-          <DownloadButton className="nav-cta" short>
-            Download Free
-          </DownloadButton>
+          <button type="button" className="nav-cta" onClick={() => openBeta('nav')}>
+            Sign up to beta
+          </button>
         </header>
       </div>
 
@@ -108,26 +116,34 @@ export function Landing() {
             <h1 className="hero-headline">{activeCopy.headline}</h1>
             <p className="lede">{activeCopy.lede}</p>
             <div className="hero-actions">
-              <DownloadButton className="btn btn-primary btn-hero-download" />
+              <button
+                type="button"
+                className="btn btn-primary btn-hero-download"
+                onClick={() => openBeta('hero')}
+              >
+                Sign up to beta
+              </button>
               <Link className="btn btn-ghost" to="/pricing">
                 See pricing
               </Link>
             </div>
-            <p className="hero-note">Free for Apple Silicon · macOS 13+</p>
+            <p className="hero-note">Beta for Apple Silicon · macOS 13+</p>
           </div>
 
-          <div className="hero-shot-wrap">
-            <div className="hero-shot-cut">
-              <AppScreenshot style={parallax.layer(-0.22, 0, 560)} />
+          <div className="hero-shot-wrap" ref={heroTilt.stageRef}>
+            <div className="hero-shot-slab" ref={heroTilt.cardRef}>
+              <div className="hero-shot-cut">
+                <AppScreenshot />
+                <span className="hero-shot-glare" ref={heroTilt.glareRef} aria-hidden />
+              </div>
+              <span className="hero-shot-edge hero-shot-edge-right" aria-hidden />
+              <span className="hero-shot-edge hero-shot-edge-left" aria-hidden />
+              <span className="hero-shot-edge hero-shot-edge-bottom" aria-hidden />
             </div>
           </div>
         </section>
 
-        <section
-          className="body-cut"
-          id="features"
-          style={parallax.layer(-0.08, 0, 480)}
-        >
+        <section className="body-cut" id="features">
           <Reveal as="div" className="features features-in-cut">
             <div className="section-head features-head">
               <p className="section-kicker">Product</p>
@@ -228,29 +244,18 @@ export function Landing() {
           </div>
         </Reveal>
 
-        <Reveal as="section" className="download" id="download">
+        <Reveal as="section" className="download" id="beta">
+          <span id="download" />
           <div className="download-panel">
-            <p className="section-kicker">Get the app</p>
-            <h2>Download mokstudio for Mac.</h2>
+            <p className="section-kicker">Beta</p>
+            <h2>Sign up to beta.</h2>
             <p>
-              Free for Apple Silicon. Upgrade in-app to Pro ({PLANS.find((p) => p.id === 'pro')?.priceLabel}) or Pro Max (
+              Leave your email and we’ll send the Mac build. Upgrade later to Pro (
+              {PLANS.find((p) => p.id === 'pro')?.priceLabel}) or Pro Max (
               {PLANS.find((p) => p.id === 'pro_max')?.priceLabel}) when you need the full library and motion export.
             </p>
-            <div className="download-actions">
-              <DownloadButton className="btn btn-primary btn-hero-download" fallbackHref="#download">
-                {isMacDownloadConfigured() ? 'Download for Mac' : 'Get Free'}
-              </DownloadButton>
-              <Link className="btn btn-ghost" to="/pricing">
-                See pricing
-              </Link>
-            </div>
-            {isMacDownloadConfigured() ? (
-              <p className="install-hint">Apple Silicon · macOS 13+</p>
-            ) : (
-              <p className="install-hint">
-                Set <code>VITE_DOWNLOAD_MAC_URL</code> to go live.
-              </p>
-            )}
+            <BetaSignupForm source="home" />
+            <p className="install-hint">Apple Silicon · macOS 13+</p>
           </div>
         </Reveal>
       </main>
@@ -280,6 +285,11 @@ export function Landing() {
         open={contactOpen}
         intent={contactIntent}
         onClose={() => setContactOpen(false)}
+      />
+      <BetaSignupModal
+        open={betaOpen}
+        source={betaSource}
+        onClose={() => setBetaOpen(false)}
       />
     </div>
   );

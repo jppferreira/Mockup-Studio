@@ -7,7 +7,6 @@ import {
   UPDATE_PASS,
 } from '@shared/pricing';
 import { CheckoutButton } from '../components/CheckoutButton';
-import { DownloadButton } from '../components/DownloadButton';
 import { Reveal } from '../components/Reveal';
 import { SiteChrome } from '../components/SiteChrome';
 
@@ -46,9 +45,9 @@ export function PricingPage() {
                 ))}
               </ul>
               {plan.id === 'free' ? (
-                <DownloadButton className="btn btn-ghost" fallbackHref="/#download">
+                <Link className="btn btn-ghost" to="/#beta">
                   {plan.cta}
-                </DownloadButton>
+                </Link>
               ) : (
                 <CheckoutButton
                   plan={plan.id}
@@ -142,7 +141,9 @@ export function PricingPage() {
         </Reveal>
 
         <Reveal as="section" className="page-cta">
-          <DownloadButton className="btn btn-primary" fallbackHref="/#download" />
+          <Link className="btn btn-primary" to="/#beta">
+            Sign up to beta
+          </Link>
           <CheckoutButton plan="pro" className="btn btn-ghost" />
         </Reveal>
       </main>

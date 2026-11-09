@@ -370,7 +370,9 @@ function cleanAnimation(clip: unknown, deviceCount: number): AnimationClip | und
   }).slice(0, 64) : [];
   return {
     duration: clamp(finite(entry.duration, 4), 0.2, 120),
-    fps: [24, 30, 60].includes(finite(entry.fps, 30)) ? finite(entry.fps, 30) as 24 | 30 | 60 : 30,
+    fps: [24, 25, 30, 48, 60].includes(finite(entry.fps, 30))
+      ? finite(entry.fps, 30) as 24 | 25 | 30 | 48 | 60
+      : 30,
     loop: entry.loop !== false,
     tracks,
   };

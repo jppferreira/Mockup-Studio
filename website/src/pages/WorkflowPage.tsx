@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom';
 import { AppScreenshot } from '../components/AppScreenshot';
-import { DownloadButton } from '../components/DownloadButton';
 import { Reveal } from '../components/Reveal';
 import { SiteChrome } from '../components/SiteChrome';
 import { STEPS } from '../content';
@@ -41,7 +40,9 @@ export function WorkflowPage() {
           <Link className="btn btn-primary" to="/pricing">
             See pricing
           </Link>
-          <DownloadButton className="btn btn-ghost" fallbackHref="/#download" short />
+          <Link className="btn btn-ghost" to="/#beta">
+            Sign up to beta
+          </Link>
         </Reveal>
       </main>
     </SiteChrome>

@@ -136,6 +136,7 @@ import {
   isSvgFile, parseSvgDocument, readFileAsText, readSvgTextFromPasteEvent,
   type SvgDocumentModel,
 } from './lib/svgLayers';
+import { compositeFlatScreenStack, normalizeScreenLayers } from './lib/screenLayers';
 import {
   isDesktopApp,
   listMirrorDevices,
@@ -185,18 +186,23 @@ import {
   projectForEnvCanvas, refreshSplitPlaceholders, resolvePublishTarget, setPublishTarget,
 } from './lib/platformEnv';
 import {
-  STILL_FORMATS, VIDEO_FORMATS, encodeAnimationVideo, isStillExport, isVideoExport,
-  stillFormatById, videoFormatById, videoFormatsForAlpha,
-  type ExportKind, type StillFormatId, type VideoFormatId,
+  STILL_FORMATS, VIDEO_CODEC_OPTIONS, VIDEO_FORMATS, codecsForFormats, encodeAnimationVideo,
+  isStillExport, isVideoExport, resolveCodecForFormat, stillFormatById, videoFormatById,
+  videoFormatsForAlpha, videoSupportsSoundtrack,
+  type ExportKind, type StillFormatId, type VideoCodecId, type VideoFormatId,
 } from './lib/videoExport';
 import {
   MAX_PROJECT_TABS, createProjectTab, tabLabel,
   type ProjectTab,
 } from './lib/projectTabs';
 import {
-  hydrateRecentProjects, loadRecentProjects, rememberRecentProject, removeRecentProject,
+  hydrateRecentProjects, loadRecentProjects, mergeRecentFromCloud, rememberRecentProject, removeRecentProject,
   type RecentProjectEntry,
 } from './lib/recentProjects';
+import {
+  deleteCloudProject, pullCloudProjects, pushRecentToCloud,
+} from './lib/cloudProjects';
+import { getAuthSnapshot, onAuthChange } from './lib/supabaseClient';
 import {
   loadSessionWorkspace, sanitizeSessionFrameSize, saveSessionWorkspace,
   type SessionFrameSize,
@@ -1066,6 +1072,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [exportMediaMode, setExportMediaMode] = useState<ExportMediaMode>('static');
   const [staticExportEntries, setStaticExportEntries] = useState<ExportEntry[]>(() => [createExportEntry('png')]);
   const [animatedExportEntries, setAnimatedExportEntries] = useState<ExportEntry[]>(() => [createExportEntry('mp4')]);
+  const [exportVideoCodec, setExportVideoCodec] = useState<VideoCodecId>('auto');
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -1372,7 +1379,43 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   }, [aspectDropdownOpen]);
 
   const trackRecent = useCallback((nextProject: MockupProject) => {
-    setRecentProjects(rememberRecentProject(nextProject));
+    const next = rememberRecentProject(nextProject);
+    setRecentProjects(next);
+    const entry = next[0];
+    if (entry) void pushRecentToCloud(entry).catch(() => undefined);
+  }, []);
+
+  const mergeCloudProjects = useCallback((entries: RecentProjectEntry[]) => {
+    setRecentProjects(mergeRecentFromCloud(entries));
+  }, []);
+
+  const removeTrackedProject = useCallback((id: string) => {
+    setRecentProjects(removeRecentProject(id));
+    void deleteCloudProject(id).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pullIfSignedIn = async () => {
+      const snap = await getAuthSnapshot();
+      if (cancelled || !snap.user) return;
+      const remote = await pullCloudProjects();
+      if (cancelled || !remote.ok) return;
+      setRecentProjects(mergeRecentFromCloud(remote.entries));
+    };
+    void pullIfSignedIn().catch(() => undefined);
+    const stopAuth = onAuthChange((snap) => {
+      if (!snap.user) return;
+      void pullCloudProjects()
+        .then((remote) => {
+          if (remote.ok) setRecentProjects(mergeRecentFromCloud(remote.entries));
+        })
+        .catch(() => undefined);
+    });
+    return () => {
+      cancelled = true;
+      stopAuth();
+    };
   }, []);
 
   useEffect(() => {
@@ -1553,12 +1596,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     setAnimatedExportEntries((current) => {
       let changed = false;
       const next = current.map((entry) => {
-        if (entry.kind !== 'mp4') return entry;
+        if (entry.kind !== 'mp4' && entry.kind !== 'mov') return entry;
         changed = true;
         return { ...entry, kind: 'webm' as ExportKind };
       });
       return changed ? next : current;
     });
+    setExportVideoCodec((current) => (
+      current === 'h264' || current === 'hevc' || current === 'prores' ? 'auto' : current
+    ));
   }, [isTransparent]);
 
   const animation = project.animation ?? createDefaultAnimation(project.selectedDeviceId || 'device-main');
@@ -2920,13 +2966,68 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           ? hoveredDeviceIdRef.current
           : getSelectedDevice(current).id);
       const next = applyScreenToDevice(current, targetId, dataUrl);
+      // Flat screenshot replaces any prior 3D explode stack.
+      const cleared = {
+        ...next,
+        devices: next.devices.map((device) => (
+          device.id === targetId
+            ? { ...device, screenLayers: undefined, layerExplosion: undefined }
+            : device
+        )),
+      };
       if (!isPlaceholderScreenshot(dataUrl)) {
-        const platform = resolvePublishTarget(next);
+        const platform = resolvePublishTarget(cleared);
         setRecentScreenshots((recent) => rememberRecentScreenshot(recent, dataUrl, name, platform));
       }
-      return next;
+      return cleared;
     });
     notify(message);
+  };
+
+  /** Rotato-style: flat stack on the glass + separate plates that lift with layerExplosion. */
+  const applyScreenExplosion = async (
+    plates: { id: string; name: string; dataUrl: string }[],
+    amount: number,
+    label: string,
+  ) => {
+    const layers = normalizeScreenLayers(plates);
+    if (layers.length < 2) {
+      notify('Need at least two layers to explode');
+      return;
+    }
+    try {
+      const flat = await compositeFlatScreenStack(layers);
+      setProject((current) => {
+        const targetId = hoveredDeviceIdRef.current
+          && current.devices.some((device) => device.id === hoveredDeviceIdRef.current)
+          ? hoveredDeviceIdRef.current
+          : getSelectedDevice(current).id;
+        const withShot = applyScreenToDevice(current, targetId, flat);
+        const next = {
+          ...withShot,
+          devices: withShot.devices.map((device) => (
+            device.id === targetId
+              ? {
+                ...device,
+                screenshot: flat,
+                screenLayers: layers,
+                layerExplosion: Math.min(1, Math.max(0, amount)),
+              }
+              : device
+          )),
+        };
+        setRecentScreenshots((recent) => rememberRecentScreenshot(
+          recent,
+          flat,
+          `${label} explode`,
+          resolvePublishTarget(next),
+        ));
+        return next;
+      });
+      notify(`Exploded ${layers.length} layers from “${label}” on the device`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not place exploded layers');
+    }
   };
 
   const openSvgExplode = (svgText: string, fileName: string) => {
@@ -4004,13 +4105,18 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       throw new Error('Add animation keyframes before exporting video');
     }
     const formatInfo = videoFormatById(format);
-    setExportProgress(`Preparing ${platformTag ? `${platformTag} · ` : ''}${formatInfo.label}${scaleLabel !== '1x' ? ` · ${scaleLabel}` : ''}…`);
+    const codec = resolveCodecForFormat(format, exportVideoCodec);
+    const codecLabel = codec !== 'auto'
+      ? (VIDEO_CODEC_OPTIONS.find((item) => item.id === codec)?.label ?? codec.toUpperCase())
+      : null;
+    setExportProgress(`Preparing ${platformTag ? `${platformTag} · ` : ''}${formatInfo.label}${codecLabel ? ` · ${codecLabel}` : ''}${scaleLabel !== '1x' ? ` · ${scaleLabel}` : ''}…`);
     const blob = await encodeAnimationVideo({
       format,
       width,
       height,
       fps: animation.fps,
       duration: animation.duration,
+      codec,
       transparent: project.background === 'transparent',
       soundtrack: project.soundtrackData
         ? {
@@ -4067,6 +4173,17 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     && !hasCameraAnimation(animation);
 
   const availableVideoFormats = videoFormatsForAlpha(isTransparent);
+  const availableExportCodecs = useMemo(
+    () => codecsForFormats(selectedVideoFormats),
+    [selectedVideoFormats.join('|')],
+  );
+
+  useEffect(() => {
+    if (availableExportCodecs.length === 0) return;
+    if (!availableExportCodecs.some((codec) => codec.id === exportVideoCodec)) {
+      setExportVideoCodec('auto');
+    }
+  }, [availableExportCodecs, exportVideoCodec]);
 
   const nextExportKind = (): ExportKind => {
     const videoIds = new Set(availableVideoFormats.map((item) => item.id));
@@ -4104,8 +4221,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     if (patch.kind) {
       if (exportMediaMode === 'static' && !isStillExport(patch.kind)) return;
       if (exportMediaMode === 'animated' && !isVideoExport(patch.kind)) return;
-      if (isVideoExport(patch.kind) && isTransparent && patch.kind === 'mp4') {
-        notify('MP4 cannot keep transparency. Use WebM or GIF.');
+      if (isVideoExport(patch.kind) && isTransparent && (patch.kind === 'mp4' || patch.kind === 'mov')) {
+        notify('MP4 / MOV cannot keep transparency. Use WebM or GIF.');
         return;
       }
       if (isVideoExport(patch.kind) && !videoAllowed) {
@@ -4192,14 +4309,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           : videoFormatById(entry.kind).label;
         return entry.scale === 1 ? format : `${format} ${formatExportScale(entry.scale)}`;
       });
-      const withAudio = Boolean(project.soundtrackData) && selectedVideoFormats.includes('mp4');
+      const withAudio = Boolean(project.soundtrackData)
+        && selectedVideoFormats.some((format) => videoSupportsSoundtrack(format));
       const sizeCount = exportAspectIds.length;
       if (sizeCount > 1) {
-        notify(`Exported ${sizeCount} sizes · ${formatLabels.join(', ')}${withAudio ? ' · MP4 includes soundtrack' : ''}`);
+        notify(`Exported ${sizeCount} sizes · ${formatLabels.join(', ')}${withAudio ? ' · soundtrack included' : ''}`);
       } else if (formatLabels.length === 1) {
         notify(withAudio ? `${formatLabels[0]} exported with soundtrack` : `${formatLabels[0]} exported`);
       } else {
-        notify(`Exported ${formatLabels.join(', ')}${withAudio ? ' · MP4 includes soundtrack' : ''}`);
+        notify(`Exported ${formatLabels.join(', ')}${withAudio ? ' · soundtrack included' : ''}`);
       }
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Export failed');
@@ -5618,7 +5736,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           onOpenCloudProject={(filePath) => { void openCloudProject(filePath); }}
           onRemoveCloudProject={(filePath) => { void removeCloudProject(filePath); }}
           onOpenProject={openRecentProject}
-          onRemoveProject={(id) => setRecentProjects(removeRecentProject(id))}
+          onRemoveProject={removeTrackedProject}
+          onMergeCloudProjects={mergeCloudProjects}
           onNewProject={() => setTemplatePickerOpen(true)}
           onBlankFile={startBlankFile}
           onOpenFile={() => void onOpen()}
@@ -7693,6 +7812,33 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   }}
                 />
               ) : null}
+              {(displaySelected.screenLayers?.length ?? 0) >= 2 ? (
+                <>
+                  <div className="field-caption">Layer explosion</div>
+                  <SliderField
+                    label="Explosion"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    unit=""
+                    value={displaySelected.layerExplosion ?? 0}
+                    onChange={(v) => {
+                      patchSelectedDevice({ layerExplosion: v });
+                      if (timelineOpen) keyPropertyAtPlayhead('layerExplosion', v);
+                    }}
+                  />
+                  <p className="device-card-import-hint">
+                    {displaySelected.screenLayers!.length} UI plates lift off the glass — animate Explosion on the timeline like Rotato.
+                  </p>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => patchSelectedDevice({ screenLayers: undefined, layerExplosion: undefined })}
+                  >
+                    <X size={13} /> Clear exploded layers
+                  </button>
+                </>
+              ) : null}
               <div className="field-caption">Materials</div>
               <SliderField
                 label="Glass reflection"
@@ -8919,7 +9065,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             )}
             {exportMediaMode === 'animated' && isTransparent && (
               <p className="export-panel-warning">
-                Transparent plate: WebM keeps alpha in Chrome / Firefox / Edge. GIF works everywhere. MP4 cannot keep transparency.
+                Transparent plate: WebM keeps alpha in Chrome / Firefox / Edge. GIF works everywhere. MP4 / MOV cannot keep transparency.
               </p>
             )}
             {exportProgress && <p className="export-panel-progress">{exportProgress}</p>}
@@ -9026,6 +9172,29 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                     </button>
                   ))}
                 </div>
+                {availableExportCodecs.length > 0 && (
+                  <>
+                    <div className="modal-field-label">
+                      VIDEO CODEC
+                      <span>{VIDEO_CODEC_OPTIONS.find((item) => item.id === exportVideoCodec)?.label ?? 'Auto'}</span>
+                    </div>
+                    <div className="export-codec-row" role="group" aria-label="Export video codec">
+                      {availableExportCodecs.map((codec) => (
+                        <button
+                          key={codec.id}
+                          type="button"
+                          className={`export-codec ${exportVideoCodec === codec.id ? 'selected' : ''}`}
+                          disabled={exporting}
+                          title={codec.description}
+                          onClick={() => setExportVideoCodec(codec.id)}
+                        >
+                          <strong>{codec.label}</strong>
+                          <span>{codec.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
               </>
             )}
 
@@ -9631,6 +9800,9 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         onApply={(dataUrl, layerName) => {
           applyScreenImage(dataUrl, layerName, `Applied “${layerName}” from Figma`);
         }}
+        onApplyExplosion={(plates, amount, label) => {
+          void applyScreenExplosion(plates, amount, label);
+        }}
       />
       <SvgExplodeModal
         open={svgExplodeModel != null}
@@ -9639,6 +9811,9 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         onNotify={notify}
         onApply={(dataUrl, layerName) => {
           applyScreenImage(dataUrl, layerName, `Applied “${layerName}” from SVG`);
+        }}
+        onApplyExplosion={(plates, amount, label) => {
+          void applyScreenExplosion(plates, amount, label);
         }}
       />
       <StudioTour

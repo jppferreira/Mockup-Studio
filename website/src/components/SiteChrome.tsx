@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { BetaSignupModal } from './BetaSignupModal';
 import { ContactModal, type ContactIntent } from './ContactModal';
-import { DownloadButton } from './DownloadButton';
 import { Logo } from './Logo';
 import { useParallax } from '../hooks/useParallax';
 
@@ -10,6 +10,7 @@ export function SiteChrome({ children }: { children: ReactNode }) {
   const location = useLocation();
   const [contactOpen, setContactOpen] = useState(false);
   const [contactIntent, setContactIntent] = useState<ContactIntent>('contact');
+  const [betaOpen, setBetaOpen] = useState(false);
   const openContact = (intent: ContactIntent = 'contact') => {
     setContactIntent(intent);
     setContactOpen(true);
@@ -57,9 +58,9 @@ export function SiteChrome({ children }: { children: ReactNode }) {
               Contact
             </button>
           </nav>
-          <DownloadButton className="nav-cta" short fallbackHref="/#download">
-            Download Free
-          </DownloadButton>
+          <button type="button" className="nav-cta" onClick={() => setBetaOpen(true)}>
+            Sign up to beta
+          </button>
         </header>
       </div>
 
@@ -90,6 +91,11 @@ export function SiteChrome({ children }: { children: ReactNode }) {
         open={contactOpen}
         intent={contactIntent}
         onClose={() => setContactOpen(false)}
+      />
+      <BetaSignupModal
+        open={betaOpen}
+        source={`page:${location.pathname}`}
+        onClose={() => setBetaOpen(false)}
       />
     </div>
   );

@@ -13,6 +13,12 @@ interface Props {
   model: SvgDocumentModel | null;
   onClose: () => void;
   onApply: (dataUrl: string, layerName: string) => void;
+  /** Place top-level plates as Rotato-style 3D exploded layers on the device. */
+  onApplyExplosion?: (
+    plates: { id: string; name: string; dataUrl: string }[],
+    amount: number,
+    label: string,
+  ) => void;
   onNotify: (message: string) => void;
 }
 
@@ -132,7 +138,9 @@ function ExplodeStage({
   );
 }
 
-export default function SvgExplodeModal({ open, model, onClose, onApply, onNotify }: Props) {
+export default function SvgExplodeModal({
+  open, model, onClose, onApply, onApplyExplosion, onNotify,
+}: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState('');
@@ -233,10 +241,19 @@ export default function SvgExplodeModal({ open, model, onClose, onApply, onNotif
   };
 
   const applyExplodedComposite = async () => {
-    if (!plates.length) return;
+    if (!plates.length || !model) return;
     setBusy(true);
     setError(null);
     try {
+      if (onApplyExplosion) {
+        onApplyExplosion(
+          plates.map((plate) => ({ id: plate.id, name: plate.name, dataUrl: plate.dataUrl })),
+          explodeAmount,
+          model.fileName,
+        );
+        onClose();
+        return;
+      }
       const dataUrl = await compositeSvgExplode(
         plates.map((plate) => ({ dataUrl: plate.dataUrl, name: plate.name })),
         explodeAmount,
@@ -302,7 +319,7 @@ export default function SvgExplodeModal({ open, model, onClose, onApply, onNotif
               disabled={busy}
               onClick={() => void applyExplodedComposite()}
             >
-              Use exploded stack
+              {onApplyExplosion ? 'Place on device in 3D' : 'Use exploded stack'}
             </button>
           </div>
         </div>

@@ -7,10 +7,10 @@ export function AppScreenshot({ style }: { style?: CSSProperties }) {
         <span className="app-shot-rim" aria-hidden />
         <img
           className="app-shot-img"
-          src={`${import.meta.env.BASE_URL}app-screenshot.jpg?v=4`}
-          width={1024}
-          height={648}
-          alt="mokstudio app showing a 3D iPhone mockup, scene presets, and animation timeline"
+          src={`${import.meta.env.BASE_URL}app-screenshot.jpg?v=6`}
+          width={2048}
+          height={1302}
+          alt="mokstudio editing an iPhone 15 Pro Max weather mockup, with layers, lighting, and export"
           decoding="async"
           fetchPriority="high"
         />

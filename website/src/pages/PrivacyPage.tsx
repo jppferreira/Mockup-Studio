@@ -1,8 +1,7 @@
 import { Link } from 'react-router-dom';
-import { DownloadButton } from '../components/DownloadButton';
 import { Reveal } from '../components/Reveal';
 import { SiteChrome } from '../components/SiteChrome';
-import { PRIVACY_POINTS } from '../content';
+import { PRIVACY_BETA, PRIVACY_POINTS } from '../content';
 
 export function PrivacyPage() {
   return (
@@ -25,18 +24,31 @@ export function PrivacyPage() {
           ))}
         </ul>
 
+        <Reveal as="section" className="privacy-beta" id={PRIVACY_BETA.id}>
+          <h2>{PRIVACY_BETA.title}</h2>
+          <ul>
+            {PRIVACY_BETA.points.map((point) => (
+              <li key={point}>{point}</li>
+            ))}
+          </ul>
+          <p>
+            Messages sent through Contact or Feedback are used only to reply. They are not added to the beta list unless
+            you also submit the signup form.
+          </p>
+        </Reveal>
+
         <Reveal as="section" className="page-note">
           <p>
-            The marketing website may load fonts from Google when you are online. The desktop app itself does not upload
-            project contents. The app is proprietary (see Terms); open-source npm dependencies and CC BY device models
-            apply their own licenses — see <Link to="/credits">Credits</Link>.
+            The desktop app does not upload project contents. The app is proprietary (see Terms); open-source npm
+            dependencies and CC BY device models apply their own licenses — see <Link to="/credits">Credits</Link>.
+            Site fonts are Manrope and Sora under the SIL Open Font License.
           </p>
         </Reveal>
 
         <Reveal as="section" className="page-cta">
-          <DownloadButton className="btn btn-primary" fallbackHref="/#download">
-            Get started
-          </DownloadButton>
+          <Link className="btn btn-primary" to="/#beta">
+            Sign up to beta
+          </Link>
           <Link className="btn btn-ghost" to="/">
             Back to home
           </Link>

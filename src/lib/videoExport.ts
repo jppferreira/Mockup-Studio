@@ -2,19 +2,26 @@ import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmArrayBufferTarget } from 'webm-muxer';
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 import {
+  AudioBufferSource,
   BufferTarget,
   CanvasSource,
+  MovOutputFormat,
+  Mp4OutputFormat,
   Output,
   WebMOutputFormat,
+  canEncodeAudio,
   canEncodeVideo,
   getFirstEncodableVideoCodec,
+  type AudioCodec,
   type VideoCodec,
 } from 'mediabunny';
 import { encodeSoundtrackAac, renderSoundtrackPcm, type SoundtrackClip } from './soundtrack';
 
-export type VideoFormatId = 'webm' | 'mp4' | 'gif';
+export type VideoFormatId = 'webm' | 'mp4' | 'mov' | 'gif';
 export type StillFormatId = 'png' | 'webp';
 export type ExportKind = StillFormatId | VideoFormatId;
+/** User-facing codec preference. `auto` picks the best available for the container. */
+export type VideoCodecId = 'auto' | 'h264' | 'hevc' | 'vp9' | 'vp8' | 'av1' | 'prores';
 
 export const VIDEO_FORMATS: {
   id: VideoFormatId;
@@ -25,15 +32,64 @@ export const VIDEO_FORMATS: {
   /** True when this format can keep a transparent plate. */
   supportsAlpha: boolean;
 }[] = [
-  { id: 'webm', label: 'WebM', extension: 'webm', mime: 'video/webm', description: 'VP9 · keeps transparency (Chrome, Firefox, Edge)', supportsAlpha: true },
-  { id: 'mp4', label: 'MP4', extension: 'mp4', mime: 'video/mp4', description: 'H.264 · solid backgrounds only', supportsAlpha: false },
+  { id: 'webm', label: 'WebM', extension: 'webm', mime: 'video/webm', description: 'VP9 / AV1 · keeps transparency (Chrome, Firefox, Edge)', supportsAlpha: true },
+  { id: 'mp4', label: 'MP4', extension: 'mp4', mime: 'video/mp4', description: 'H.264 / HEVC / AV1 · solid backgrounds only', supportsAlpha: false },
+  { id: 'mov', label: 'MOV', extension: 'mov', mime: 'video/quicktime', description: 'QuickTime · H.264 / HEVC / ProRes', supportsAlpha: false },
   { id: 'gif', label: 'GIF', extension: 'gif', mime: 'image/gif', description: 'Animated loop · keeps transparency everywhere', supportsAlpha: true },
+];
+
+export const VIDEO_CODEC_OPTIONS: {
+  id: VideoCodecId;
+  label: string;
+  description: string;
+  /** Containers that can carry this codec. */
+  formats: Exclude<VideoFormatId, 'gif'>[];
+}[] = [
+  { id: 'auto', label: 'Auto', description: 'Best available for the file type', formats: ['mp4', 'mov', 'webm'] },
+  { id: 'h264', label: 'H.264', description: 'Widest playback', formats: ['mp4', 'mov'] },
+  { id: 'hevc', label: 'HEVC', description: 'Smaller files · modern devices', formats: ['mp4', 'mov'] },
+  { id: 'prores', label: 'ProRes', description: 'Edit-ready quality', formats: ['mov'] },
+  { id: 'vp9', label: 'VP9', description: 'WebM default · transparency', formats: ['webm'] },
+  { id: 'vp8', label: 'VP8', description: 'WebM · wider support', formats: ['webm'] },
+  { id: 'av1', label: 'AV1', description: 'Modern efficiency', formats: ['mp4', 'mov', 'webm'] },
 ];
 
 /** Formats that preserve a transparent studio background. */
 export function videoFormatsForAlpha(transparent: boolean) {
   return transparent ? VIDEO_FORMATS.filter((item) => item.supportsAlpha) : VIDEO_FORMATS;
 }
+
+/** Codecs that can be offered for the currently selected video formats. */
+export function codecsForFormats(formats: VideoFormatId[]) {
+  const containers = formats.filter((id): id is Exclude<VideoFormatId, 'gif'> => id !== 'gif');
+  if (containers.length === 0) return [] as typeof VIDEO_CODEC_OPTIONS;
+  return VIDEO_CODEC_OPTIONS.filter((codec) => (
+    codec.id === 'auto' || containers.some((format) => codec.formats.includes(format))
+  ));
+}
+
+export function resolveCodecForFormat(format: VideoFormatId, preferred: VideoCodecId): VideoCodecId {
+  if (format === 'gif' || preferred === 'auto') return 'auto';
+  const allowed = VIDEO_CODEC_OPTIONS.some((item) => (
+    item.id === preferred && item.formats.includes(format as Exclude<VideoFormatId, 'gif'>)
+  ));
+  return allowed ? preferred : 'auto';
+}
+
+const CODEC_TO_MEDIABUNNY: Record<Exclude<VideoCodecId, 'auto'>, VideoCodec> = {
+  h264: 'avc',
+  hevc: 'hevc',
+  vp9: 'vp9',
+  vp8: 'vp8',
+  av1: 'av1',
+  prores: 'prores',
+};
+
+const DEFAULT_CODECS: Record<'mp4' | 'mov' | 'webm', VideoCodec[]> = {
+  mp4: ['avc', 'hevc', 'av1', 'vp9'],
+  mov: ['avc', 'hevc', 'prores', 'av1'],
+  webm: ['vp9', 'vp8', 'av1'],
+};
 
 export const STILL_FORMATS: {
   id: StillFormatId;
@@ -52,9 +108,9 @@ function even(n: number) {
 }
 
 /** Higher bpp than screen-capture defaults — mockups have smooth gradients that band badly at low rates. */
-function targetBitrate(width: number, height: number, fps: number, format: 'mp4' | 'webm') {
+function targetBitrate(width: number, height: number, fps: number, format: 'mp4' | 'mov' | 'webm') {
   const pixels = width * height;
-  const bitsPerPixel = format === 'webm' ? 0.2 : 0.16;
+  const bitsPerPixel = format === 'webm' ? 0.2 : format === 'mov' ? 0.22 : 0.16;
   const estimated = Math.round(pixels * Math.max(24, fps) * bitsPerPixel);
   return Math.min(40_000_000, Math.max(5_000_000, estimated));
 }
@@ -161,13 +217,18 @@ async function listSupportedConfigs(
   height: number,
   fps: number,
   bitrate: number,
+  preferred: VideoCodecId = 'auto',
 ): Promise<PickedCodec[]> {
   if (typeof VideoEncoder === 'undefined') return [];
 
   const accelModes: Accel[] = ['prefer-software', 'no-preference', 'prefer-hardware'];
   const found: PickedCodec[] = [];
+  const wantAvc = preferred === 'auto' || preferred === 'h264';
+  const wantVp9 = preferred === 'auto' || preferred === 'vp9';
+  const wantVp8 = preferred === 'auto' || preferred === 'vp8';
 
   if (container === 'mp4') {
+    if (!wantAvc) return found;
     const mp4Candidates = ['avc1.42001E', 'avc1.4D001F', 'avc1.64001F', 'avc1.640028', 'avc1.4D4028'];
     for (const codec of mp4Candidates) {
       for (const accel of accelModes) {
@@ -189,10 +250,28 @@ async function listSupportedConfigs(
   }
 
   // Prefer VP9 for cleaner gradients; fall back to VP8 if probe fails.
-  for (const codec of vp9CodecsForSize(width, height)) {
+  if (wantVp9) {
+    for (const codec of vp9CodecsForSize(width, height)) {
+      for (const accel of accelModes) {
+        const config: VideoEncoderConfig = {
+          codec,
+          width,
+          height,
+          bitrate,
+          framerate: fps,
+          ...encoderQualityExtras(),
+          ...(accel ? { hardwareAcceleration: accel } : {}),
+        };
+        const support = await VideoEncoder.isConfigSupported(config);
+        if (support.supported) found.push({ codec, muxCodec: 'vp9', hardwareAcceleration: accel });
+      }
+    }
+  }
+
+  if (wantVp8) {
     for (const accel of accelModes) {
       const config: VideoEncoderConfig = {
-        codec,
+        codec: 'vp8',
         width,
         height,
         bitrate,
@@ -201,22 +280,8 @@ async function listSupportedConfigs(
         ...(accel ? { hardwareAcceleration: accel } : {}),
       };
       const support = await VideoEncoder.isConfigSupported(config);
-      if (support.supported) found.push({ codec, muxCodec: 'vp9', hardwareAcceleration: accel });
+      if (support.supported) found.push({ codec: 'vp8', muxCodec: 'vp8', hardwareAcceleration: accel });
     }
-  }
-
-  for (const accel of accelModes) {
-    const config: VideoEncoderConfig = {
-      codec: 'vp8',
-      width,
-      height,
-      bitrate,
-      framerate: fps,
-      ...encoderQualityExtras(),
-      ...(accel ? { hardwareAcceleration: accel } : {}),
-    };
-    const support = await VideoEncoder.isConfigSupported(config);
-    if (support.supported) found.push({ codec: 'vp8', muxCodec: 'vp8', hardwareAcceleration: accel });
   }
 
   return found;
@@ -228,15 +293,25 @@ async function pickVideoConfig(
   height: number,
   fps: number,
   bitrate: number,
+  preferred: VideoCodecId = 'auto',
 ): Promise<PickedCodec> {
-  const candidates = await listSupportedConfigs(container, width, height, fps, bitrate);
+  const candidates = await listSupportedConfigs(container, width, height, fps, bitrate, preferred);
   for (const candidate of candidates) {
     if (await probeVideoEncoder(candidate, width, height, fps, bitrate)) {
       return candidate;
     }
   }
+  if (preferred !== 'auto') {
+    // Fall back to any working encoder for the container when the pick is unavailable.
+    const fallback = await listSupportedConfigs(container, width, height, fps, bitrate, 'auto');
+    for (const candidate of fallback) {
+      if (await probeVideoEncoder(candidate, width, height, fps, bitrate)) {
+        return candidate;
+      }
+    }
+  }
   if (container === 'mp4') {
-    throw new Error('H.264 encoding is not available on this computer. Try WebM instead.');
+    throw new Error('H.264 encoding is not available on this computer. Try WebM or MOV instead.');
   }
   throw new Error('No working WebCodecs WebM encoder found.');
 }
@@ -249,10 +324,12 @@ export interface EncodeVideoOptions {
   duration: number;
   renderFrame: (time: number, ctx: CanvasRenderingContext2D, width: number, height: number) => Promise<void> | void;
   onProgress?: (ratio: number, label: string) => void;
-  /** Optional soundtrack muxed into MP4 (AAC). Skipped for GIF; best-effort for WebM. */
+  /** Optional soundtrack muxed into MP4 / MOV (AAC) or WebM (Opus). Skipped for GIF. */
   soundtrack?: SoundtrackClip | null;
-  /** Preserve transparent pixels (WebM VP9 alpha or GIF). MP4 cannot keep alpha. */
+  /** Preserve transparent pixels (WebM VP9 alpha or GIF). MP4 / MOV cannot keep alpha. */
   transparent?: boolean;
+  /** Preferred video codec. Falls back to auto when unavailable on this machine. */
+  codec?: VideoCodecId;
 }
 
 function createEncoderBridge(muxerAdd: (chunk: EncodedVideoChunk, meta?: EncodedVideoChunkMetadata) => void) {
@@ -278,9 +355,10 @@ export async function encodeAnimationVideo(options: EncodeVideoOptions): Promise
   const duration = Math.max(0.2, Math.min(30, options.duration));
   const totalFrames = Math.max(1, Math.round(duration * fps));
   const transparent = Boolean(options.transparent);
+  const preferredCodec = resolveCodecForFormat(options.format, options.codec ?? 'auto');
 
-  if (transparent && options.format === 'mp4') {
-    throw new Error('MP4 cannot keep a transparent background. Export WebM or GIF instead.');
+  if (transparent && (options.format === 'mp4' || options.format === 'mov')) {
+    throw new Error(`${options.format.toUpperCase()} cannot keep a transparent background. Export WebM or GIF instead.`);
   }
 
   if (options.format === 'gif') {
@@ -289,7 +367,8 @@ export async function encodeAnimationVideo(options: EncodeVideoOptions): Promise
 
   const width = even(options.width);
   const height = even(options.height);
-  const bitrate = targetBitrate(width, height, fps, options.format === 'mp4' ? 'mp4' : 'webm');
+  const container = options.format;
+  const bitrate = targetBitrate(width, height, fps, container);
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -302,13 +381,184 @@ export async function encodeAnimationVideo(options: EncodeVideoOptions): Promise
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
-  if (options.format === 'mp4') {
-    return encodeMp4({ options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent: false });
-  }
   if (transparent) {
-    return encodeTransparentWebm({ options, width, height, fps, totalFrames, bitrate, canvas, ctx });
+    return encodeTransparentWebm({
+      options, width, height, fps, totalFrames, bitrate, canvas, ctx, preferredCodec,
+    });
   }
-  return encodeWebm({ options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent: false });
+
+  // MOV always goes through Mediabunny. Advanced codecs (HEVC / AV1 / ProRes) do too.
+  const needsMediabunny = container === 'mov'
+    || preferredCodec === 'hevc'
+    || preferredCodec === 'av1'
+    || preferredCodec === 'prores';
+
+  if (needsMediabunny) {
+    return encodeViaMediabunny({
+      options, width, height, fps, totalFrames, bitrate, canvas, ctx, preferredCodec, container,
+    });
+  }
+
+  try {
+    return await encodeViaMediabunny({
+      options, width, height, fps, totalFrames, bitrate, canvas, ctx, preferredCodec, container,
+    });
+  } catch (primaryError) {
+    if (container === 'mp4') {
+      try {
+        return await encodeMp4({
+          options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent: false, preferredCodec,
+        });
+      } catch (fallbackError) {
+        const primary = primaryError instanceof Error ? primaryError.message : String(primaryError);
+        const fallback = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        throw new Error(`MP4 export failed: ${primary} · Fallback: ${fallback}`);
+      }
+    }
+    try {
+      return await encodeWebm({
+        options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent: false, preferredCodec,
+      });
+    } catch (fallbackError) {
+      const primary = primaryError instanceof Error ? primaryError.message : String(primaryError);
+      const fallback = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      throw new Error(`WebM export failed: ${primary} · Fallback: ${fallback}`);
+    }
+  }
+}
+
+async function resolveEncodableCodec(
+  container: 'mp4' | 'mov' | 'webm',
+  preferred: VideoCodecId,
+  width: number,
+  height: number,
+  bitrate: number,
+  fps: number,
+): Promise<VideoCodec> {
+  const defaults = DEFAULT_CODECS[container];
+  const want = preferred === 'auto' ? null : CODEC_TO_MEDIABUNNY[preferred];
+  const order = want && defaults.includes(want)
+    ? [want, ...defaults.filter((codec) => codec !== want)]
+    : defaults;
+  const picked = await getFirstEncodableVideoCodec(order, {
+    width,
+    height,
+    bitrate,
+    frameRate: fps,
+  });
+  if (!picked) {
+    throw new Error(`No ${container.toUpperCase()} video codec available on this computer.`);
+  }
+  return picked;
+}
+
+function createOutputFormat(container: 'mp4' | 'mov' | 'webm') {
+  if (container === 'mp4') return new Mp4OutputFormat({ fastStart: 'in-memory' });
+  if (container === 'mov') return new MovOutputFormat({ fastStart: 'in-memory' });
+  return new WebMOutputFormat();
+}
+
+function mimeForContainer(container: 'mp4' | 'mov' | 'webm') {
+  if (container === 'mp4') return 'video/mp4';
+  if (container === 'mov') return 'video/quicktime';
+  return 'video/webm';
+}
+
+async function pcmToAudioBuffer(pcm: {
+  sampleRate: number;
+  numberOfChannels: 2;
+  frames: Float32Array;
+}): Promise<AudioBuffer> {
+  const frames = Math.floor(pcm.frames.length / pcm.numberOfChannels);
+  const buffer = new AudioBuffer({
+    length: frames,
+    numberOfChannels: pcm.numberOfChannels,
+    sampleRate: pcm.sampleRate,
+  });
+  const left = buffer.getChannelData(0);
+  const right = buffer.getChannelData(1);
+  for (let i = 0; i < frames; i += 1) {
+    left[i] = pcm.frames[i * 2] ?? 0;
+    right[i] = pcm.frames[i * 2 + 1] ?? 0;
+  }
+  return buffer;
+}
+
+async function encodeViaMediabunny({
+  options, width, height, fps, totalFrames, bitrate, canvas, ctx, preferredCodec, container,
+}: {
+  options: EncodeVideoOptions;
+  width: number;
+  height: number;
+  fps: number;
+  totalFrames: number;
+  bitrate: number;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  preferredCodec: VideoCodecId;
+  container: 'mp4' | 'mov' | 'webm';
+}) {
+  const codec = await resolveEncodableCodec(container, preferredCodec, width, height, bitrate, fps);
+  const target = new BufferTarget();
+  const output = new Output({
+    format: createOutputFormat(container),
+    target,
+  });
+  const source = new CanvasSource(canvas, {
+    codec,
+    bitrate,
+    keyFrameInterval: 2,
+    latencyMode: 'quality',
+  });
+  output.addVideoTrack(source, { frameRate: fps });
+
+  const audioPcm = options.soundtrack?.dataUrl ? await prepareMp4Audio(options) : null;
+  let audioSource: AudioBufferSource | null = null;
+  if (audioPcm) {
+    const audioCodec: AudioCodec = container === 'webm' ? 'opus' : 'aac';
+    const audioOk = await canEncodeAudio(audioCodec, {
+      numberOfChannels: audioPcm.numberOfChannels,
+      sampleRate: audioPcm.sampleRate,
+      bitrate: 192_000,
+    });
+    if (audioOk) {
+      audioSource = new AudioBufferSource({
+        codec: audioCodec,
+        bitrate: 192_000,
+      });
+      output.addAudioTrack(audioSource);
+    } else {
+      console.warn(`[export] Soundtrack skipped — ${audioCodec.toUpperCase()} unavailable`);
+    }
+  }
+
+  await output.start();
+  const frameDuration = 1 / fps;
+  try {
+    for (let i = 0; i < totalFrames; i += 1) {
+      const time = Math.min(options.duration, i / fps);
+      options.onProgress?.(i / totalFrames, `Encoding frame ${i + 1}/${totalFrames}`);
+      clearExportFrame(ctx, width, height, false);
+      await options.renderFrame(time, ctx, width, height);
+      await source.add(i * frameDuration, frameDuration);
+    }
+
+    if (audioSource && audioPcm) {
+      options.onProgress?.(0.96, 'Encoding soundtrack…');
+      const buffer = await pcmToAudioBuffer(audioPcm);
+      await audioSource.add(buffer);
+    }
+
+    options.onProgress?.(0.98, `Finishing ${container.toUpperCase()}`);
+    await output.finalize();
+    if (!target.buffer) throw new Error(`${container.toUpperCase()} muxer produced an empty file`);
+    options.onProgress?.(1, `Finishing ${container.toUpperCase()}`);
+    return new Blob([target.buffer], { type: mimeForContainer(container) });
+  } catch (error) {
+    try { await output.cancel(); } catch { /* ignore */ }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${container.toUpperCase()} export failed: ${message}`);
+  }
 }
 
 function clearExportFrame(
@@ -334,7 +584,7 @@ async function prepareMp4Audio(options: EncodeVideoOptions) {
 }
 
 async function encodeMp4({
-  options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent,
+  options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent, preferredCodec = 'auto',
 }: {
   options: EncodeVideoOptions;
   width: number;
@@ -345,8 +595,9 @@ async function encodeMp4({
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
   transparent: boolean;
+  preferredCodec?: VideoCodecId;
 }) {
-  const picked = await pickVideoConfig('mp4', width, height, fps, bitrate);
+  const picked = await pickVideoConfig('mp4', width, height, fps, bitrate, preferredCodec);
   const audioPcm = await prepareMp4Audio(options);
   const target = new Mp4ArrayBufferTarget();
   const muxer = new Mp4Muxer({
@@ -422,7 +673,7 @@ async function encodeMp4({
 
 /** Dual VP8/VP9 colour + alpha streams muxed as WebM AlphaMode — plays in Chrome, Firefox, Edge. */
 async function encodeTransparentWebm({
-  options, width, height, fps, totalFrames, bitrate, canvas, ctx,
+  options, width, height, fps, totalFrames, bitrate, canvas, ctx, preferredCodec = 'auto',
 }: {
   options: EncodeVideoOptions;
   width: number;
@@ -432,9 +683,16 @@ async function encodeTransparentWebm({
   bitrate: number;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
+  preferredCodec?: VideoCodecId;
 }) {
   // Mediabunny dual-encodes colour + alpha into WebM BlockAdditions (Chrome VideoEncoder drops alpha:keep).
-  let pickedCodec = await getFirstEncodableVideoCodec(['vp9', 'vp8'], {
+  // AV1 alpha support is spotty — prefer VP9/VP8 for transparent plates.
+  const preferredOrder: VideoCodec[] = preferredCodec === 'vp8'
+    ? ['vp8', 'vp9']
+    : preferredCodec === 'av1'
+      ? ['av1', 'vp9', 'vp8']
+      : ['vp9', 'vp8', 'av1'];
+  let pickedCodec = await getFirstEncodableVideoCodec(preferredOrder, {
     width,
     height,
     bitrate,
@@ -444,7 +702,8 @@ async function encodeTransparentWebm({
     throw new Error('Transparent WebM needs VP8/VP9 encoding on this computer. Try GIF instead.');
   }
   // Prefer VP9 when available — cleaner gradients for mockups.
-  if (pickedCodec === 'vp8' && await canEncodeVideo('vp9', { width, height, bitrate, frameRate: fps })) {
+  if (pickedCodec === 'vp8' && preferredCodec !== 'vp8'
+    && await canEncodeVideo('vp9', { width, height, bitrate, frameRate: fps })) {
     pickedCodec = 'vp9';
   }
   const codec: VideoCodec = pickedCodec;
@@ -619,7 +878,7 @@ async function encodeWebmWithMediaRecorder({
 }
 
 async function encodeWebm({
-  options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent,
+  options, width, height, fps, totalFrames, bitrate, canvas, ctx, transparent, preferredCodec = 'auto',
 }: {
   options: EncodeVideoOptions;
   width: number;
@@ -630,9 +889,10 @@ async function encodeWebm({
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
   transparent: boolean;
+  preferredCodec?: VideoCodecId;
 }) {
   try {
-    const picked = await pickVideoConfig('webm', width, height, fps, bitrate);
+    const picked = await pickVideoConfig('webm', width, height, fps, bitrate, preferredCodec);
     return await encodeWebmWithCodecs({
       options, width, height, fps, totalFrames, bitrate, canvas, ctx, picked, transparent,
     });
@@ -728,5 +988,9 @@ export function isStillExport(kind: ExportKind): kind is StillFormatId {
 }
 
 export function isVideoExport(kind: ExportKind): kind is VideoFormatId {
-  return kind === 'webm' || kind === 'mp4' || kind === 'gif';
+  return kind === 'webm' || kind === 'mp4' || kind === 'mov' || kind === 'gif';
+}
+
+export function videoSupportsSoundtrack(kind: VideoFormatId) {
+  return kind === 'mp4' || kind === 'mov' || kind === 'webm';
 }

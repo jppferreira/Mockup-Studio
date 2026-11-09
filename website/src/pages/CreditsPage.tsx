@@ -7,7 +7,6 @@ import {
   type CreditSectionId,
   type ModelCredit,
 } from '@shared/credits';
-import { DownloadButton } from '../components/DownloadButton';
 import { SiteChrome } from '../components/SiteChrome';
 
 function rowsForSection(sectionId: CreditSectionId): ModelCredit[] {
@@ -96,9 +95,9 @@ export function CreditsPage() {
         </section>
 
         <section className="page-cta">
-          <DownloadButton className="btn btn-primary" fallbackHref="/#download">
-            Download Free
-          </DownloadButton>
+          <Link className="btn btn-primary" to="/#beta">
+            Sign up to beta
+          </Link>
           <Link className="btn btn-ghost" to="/terms">
             Terms of use
           </Link>

@@ -240,6 +240,14 @@ export interface Vec3 {
 /** Per-material overrides authored in DEV modeling mode (Spline-style). */
 export type MaterialTweak = Record<string, number | boolean | string | null>;
 
+/** One Figma/SVG UI plate floating off the device screen (Rotato-style explosion). */
+export interface ScreenLayerPlate {
+  id: string;
+  name: string;
+  /** Transparent PNG data URL for this top-level layer. */
+  dataUrl: string;
+}
+
 export interface DeviceInstance {
   id: string;
   deviceId: DeviceId;
@@ -255,6 +263,13 @@ export interface DeviceInstance {
    * In split mode each platform keeps its own shot — never shared unless copied.
    */
   screenshot?: string | null;
+  /**
+   * Top-level UI plates for Rotato-style layer explosion (bottom → top).
+   * When present, `layerExplosion` lifts them off the glass in 3D.
+   */
+  screenLayers?: ScreenLayerPlate[];
+  /** 0 = flat on screen, 1 = fully exploded. Ignored when `screenLayers` is empty. */
+  layerExplosion?: number;
   /** Per-environment device finish; falls back to project.deviceColor when absent. */
   deviceColor?: DeviceColor;
   /** Per-environment clay finish; falls back to project.clayMode when absent. */
@@ -450,6 +465,7 @@ export type AnimProperty =
   | 'position.z'
   | 'scale'
   | 'lidOpen'
+  | 'layerExplosion'
   | 'camera.x'
   | 'camera.y'
   | 'camera.z';
@@ -642,6 +658,21 @@ export function createDeviceInstance(partial?: Partial<DeviceInstance>): DeviceI
     reflectionStyle: normalizeReflectionStyle(partial?.reflectionStyle)
       ?? reflectionStyleForAmount(partial?.glassReflection ?? 0.55),
     screenshot: partial?.screenshot !== undefined ? partial.screenshot : null,
+    screenLayers: Array.isArray(partial?.screenLayers)
+      ? partial.screenLayers
+        .filter((plate): plate is ScreenLayerPlate => (
+          Boolean(plate)
+          && typeof plate.id === 'string'
+          && typeof plate.name === 'string'
+          && typeof plate.dataUrl === 'string'
+          && plate.dataUrl.startsWith('data:image/')
+        ))
+        .slice(0, 16)
+        .map((plate) => ({ id: plate.id, name: plate.name.slice(0, 80), dataUrl: plate.dataUrl }))
+      : undefined,
+    layerExplosion: typeof partial?.layerExplosion === 'number'
+      ? Math.min(1, Math.max(0, partial.layerExplosion))
+      : undefined,
     deviceColor: partial?.deviceColor,
     clayMode: partial?.clayMode,
     lidOpen: partial?.lidOpen,
@@ -801,6 +832,7 @@ export const ANIM_PROPERTIES: { id: AnimProperty; label: string; unit: string }[
   { id: 'position.z', label: 'Pos Z', unit: '' },
   { id: 'scale', label: 'Scale', unit: '×' },
   { id: 'lidOpen', label: 'Fold / Lid', unit: '' },
+  { id: 'layerExplosion', label: 'Layer explosion', unit: '' },
   { id: 'camera.x', label: 'Camera X', unit: '' },
   { id: 'camera.y', label: 'Camera Y', unit: '' },
   { id: 'camera.z', label: 'Camera Z', unit: '' },
@@ -813,6 +845,7 @@ export const DEVICE_ANIM_PROPERTIES: AnimProperty[] = [
   'position.x', 'position.y', 'position.z',
   'scale',
   'lidOpen',
+  'layerExplosion',
 ];
 
 export const IOS_DEVICE_ID: DeviceId = 'iphone_15_pro_max';
@@ -1351,7 +1384,7 @@ export const DEVICE_COLORS: { id: DeviceColor; label: string; hex: string }[] = 
   { id: 'clay', label: 'Clay', hex: TONE_CLAY },
 ];
 
-export const EXPORT_FPS_OPTIONS = [24, 30, 60] as const;
+export const EXPORT_FPS_OPTIONS = [24, 25, 30, 48, 60] as const;
 
 
 export type ExportAspectGroup = 'social' | 'store' | 'other';

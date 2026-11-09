@@ -142,7 +142,25 @@ export const PRIVACY_POINTS = [
     copy: 'Preview and export run on your Mac’s GPU. You are not waiting on someone else’s servers to finish a shot.',
   },
   {
-    title: 'Optional fonts only',
-    copy: 'The marketing site and app may load Google Fonts when online. The core editor does not phone home with project contents.',
+    title: 'Fonts stay on this site',
+    copy: 'The marketing site serves its own font files. It does not load Google Fonts, analytics, or advertising tags.',
+  },
+  {
+    title: 'No non-essential cookies',
+    copy: 'This site does not set analytics or marketing cookies. A beta signup is a form you submit, not a tracker.',
   },
 ] as const;
+
+export const PRIVACY_BETA = {
+  id: 'beta-signup',
+  title: 'Beta signup',
+  points: [
+    'Who: mokstudio. Privacy requests go to sales@mokstudio.io, or through Contact on this site.',
+    'What: the email address you type, the page you signed up from, and the time you ticked the consent box.',
+    'Why: only to email you the Mac beta build and a follow-up if that invite needs a reply. Not for a general marketing list, and not for project files.',
+    'Basis: your consent. The box starts unticked. We do not sign you up without it.',
+    'Where: the address is stored in Supabase, hosted in London, UK. We do not sell it or pass it to advertisers.',
+    'How long: until you withdraw consent, or until the beta list is closed — whichever comes first.',
+    'Your rights: you can ask for a copy, a correction, or deletion, and you can withdraw consent at any time. You can also complain to the ICO in the UK, or to your local data protection authority.',
+  ],
+} as const;

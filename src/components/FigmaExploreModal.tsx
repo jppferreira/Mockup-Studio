@@ -14,6 +14,12 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onApply: (dataUrl: string, layerName: string) => void;
+  /** Place top-level plates as Rotato-style 3D exploded layers on the device. */
+  onApplyExplosion?: (
+    plates: { id: string; name: string; dataUrl: string }[],
+    amount: number,
+    label: string,
+  ) => void;
   onNotify: (message: string) => void;
   /** Prefill the Figma URL field when opening from Assets. */
   initialUrl?: string;
@@ -185,7 +191,9 @@ function ExplodeStage({
   );
 }
 
-export default function FigmaExploreModal({ open, onClose, onApply, onNotify, initialUrl }: Props) {
+export default function FigmaExploreModal({
+  open, onClose, onApply, onApplyExplosion, onNotify, initialUrl,
+}: Props) {
   const [urlDraft, setUrlDraft] = useState('');
   const [tokenDraft, setTokenDraft] = useState(() => loadFigmaToken());
   const [loading, setLoading] = useState(false);
@@ -350,6 +358,15 @@ export default function FigmaExploreModal({ open, onClose, onApply, onNotify, in
     setExporting(true);
     setError(null);
     try {
+      if (onApplyExplosion) {
+        onApplyExplosion(
+          plates.map((plate) => ({ id: plate.id, name: plate.name, dataUrl: plate.dataUrl })),
+          explodeAmount,
+          selected.name,
+        );
+        onClose();
+        return;
+      }
       const dataUrl = await compositeExplodeStack(
         plates.map((plate) => ({ dataUrl: plate.dataUrl, name: plate.name })),
         explodeAmount,
@@ -420,7 +437,7 @@ export default function FigmaExploreModal({ open, onClose, onApply, onNotify, in
               disabled={exporting}
               onClick={() => void applyExplodedComposite()}
             >
-              Use exploded stack
+              {onApplyExplosion ? 'Place on device in 3D' : 'Use exploded stack'}
             </button>
           </div>
         </div>
@@ -511,8 +528,8 @@ export default function FigmaExploreModal({ open, onClose, onApply, onNotify, in
         <UnfoldVertical size={22} />
         <strong>Explode Figma layers</strong>
         <span>
-          Load a file, pick a frame, then explode its children into a depth stack —
-          paste alone stays flat because PNG has no layers.
+          Load a file, pick a frame, then explode its top-level children into real 3D plates on the device —
+          like Rotato. Paste alone stays flat because PNG has no layers.
         </span>
       </div>
     );
@@ -535,8 +552,8 @@ export default function FigmaExploreModal({ open, onClose, onApply, onNotify, in
         </div>
         <h2 id="figma-explore-title">Explode view</h2>
         <p>
-          Paste still gives a flat image. Explode pulls real Figma child layers apart in space
-          so you can pick one plate — or drop the whole stack onto the phone.
+          Paste still gives a flat image. Explode pulls real Figma child layers into 3D plates
+          on the device — pick one layer, or place the whole stack and scrub Explosion.
         </p>
 
         <form className="figma-explore-form" onSubmit={(e) => void loadFile(e)}>

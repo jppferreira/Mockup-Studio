@@ -116,7 +116,7 @@ export const PLANS: PlanDefinition[] = [
     priceLabel: '£0',
     priceGbp: PLAN_PRICES_GBP.free,
     billing: 'Forever free',
-    cta: 'Download for Mac',
+    cta: 'Sign up to beta',
     includes: [
       'Full editor to compose and frame',
       '2 flagship phones (iPhone + Galaxy)',

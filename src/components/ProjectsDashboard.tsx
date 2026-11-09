@@ -33,6 +33,7 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
 };
 import AccentThemePicker from './AccentThemePicker';
 import CloudSyncPanel, { type CloudTarget } from './CloudSyncPanel';
+import CloudAccountPanel from './CloudAccountPanel';
 import type { CloudLibraryStatus, CloudProjectEntry } from '../lib/cloudLibrary';
 import { syncButtonLabel } from '../lib/cloudLibrary';
 import { isDesktopApp } from '../lib/phoneMirror';
@@ -142,6 +143,7 @@ export default function ProjectsDashboard({
   onFeedback,
   onShowOnboarding,
   onShowStudioTour,
+  onMergeCloudProjects,
   deviceUnlocked,
 }: {
   recentProjects: RecentProjectEntry[];
@@ -176,6 +178,7 @@ export default function ProjectsDashboard({
   onFeedback: () => void;
   onShowOnboarding?: () => void;
   onShowStudioTour?: () => void;
+  onMergeCloudProjects: (entries: RecentProjectEntry[]) => void;
   deviceUnlocked: (deviceId: string) => boolean;
 }) {
   const [section, setSection] = useState<DashSection>('projects');
@@ -764,6 +767,10 @@ export default function ProjectsDashboard({
               <div className="dash-setting">
                 <AccentThemePicker />
               </div>
+              <CloudAccountPanel
+                recentProjects={recentProjects}
+                onMergeCloudProjects={onMergeCloudProjects}
+              />
               <CloudSyncPanel
                 cloud={cloud}
                 busy={cloudBusy}
