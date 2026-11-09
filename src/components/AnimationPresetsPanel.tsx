@@ -1,5 +1,5 @@
 import {
-  Suspense, useEffect, useMemo, useRef, useState,
+  Suspense, useMemo, useRef, useState,
 } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { ContactShadows, PerspectiveCamera, useGLTF } from '@react-three/drei';
@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { ANIMATION_PRESETS, applyAnimationPreset, type AnimationPreset } from '../lib/animationPresets';
 import { evaluateAnimation, evaluateCamera } from '../lib/animation';
 import { getDevice, type DeviceId } from '../lib/devices';
+import { useDeviceModelUrl } from '../lib/useDeviceModelUrl';
 import { createDeviceInstance, DEVICE_COLORS, type DeviceColor } from '../types';
 
 const PREVIEW_PRESETS = ANIMATION_PRESETS.filter((preset) => preset.id !== 'clear');
@@ -102,10 +103,11 @@ function PreviewModel({
   colorHex?: string;
 }) {
   const device = getDevice(deviceId);
-  if (device.url) {
+  const modelUrl = useDeviceModelUrl(device.id, device.url);
+  if (modelUrl.url) {
     return (
       <Suspense fallback={<PreviewFallback color={colorHex || '#3d8f72'} />}>
-        <FittedGltfModel url={device.url} clayMode={clayMode} colorHex={colorHex} />
+        <FittedGltfModel url={modelUrl.url} clayMode={clayMode} colorHex={colorHex} />
       </Suspense>
     );
   }
@@ -306,12 +308,7 @@ export default function AnimationPresetsPanel({
   screenshot = null,
 }: AnimationPresetsPanelProps) {
   const colorHex = clayMode ? '#c5c0b8' : finishHex(deviceColor);
-  const device = getDevice(deviceId);
-
-  useEffect(() => {
-    if (device.url) useGLTF.preload(device.url);
-  }, [device.url]);
-
+  void deviceId;
   void screenshot;
 
   return (

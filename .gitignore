@@ -15,3 +15,12 @@ signing/*.cer
 signing/*.pem
 .tools/
 .model-import/
+.model-library/
+# Licensed device meshes — served on demand from private Supabase Storage
+public/models/*.glb
+public/models/*.gltf
+public/models/*.fbx
+public/models/*.bin
+.env.local
+.env.*.local
+supabase/.temp/

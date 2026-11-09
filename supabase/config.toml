@@ -1,0 +1,5 @@
+# Linked project: frame (kpgukqklgkvnvlukjhqc) — private device-models bucket
+# https://supabase.com/dashboard/project/kpgukqklgkvnvlukjhqc
+
+[functions.device-model-url]
+verify_jwt = false

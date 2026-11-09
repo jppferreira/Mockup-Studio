@@ -6,7 +6,8 @@ import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { OrbitControls, TransformControls, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { DEVICE_MODEL_PACK_VERSION, getDevice, type DeviceUv } from '../lib/devices';
+import { getDevice, type DeviceUv } from '../lib/devices';
+import { useDeviceModelUrl } from '../lib/useDeviceModelUrl';
 import { applyLidOpen, setupLidRig, type LidRig } from '../lib/deviceLid';
 import { applyProgressiveEdgeBlur } from '../lib/edgeBlur';
 import { accentPair, useAccentTheme } from '../lib/accentTheme';
@@ -1992,6 +1993,7 @@ function DeviceModelView({
   preserveBrandMarks?: boolean;
 }) {
   const device = getDevice(instance.deviceId);
+  const modelUrl = useDeviceModelUrl(device.id, device.url);
   const positionRef = useRef<THREE.Group>(null);
   const rotationRef = useRef<THREE.Group>(null);
   const scaleRef = useRef<THREE.Group>(null);
@@ -2086,10 +2088,10 @@ function DeviceModelView({
               dropHighlight={dropHighlight}
               lidOpen={instance.lidOpen ?? 1}
             />
-          ) : device.url ? (
+          ) : modelUrl.url ? (
             <GltfDeviceContent
-              key={`${device.url}|${device.screenMat}|${device.rot.join(',')}|${device.uv.mirrorX ? 1 : 0}|${device.uv.flipY ? 1 : 0}|${device.uv.planar ? 1 : 0}|${device.uv.rot ?? 0}|${device.screenSize.width}x${device.screenSize.height}|${device.lid ? 'lid' : 'nolid'}|${device.lockMaterials ? 'lock' : 'tint'}|${device.hasScreen === false ? 'noscreen' : 'screen'}`}
-              url={device.url}
+              key={`${modelUrl.url}|${device.screenMat}|${device.rot.join(',')}|${device.uv.mirrorX ? 1 : 0}|${device.uv.flipY ? 1 : 0}|${device.uv.planar ? 1 : 0}|${device.uv.rot ?? 0}|${device.screenSize.width}x${device.screenSize.height}|${device.lid ? 'lid' : 'nolid'}|${device.lockMaterials ? 'lock' : 'tint'}|${device.hasScreen === false ? 'noscreen' : 'screen'}`}
+              url={modelUrl.url}
               deviceId={device.id}
               screenshot={screenshot}
               liveStream={liveStream}
@@ -4037,6 +4039,5 @@ export default function DeviceCanvas(props: Props) {
   return <MemoDeviceCanvas {...props} {...stableCallbacks} />;
 }
 
-// One common phone only — preloading a stack of 10–25MB GLBs at once makes
-// Electron abort fetches, and drei then caches those failures forever.
-useGLTF.preload(`./models/iphone_17_pro.glb?v=${DEVICE_MODEL_PACK_VERSION}`);
+// Device GLBs are fetched on demand from private Supabase Storage and cached
+// encrypted — do not preload bundled ./models paths.

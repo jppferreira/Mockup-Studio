@@ -15,6 +15,11 @@ interface ImportMetaEnv {
   readonly VITE_SALES_EMAIL?: string;
   /** License + feedback API base (e.g. http://127.0.0.1:8787 or https://license.mockupstudio.app) */
   readonly VITE_FULFILL_API_URL?: string;
+  /** Private Supabase project for on-demand device GLBs */
+  readonly VITE_SUPABASE_URL?: string;
+  readonly VITE_SUPABASE_ANON_KEY?: string;
+  /** Must match Edge Function secret MODEL_APP_SECRET */
+  readonly VITE_MODEL_APP_SECRET?: string;
 }
 
 interface ImportMeta {
