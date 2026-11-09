@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { deviceAssetUrl } from './devices';
+import { isFreeDevice } from './license';
 import { remoteModelsConfigured, resolveDeviceModelUrl } from './modelCache';
 
 type State = {
@@ -10,7 +11,7 @@ type State = {
 
 /**
  * Resolve a GLB URL for a catalog device.
- * When Supabase delivery is configured, downloads on demand into an encrypted cache.
+ * When Supabase delivery is configured, Pro downloads on demand into an encrypted cache.
  * Otherwise falls back to the local/public path (dev without remote config).
  */
 export function useDeviceModelUrl(
@@ -46,8 +47,10 @@ export function useDeviceModelUrl(
       .catch((err: unknown) => {
         if (cancelled) return;
         const message = err instanceof Error ? err.message : 'Failed to load device model';
-        // Fall back to local path if present (dev machines that still have public/models).
-        const fallback = deviceAssetUrl(fallbackUrl) ?? null;
+        // Paid catalog models must use the Pro signed-URL path — never a leftover local GLB.
+        const fallback = isFreeDevice(deviceId)
+          ? (deviceAssetUrl(fallbackUrl) ?? null)
+          : null;
         setState({ url: fallback, loading: false, error: fallback ? null : message });
       });
 

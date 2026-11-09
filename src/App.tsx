@@ -149,6 +149,7 @@ import {
   canExportVideo,
   formatGbp,
   isDeviceUnlocked,
+  isFreeDevice,
   isResolutionAllowed,
   loadLicense,
   maxDevicesFor,
@@ -648,6 +649,7 @@ function DeviceCardGrid({
         const unlocked = isUnlocked(device.id);
         const selected = isSelected(device.id);
         const category = categoryOfDevice(device);
+        const proFeature = !isFreeDevice(device.id);
         return (
           <button
             key={device.id}
@@ -656,7 +658,7 @@ function DeviceCardGrid({
             aria-selected={selected}
             draggable={unlocked}
             data-category={category}
-            className={`device-model-card ${selected ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'}`}
+            className={`device-model-card ${selected ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'} ${proFeature ? 'is-pro-feature' : ''}`}
             title={unlocked
               ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)} · Drag onto the canvas to place`
               : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
@@ -687,12 +689,13 @@ function DeviceCardGrid({
               onPick(device, unlocked);
             }}
           >
+            {!unlocked ? <span className="pro-feature-tag" aria-label="Locked">Locked</span> : null}
             <span className="device-model-card-thumb" aria-hidden>
               <DeviceModelThumb deviceId={device.id} />
             </span>
             <span className="device-model-card-copy">
               <strong>{device.label}</strong>
-              <span>{unlocked ? screenSizeLabel(device.screenSize) : 'Pro'}</span>
+              <span>{screenSizeLabel(device.screenSize)}</span>
             </span>
             {selected ? <Check size={12} className="device-model-card-check" aria-hidden /> : null}
           </button>

@@ -221,7 +221,7 @@ export async function activateLicenseKey(
     }
     const state: LicenseState = {
       ...current,
-      key: parsed.key,
+      // Keep the Pro / Pro Max key — device downloads still need MS-PRO / MS-PROMAX.
       updatesUntil: monthsFrom(current.updatesUntil, 12),
       activatedAt: nowIso,
       source: 'key',
@@ -251,10 +251,26 @@ export function entitlementsFor(tier: LicenseTier) {
   return ENTITLEMENTS[LICENSING_DISABLED ? 'pro_max' : tier];
 }
 
-export function isDeviceUnlocked(tier: LicenseTier, deviceId: string): boolean {
-  if (LICENSING_DISABLED || ENTITLEMENTS[tier].allDevices) return true;
+/** True for the freemium starter set (and custom imports). Paid catalog devices are Pro. */
+export function isFreeDevice(deviceId: string): boolean {
   if (deviceId.startsWith('custom-')) return true;
   return (FREE_DEVICE_IDS as readonly string[]).includes(deviceId);
+}
+
+export function isDeviceUnlocked(tier: LicenseTier, deviceId: string): boolean {
+  if (LICENSING_DISABLED || ENTITLEMENTS[tier].allDevices) return true;
+  return isFreeDevice(deviceId);
+}
+
+/**
+ * License key sent to the model CDN for paid devices.
+ * Free devices omit this; Pro / Pro Max require a verified MS-PRO / MS-PROMAX key.
+ */
+export function modelAccessLicenseKey(license: LicenseState = loadLicense()): string | null {
+  if (!license.key) return null;
+  const key = license.key.trim().replace(/\s+/g, '');
+  if (/^MS-PROMAX\./.test(key) || /^MS-PRO\./.test(key)) return key;
+  return null;
 }
 
 export function maxDevicesFor(tier: LicenseTier): number {

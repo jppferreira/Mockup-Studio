@@ -5,7 +5,12 @@
  */
 
 import { DEVICE_MODEL_PACK_VERSION } from './devices';
-import { isDeviceUnlocked, loadLicense } from './license';
+import {
+  isDeviceUnlocked,
+  isFreeDevice,
+  loadLicense,
+  modelAccessLicenseKey,
+} from './license';
 
 const DB_NAME = 'mockup-studio.model-cache';
 const DB_VERSION = 1;
@@ -153,12 +158,20 @@ function toBlobUrl(bytes: ArrayBuffer): string {
 
 /**
  * Resolve a loadable blob: URL for a catalog device GLB.
- * Downloads on first use; later calls reuse the encrypted IndexedDB cache.
+ * Pro / Pro Max download any catalog model into the encrypted app cache on first use.
+ * Free tier may only fetch the starter devices.
  */
 export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
   const license = loadLicense();
   if (!isDeviceUnlocked(license.tier, deviceId)) {
     throw new Error('This device requires Pro — upgrade to unlock the full library');
+  }
+
+  const accessKey = modelAccessLicenseKey(license);
+  if (!isFreeDevice(deviceId) && !accessKey) {
+    throw new Error(
+      'Activate your Pro license key to download this device into the app',
+    );
   }
 
   const existing = liveUrls.get(deviceId);
@@ -177,7 +190,7 @@ export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
       return blobUrl;
     }
 
-    const signedUrl = await requestSignedUrl(deviceId, license.key);
+    const signedUrl = await requestSignedUrl(deviceId, accessKey);
     const plain = await downloadModel(signedUrl);
     const encrypted = await encryptBytes(plain);
     await idbPut({

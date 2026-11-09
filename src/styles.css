@@ -5899,6 +5899,54 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
   cursor: pointer;
   opacity: 0.72;
 }
+.pro-feature-tag {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  left: auto;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  max-width: max-content;
+  min-height: 0;
+  margin: 0;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, #8fd48a) 22%, #12151c);
+  color: color-mix(in srgb, var(--accent, #8fd48a) 82%, #f2f6f1);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: none;
+}
+.device-model-card .pro-feature-tag {
+  top: 8px;
+  right: 8px;
+  left: auto;
+}
+.device-model-card.is-selected .pro-feature-tag {
+  background: color-mix(in srgb, var(--accent, #8fd48a) 30%, #12151c);
+}
+.device-model-card.is-locked .device-model-card-check {
+  display: none;
+}
+.dash-model-card .pro-feature-tag {
+  top: 12px;
+  right: 12px;
+  left: auto;
+  padding: 4px 7px;
+  font-size: 9px;
+}
+.dash-model-card.is-locked {
+  opacity: 0.82;
+}
 .device-model-card-thumb {
   position: relative;
   display: block;
@@ -9832,6 +9880,22 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
   font-weight: 700;
   letter-spacing: 0.02em;
 }
+.dash-beta-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--dash-green, #8fd48a) 40%, var(--dash-border));
+  background: color-mix(in srgb, var(--dash-green, #8fd48a) 16%, var(--dash-panel));
+  color: var(--dash-green, #8fd48a);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-transform: uppercase;
+}
 .dash-header-rule {
   width: 1px;
   height: 36px;
@@ -10250,14 +10314,46 @@ button.dash-card > * {
 .dash-template-add {
   flex: 0 0 auto;
 }
-.dash-template-create-art {
-  display: grid;
-  place-items: center;
-  min-height: 140px;
-  color: var(--dash-muted);
+.dash-template-create {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 282px;
+  margin: 0;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 1.5px dashed #6a7180;
+  border-radius: var(--dash-radius);
+  background: transparent;
+  color: #8b9199;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
 }
-.dash-template-create-art img {
-  opacity: 0.7;
+.dash-template-create img {
+  display: block;
+  width: 28px;
+  height: 28px;
+  opacity: 0.55;
+  filter: grayscale(1) brightness(1.35);
+}
+.dash-template-create strong {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  color: #8b9199;
+  text-align: center;
+}
+.dash-template-create:hover {
+  border-color: #8b9199;
+  background: color-mix(in srgb, var(--dash-panel-2) 55%, transparent);
+}
+.dash-template-create:hover img,
+.dash-template-create:hover strong {
+  opacity: 0.85;
+  color: #aeb4bb;
 }
 .dash-template-card.is-dev-editable {
   border-color: color-mix(in srgb, #e8b86d 35%, #4c5362);
@@ -10358,13 +10454,34 @@ button.dash-card > * {
   color: var(--dash-green);
   font-weight: 600;
 }
-.dash-template-thumb,
-.dash-model-thumb {
+.dash-template-thumb {
   display: block;
   width: 100%;
   padding: 0;
-  /* No plate behind the device — transparent thumb art sits on the card itself */
   background: transparent;
+}
+.dash-model-thumb,
+.dash-card-thumb.dash-model-thumb,
+button.dash-card > .dash-model-thumb {
+  position: relative;
+  display: block;
+  width: calc(100% - 24px);
+  height: 200px;
+  min-height: 200px;
+  flex: 0 0 200px;
+  margin: 12px 12px 0;
+  padding: 0;
+  overflow: hidden;
+  align-self: center;
+  background: #1a1d25 !important;
+  border-radius: 14px;
+}
+.dash-model-card .dash-card-thumb > .device-model-shot-img,
+.dash-model-card .dash-card-thumb .device-model-shot-img {
+  left: 22px;
+  right: 22px;
+  top: 20px;
+  bottom: 18px;
 }
 .dash-card-thumb > .device-model-shot-img,
 .dash-card-thumb .device-model-shot-img {

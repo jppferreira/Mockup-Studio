@@ -37,7 +37,7 @@ import {
 } from '../lib/templates';
 import type { MockupProject } from '../types';
 import type { LicenseState } from '../lib/license';
-import { planLabel } from '../lib/license';
+import { isFreeDevice, planLabel } from '../lib/license';
 import DeviceModelThumb from './DeviceModelThumb';
 import TemplateThumb, { ProjectThumb } from './TemplateThumb';
 import newProjectArt from '../assets/dashboard/new-project.svg';
@@ -266,6 +266,7 @@ export default function ProjectsDashboard({
         <div className="dash-brand">
           <img className="dash-logo" src="./splash/logo.png" alt="" width={28} height={28} />
           <strong>Mockup Studio</strong>
+          <span className="dash-beta-badge" aria-label="Beta">Beta</span>
         </div>
         <span className="dash-header-rule" aria-hidden />
         <span className="dash-header-label">Your workspace</span>
@@ -567,20 +568,22 @@ export default function ProjectsDashboard({
               <div className="dash-grid dash-grid-models">
                 {visibleDevices.map((device) => {
                   const unlocked = deviceUnlocked(device.id);
+                  const proFeature = !isFreeDevice(device.id);
                   return (
                     <button
                       key={device.id}
                       type="button"
-                      className="dash-card dash-model-card"
+                      className={`dash-card dash-model-card ${unlocked ? '' : 'is-locked'} ${proFeature ? 'is-pro-feature' : ''}`}
                       onClick={() => onStartDevice(device.id)}
                       title={unlocked ? `Start with ${device.label}` : `${device.label} is a Pro model`}
                     >
+                      {!unlocked ? <span className="pro-feature-tag" aria-label="Locked">Locked</span> : null}
                       <span className="dash-card-thumb dash-model-thumb">
                         <DeviceModelThumb deviceId={device.id} />
                       </span>
                       <span className="dash-card-copy">
                         <strong>{device.label}</strong>
-                        <span>{unlocked ? device.subtitle : 'Pro model'}</span>
+                        <span>{device.subtitle}</span>
                       </span>
                     </button>
                   );
@@ -624,19 +627,18 @@ export default function ProjectsDashboard({
                 {toolsetSwitchAvailable && templateCategory !== 'saved' && onAddShippedTemplate && (
                   <button
                     type="button"
-                    className="dash-card dash-card-create dash-template-create"
+                    className="dash-template-create"
+                    title={templateCategory === 'scenes' ? 'New composition' : 'New layout'}
+                    aria-label={templateCategory === 'scenes' ? 'New composition' : 'New layout'}
                     onClick={() => {
                       if (!isDeveloperToolset) onSetToolset?.('developer');
                       onAddShippedTemplate(templateCategory === 'scenes' ? 'scenes' : 'devices');
                     }}
                   >
-                    <span className="dash-card-art dash-template-create-art">
-                      <img src={iconPlus} alt="" width={28} height={28} />
-                    </span>
-                    <span className="dash-card-copy">
-                      <strong>{templateCategory === 'scenes' ? 'New composition' : 'New layout'}</strong>
-                      <span>Add a blank template on the home library, then edit it in Dev</span>
-                    </span>
+                    <img src={iconPlus} alt="" width={28} height={28} />
+                    <strong>
+                      {templateCategory === 'scenes' ? 'New composition' : 'New layout'}
+                    </strong>
                   </button>
                 )}
                 {visibleTemplates.map((template) => {
