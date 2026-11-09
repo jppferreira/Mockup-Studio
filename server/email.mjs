@@ -5,7 +5,7 @@
 import { planLabel } from '../scripts/lib/sign-license.mjs';
 
 function siteUrl() {
-  return (process.env.SITE_URL || process.env.VITE_SITE_URL || 'https://mockupstudio.app').replace(
+  return (process.env.SITE_URL || process.env.VITE_SITE_URL || 'https://mokstudio.io').replace(
     /\/$/,
     '',
   );

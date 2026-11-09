@@ -53,7 +53,7 @@ Point Lemon/Paddle webhook URLs at your public HTTPS URL (use ngrok locally):
 - `https://<host>/webhooks/lemonsqueezy`
 - `https://<host>/webhooks/paddle`
 
-Set success URL on checkout to `https://mockupstudio.app/thanks?plan=pro` (etc.).
+Set success URL on checkout to `https://mokstudio.io/thanks?plan=pro` (etc.).
 
 ## Local test (no store)
 

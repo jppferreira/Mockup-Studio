@@ -110,7 +110,7 @@ async function tryFormSubmit(payload: FeedbackSubmitPayload, inbox: string): Pro
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         name: payload.name || payload.email || 'Mockup Studio user',
-        email: payload.email || 'noreply@mockupstudio.app',
+        email: payload.email || 'noreply@mokstudio.io',
         message: payload.message,
         topic: payload.topic,
         intent: payload.intent || 'feedback',

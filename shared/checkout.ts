@@ -30,8 +30,8 @@ export function getCheckoutConfig(): CheckoutConfig {
       pro_max: readEnv('VITE_CHECKOUT_PRO_MAX_URL'),
       update_pass: readEnv('VITE_CHECKOUT_UPDATE_PASS_URL'),
     },
-    salesEmail: readEnv('VITE_SALES_EMAIL') || 'sales@mockupstudio.app',
-    siteUrl: (readEnv('VITE_SITE_URL') || 'https://mockupstudio.app').replace(/\/$/, ''),
+    salesEmail: readEnv('VITE_SALES_EMAIL') || 'sales@mokstudio.io',
+    siteUrl: (readEnv('VITE_SITE_URL') || 'https://mokstudio.io').replace(/\/$/, ''),
   };
 }
 

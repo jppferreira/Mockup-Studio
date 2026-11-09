@@ -26,7 +26,7 @@ const SECTIONS = [
   {
     title: 'Dual-Mac and transfer (Pro Max)',
     copy:
-      'Pro Max may be activated on up to two Macs you own or control, or transferred to a new Mac with help from support (sales@mockupstudio.app). This is a license policy, not device DRM. Free and Pro are single-seat unless we agree otherwise in writing.',
+      'Pro Max may be activated on up to two Macs you own or control, or transferred to a new Mac with help from support (sales@mokstudio.io). This is a license policy, not device DRM. Free and Pro are single-seat unless we agree otherwise in writing.',
   },
   {
     title: 'Mac App Store (if offered later)',
@@ -55,7 +55,7 @@ const SECTIONS = [
   },
   {
     title: 'Contact',
-    copy: 'Questions about licensing or transfers: sales@mockupstudio.app.',
+    copy: 'Questions about licensing or transfers: sales@mokstudio.io.',
   },
 ] as const;
 

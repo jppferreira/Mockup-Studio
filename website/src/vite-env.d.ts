@@ -7,7 +7,7 @@ interface ImportMetaEnv {
   readonly VITE_DOWNLOAD_MAC_URL?: string;
   readonly VITE_SITE_URL?: string;
   readonly VITE_SALES_EMAIL?: string;
-  /** License fulfillment API (recover + webhooks host), e.g. https://license.mockupstudio.app */
+  /** License fulfillment API (recover + webhooks host), e.g. https://license.mokstudio.io */
   readonly VITE_FULFILL_API_URL?: string;
 }
 
