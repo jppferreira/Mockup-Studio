@@ -455,15 +455,6 @@ export default function ProjectsDashboard({
                 <span>{projects.length === 1 ? '1 project' : `${projects.length} projects`}</span>
               </div>
               <div className="dash-grid">
-                <button type="button" className="dash-card dash-card-create" onClick={onBlankFile ?? onNewProject}>
-                  <span className="dash-card-art dash-template-create-art">
-                    <img src={iconPlus} alt="" width={28} height={28} />
-                  </span>
-                  <span className="dash-card-copy">
-                    <strong>Blank file</strong>
-                    <span>Empty studio canvas — front device, soft light, no motion</span>
-                  </span>
-                </button>
                 <button type="button" className="dash-card dash-card-create" onClick={onNewProject}>
                   <span className="dash-card-art">
                     <img src={newProjectArt} alt="" width={381} height={180} />

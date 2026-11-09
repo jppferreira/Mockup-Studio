@@ -70,7 +70,10 @@ export function SiteGate({ onUnlock }: { onUnlock: () => void }) {
       <form onSubmit={submit}>
         <div className="site-gate-brand">
           <img className="site-gate-logo" src="./splash/logo.png" alt="" width={72} height={72} />
-          <h1>Mockup Studio</h1>
+          <div className="site-gate-title">
+            <h1>Mockup Studio</h1>
+            <span className="dash-beta-badge" aria-label="Beta">Beta</span>
+          </div>
         </div>
         <p>Enter the password to open the studio.</p>
         <input

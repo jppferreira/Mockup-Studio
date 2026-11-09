@@ -35,7 +35,7 @@ import UpdateBanner from './components/UpdateBanner';
 import SvgExplodeModal from './components/SvgExplodeModal';
 import ProgressiveBlurOverlay from './components/ProgressiveBlurOverlay';
 import LightDirectionControl, { lightToSpherical, sphericalToLight } from './components/LightDirectionControl';
-import ModelingModePanel, { type PickedMaterial, type StudioSetFocus } from './components/ModelingModePanel';
+import { type PickedMaterial, type StudioSetFocus } from './components/ModelingModePanel';
 import {
   propExtrusion,
   propFootprintScale,
@@ -998,10 +998,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [workspaceToolset, setWorkspaceToolset] = useState<WorkspaceToolset>(() => loadWorkspaceToolset());
-  const [modelingPanelOpen, setModelingPanelOpen] = useState(true);
   const [pickedMaterial, setPickedMaterial] = useState<PickedMaterial | null>(null);
   const [studioSetFocus, setStudioSetFocus] = useState<StudioSetFocus>(null);
   const [templatesTick, setTemplatesTick] = useState(0);
+  const [shippingTemplate, setShippingTemplate] = useState(false);
   const toolsetSwitchAvailable = isDevToolsetAvailable();
   const isDeveloperToolset = toolsetSwitchAvailable && workspaceToolset === 'developer';
 
@@ -1009,13 +1009,11 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     setWorkspaceToolset(next);
     saveWorkspaceToolset(next);
     setRightWorkspaceTab('inspect');
-    if (next === 'developer') setModelingPanelOpen(true);
     if (next === 'user') {
       setPickedMaterial(null);
-      setModelingPanelOpen(false);
     }
     notify(next === 'developer'
-      ? 'Dev view — quick-edit templates, then Update shipped for User'
+      ? 'Dev view — edit templates, then Push / Ship as new in Inspect'
       : 'User view — templates as customers see them');
   };
 
@@ -4433,7 +4431,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     pinLayer('backdrop', deviceId);
     setLightGizmoActive(false);
     setSidePanelsHidden(false);
-    setModelingPanelOpen(true);
     // Keep Look collapsed — backdrop looks + colour dock open at the top of the right panel.
     setDeviceMenu(null);
     setPickedMaterial(null);
@@ -5213,6 +5210,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       // Keep the file’s name; overwrite its device list from the open shot.
       const label = existing?.label || project.name || 'Untitled composition';
       try {
+        setShippingTemplate(true);
         const next = prepareShippedFromProject(label, project, category, {
           id: targetId,
           cameraOrbit: sharedOrbit,
@@ -5228,6 +5226,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       } catch (err) {
         notify(err instanceof Error ? err.message : 'Could not overwrite devices in that file');
         return;
+      } finally {
+        setShippingTemplate(false);
       }
     }
 
@@ -5247,6 +5247,40 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       return;
     }
     notify(`Overwrote ${notes.join(' + ')}`);
+  };
+
+  /** Add the open shot as a new Devices / Scenes catalog template. */
+  const shipCurrentAsNewTemplate = async (category: 'devices' | 'scenes') => {
+    if (project.devices.length === 0) {
+      notify('Add a device before shipping');
+      return;
+    }
+    const tabId = workspace.activeId;
+    const label = compositionName || project.name || 'Untitled composition';
+    setShippingTemplate(true);
+    try {
+      const next = prepareShippedFromProject(label, project, category, {
+        cameraOrbit: sharedOrbit,
+      });
+      const result = await shipCompositionTemplate(next);
+      if (!result.ok) {
+        notify(result.reason || 'Ship failed');
+        return;
+      }
+      setTemplatesTick((n) => n + 1);
+      setTemplateCategory(category);
+      if (tabId && isDevEditableTemplateId(result.template.id)) {
+        linkShippedTemplate(tabId, result.template.id);
+      }
+      const where = result.downloaded
+        ? ' · downloaded JSON (drop into src/data/)'
+        : ' · User view sees it now';
+      notify(`Shipped “${result.template.label}”${where}`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Ship failed');
+    } finally {
+      setShippingTemplate(false);
+    }
   };
 
   const onSaveComposition = (opts?: { openLibrary?: boolean }) => {
@@ -6785,19 +6819,19 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           ) : (
           <>
           {isDeveloperToolset && (
-            <div className="template-quick-edit" aria-label="Push devices into file">
+            <div className="template-quick-edit" aria-label="Ship templates and compositions">
               <div className="template-quick-edit-copy">
-                <strong>Overwrite devices in file</strong>
+                <strong>Ship templates</strong>
                 <span>
                   {linkedShipTarget
-                    ? `Push current phones into “${linkedShipTarget.label}”`
+                    ? `Update “${linkedShipTarget.label}”, or ship the open shot as a new layout`
                     : phoneFilePath
-                      ? 'Push current phones into this project file'
-                      : 'Pick the Devices file these phones belong to'}
+                      ? 'Push into this project file, or ship as a new catalog template'
+                      : 'Pick a Devices / Scenes template to update, or ship as new'}
                 </span>
               </div>
               <label className="template-quick-edit-target">
-                <span className="sr-only">Devices file</span>
+                <span className="sr-only">Template file</span>
                 <select
                   value={shipTargetId}
                   disabled={mainShipTargets.length === 0 || !workspace.activeId}
@@ -6807,7 +6841,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                     linkShippedTemplate(tabId, e.target.value || null);
                   }}
                 >
-                  <option value="">Choose Devices file…</option>
+                  <option value="">Choose template…</option>
                   {deviceCompositions.length > 0 && (
                     <optgroup label="Devices">
                       {deviceCompositions.map((item) => (
@@ -6839,12 +6873,30 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 <button
                   type="button"
                   className="button primary-button"
-                  disabled={!canPushIntoPhoneFile}
-                  title="Overwrite the phones stored in that Devices / project file"
+                  disabled={!canPushIntoPhoneFile || shippingTemplate}
+                  title="Overwrite the phones stored in that Devices / Scenes template"
                   onClick={() => void pushBackIntoPhoneFile(shipTargetId || null)}
                 >
                   <RefreshCw size={13} />
-                  {linkedShipTarget ? `Push into “${linkedShipTarget.label}”` : 'Push into file'}
+                  {linkedShipTarget ? `Update “${linkedShipTarget.label}”` : 'Update shipped'}
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={project.devices.length === 0 || shippingTemplate}
+                  title="Add this shot as a new Devices layout"
+                  onClick={() => void shipCurrentAsNewTemplate('devices')}
+                >
+                  <Download size={13} /> Ship layout
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={project.devices.length === 0 || shippingTemplate}
+                  title="Add this shot as a new composition"
+                  onClick={() => void shipCurrentAsNewTemplate('scenes')}
+                >
+                  <Download size={13} /> Ship composition
                 </button>
               </div>
             </div>
@@ -7586,7 +7638,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                     </button>
                   </div>
                   <p className="field-caption" style={{ marginTop: 4 }}>
-                    Dev only — prefer Ship in the developer panel so User gets the layout live.
+                    Dev only — prefer Update shipped / Ship layout in Inspect so User gets it live.
                   </p>
                 </>
               )}
@@ -9212,101 +9264,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           </div>
         </div>
       )}
-      {hasOpenProject && isDeveloperToolset && modelingPanelOpen && (
-        <ModelingModePanel
-          project={project}
-          compositionName={compositionName}
-          activeTemplateId={activeCompositionId}
-          cameraOrbit={sharedOrbit}
-          pickedMaterial={pickedMaterial}
-          materialTweak={
-            pickedMaterial
-              ? (project.devices.find((d) => d.id === pickedMaterial.deviceInstanceId)?.materialTweaks?.[pickedMaterial.materialName]
-                ?? (pickedMaterial.colorHex ? { color: pickedMaterial.colorHex } : null))
-              : null
-          }
-          selectedProp={
-            layerSelection.kind === 'prop'
-              ? (project.sceneProps ?? []).find((p) => p.id === layerSelection.id) ?? null
-              : null
-          }
-          backdropSelected={layerSelection.kind === 'backdrop'}
-          studioSetFocus={studioSetFocus}
-          onPickClear={() => setPickedMaterial(null)}
-          onPatchMaterial={patchPickedMaterial}
-          onClearMaterial={clearPickedMaterialOverrides}
-          onApplyPreset={applyMaterialPresetToPicked}
-          onSetMaterialMap={setPickedMaterialMap}
-          onRemovePickedMesh={removePickedMesh}
-          onRestoreHiddenMeshes={restoreHiddenMeshes}
-          onPatchProp={patchSceneProp}
-          onUpdateGradient={updateGradient}
-          onFocusStudioStop={setStudioSetFocus}
-          onUpdateProject={(patch) => updateProject(patch)}
-          onAddDevice={(deviceId) => {
-            const ids = Array.isArray(deviceId) ? deviceId : [deviceId];
-            let message = ids.length > 1 ? `Placed ${ids.length} scene sets` : 'Placed scene set';
-            let placed = 0;
-            setProject((current) => {
-              if (current.compositionMode === 'split') {
-                message = 'Switch off iOS + Android to place a scene set';
-                return current;
-              }
-              let devices = [...current.devices];
-              let last = getSelectedDevice(current);
-              for (const id of ids) {
-                if (devices.length >= MAX_DEVICES) {
-                  message = placed
-                    ? `Placed ${placed} · scene is full (${MAX_DEVICES} max)`
-                    : `You can place up to ${MAX_DEVICES} devices`;
-                  break;
-                }
-                placed += 1;
-                const instance = createDeviceInstance({
-                  deviceId: id,
-                  rotation: { ...STUDIO_START_ROTATION },
-                  position: {
-                    x: (placed - 1) * 1.15,
-                    y: 0,
-                    z: -0.4,
-                  },
-                  scale: 1.25,
-                  screenshot: null,
-                });
-                devices = [...devices, instance];
-                last = instance;
-              }
-              if (!placed) return current;
-              if (placed > 1 && !message.includes('full')) {
-                message = `Placed ${placed} scene sets`;
-              } else if (placed === 1 && !message.includes('full') && !message.includes('Switch')) {
-                message = 'Placed scene set';
-              }
-              return syncProjectFromSelected({ ...current, devices }, last);
-            });
-            setDevicesTick((n) => n + 1);
-            notify(message);
-          }}
-          onOpenLightSection={() => setOpenSectionId('light')}
-          onNotify={notify}
-          onBumpDevices={() => {
-            setCustomDevices(loadCustomDeviceMeta());
-            setDevicesTick((n) => n + 1);
-          }}
-          onPromoted={(template) => {
-            setTemplatesTick((n) => n + 1);
-            setTemplateCategory(template.category === 'scenes' ? 'scenes' : 'devices');
-            if (workspace.activeId && isDevEditableTemplateId(template.id)) {
-              linkShippedTemplate(workspace.activeId, template.id);
-            }
-            startFromTemplate(template);
-          }}
-          onClose={() => {
-            setModelingPanelOpen(false);
-            setPickedMaterial(null);
-          }}
-        />
-      )}
       {helpOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setHelpOpen(false); }}>
           <div className="export-modal help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title">
@@ -9553,7 +9510,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                     <button
                       type="button"
                       className="template-card"
-                      title={editable ? `Edit “${template.label}” in Dev, then Ship / Update for User` : undefined}
+                      title={editable ? `Edit “${template.label}” in Dev, then Update shipped / Ship in Inspect` : undefined}
                       onClick={() => startFromTemplate(template)}
                     >
                       <TemplateThumb template={template} />
@@ -9561,7 +9518,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         <strong>{template.label}</strong>
                         <span>
                           {editable
-                            ? 'Open → tweak → Update shipped so User templates match'
+                            ? 'Open → tweak → Update shipped or Ship in Inspect'
                             : template.description}
                         </span>
                         <em>{editable ? 'Dev editable' : template.badge}</em>
