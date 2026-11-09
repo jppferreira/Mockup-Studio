@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en" data-accent="purple">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#111319" />
+    <title>Mockup Studio — 3D Mockup Creator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #111319;
+        color: #f6f7fb;
+      }
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        background: #111319;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        transition: opacity 420ms ease, visibility 420ms ease;
+        -webkit-app-region: drag;
+      }
+      #app-splash.is-done {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+      }
+      .splash-header {
+        position: relative;
+        flex: 0 0 67px;
+        height: 67px;
+        background: #1a1d25;
+        overflow: hidden;
+      }
+      .splash-header::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 1px;
+        background: #363b46;
+      }
+      .splash-lights {
+        position: absolute;
+        top: 26px;
+        left: 19px;
+        display: flex;
+        gap: 9px;
+      }
+      html.is-desktop .splash-lights { visibility: hidden; }
+      .splash-lights img { display: block; }
+      .splash-brand {
+        position: absolute;
+        left: 119px;
+        top: 0;
+        height: 67px;
+        display: flex;
+        align-items: center;
+      }
+      .splash-logo {
+        width: 36px;
+        height: 36px;
+        flex: none;
+      }
+      .splash-logo img {
+        display: block;
+        width: 36px;
+        height: 36px;
+        object-fit: contain;
+      }
+      .splash-word {
+        margin: 0 0 0 9px;
+        font-size: 22px;
+        font-weight: 700;
+        line-height: 30px;
+        letter-spacing: 0;
+        color: #f6f7fb;
+        white-space: nowrap;
+      }
+      .splash-rule {
+        width: 1px;
+        height: 36px;
+        margin: 0 24px;
+        background: #363b46;
+        flex: none;
+      }
+      .splash-preparing {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 18px;
+        color: #a0a7b6;
+        white-space: nowrap;
+      }
+      .splash-stage {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        background: linear-gradient(90deg, #171a24 0%, #0f1a1a 100%);
+      }
+      .splash-canvas {
+        position: relative;
+        width: 1560px;
+        height: 913px;
+        flex: none;
+        transform-origin: center center;
+      }
+      .splash-canvas img { display: block; max-width: none; }
+      .splash-aurora {
+        position: absolute;
+        left: 510px;
+        top: 78px;
+        width: 540px;
+        height: 340px;
+        pointer-events: none;
+        background:
+          radial-gradient(ellipse 38% 42% at 34% 58%, rgba(70, 196, 255, 0.34) 0%, transparent 64%),
+          radial-gradient(ellipse 36% 40% at 68% 54%, rgba(168, 112, 255, 0.22) 0%, transparent 66%),
+          radial-gradient(ellipse 52% 46% at 50% 60%, rgba(154, 186, 255, 0.2) 0%, transparent 70%);
+        filter: blur(34px);
+        mix-blend-mode: screen;
+        animation: splash-aurora 14s ease-in-out infinite;
+      }
+      @keyframes splash-aurora {
+        0%, 100% { transform: scale(1) translate3d(0, 0, 0); opacity: 0.82; }
+        50% { transform: scale(1.03) translate3d(4px, -3px, 0); opacity: 1; }
+      }
+      .splash-phones {
+        position: absolute;
+        left: 590px;
+        top: 118px;
+        width: 380px;
+        height: auto;
+        pointer-events: none;
+      }
+      .splash-title {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 471px;
+        margin: 0;
+        text-align: center;
+        font-size: 32px;
+        font-weight: 700;
+        line-height: 44px;
+        letter-spacing: 0;
+        color: #f6f7fb;
+      }
+      .splash-opening {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 535px;
+        margin: 0;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 18px;
+        color: #a0a7b6;
+      }
+      .splash-progress {
+        position: absolute;
+        left: 562px;
+        top: 589px;
+        width: 436px;
+        height: 7px;
+        border-radius: 4px;
+        background: #2a2f3a;
+        overflow: hidden;
+      }
+      .splash-progress-fill {
+        display: block;
+        width: 0;
+        height: 7px;
+        border-radius: 4px;
+        background: #b794ff;
+      }
+      html[data-accent="green"] .splash-progress-fill { background: #5cecb6; }
+      .splash-status {
+        position: absolute;
+        left: 562px;
+        top: 614px;
+        width: 436px;
+        margin: 0;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 18px;
+        color: #a0a7b6;
+      }
+      .splash-percent {
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 19px;
+        color: #b794ff;
+      }
+      html[data-accent="green"] .splash-percent { color: #5cecb6; }
+      .splash-divider {
+        position: absolute;
+        left: 588px;
+        top: 674px;
+        width: 386px;
+        height: 1px;
+        background: #363b46;
+      }
+      .splash-cloud {
+        position: absolute;
+        left: 594px;
+        top: 696px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        color: #a0a7b6;
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 18px;
+      }
+      .splash-cloud p { margin: 0; }
+      .splash-footnote {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 816px;
+        margin: 0;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 400;
+        line-height: 18px;
+        color: #687183;
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-ORUHmYZI.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-Dubtq_Wn.css">
+  </head>
+  <body>
+    <div id="app-splash" role="status" aria-live="polite" aria-busy="true" aria-label="Preparing your project">
+      <header class="splash-header">
+        <div class="splash-lights" aria-hidden="true">
+          <img src="./splash/macos-red.svg" alt="" width="12" height="12" />
+          <img src="./splash/macos-yellow.svg" alt="" width="12" height="12" />
+          <img src="./splash/macos-green.svg" alt="" width="12" height="12" />
+        </div>
+        <div class="splash-brand">
+          <div class="splash-logo" aria-hidden="true"><img src="./splash/logo.png" alt="" width="36" height="36" /></div>
+          <p class="splash-word">Mockup Studio</p>
+          <div class="splash-rule" aria-hidden="true"></div>
+          <p class="splash-preparing">Preparing your project</p>
+        </div>
+      </header>
+      <div class="splash-stage">
+        <div class="splash-canvas">
+          <div class="splash-aurora" aria-hidden="true"></div>
+          <img class="splash-phones" src="./splash/phones-fan.png" alt="" width="1024" height="682" />
+          <h1 class="splash-title">Making space for your ideas</h1>
+          <p class="splash-opening">Opening iPhone Product Reveal</p>
+          <div class="splash-progress" aria-hidden="true">
+            <span class="splash-progress-fill" id="splash-progress-fill"></span>
+          </div>
+          <p class="splash-status">
+            <span>Preparing your scene and assets</span>
+            <span class="splash-percent" id="splash-percent">0%</span>
+          </p>
+          <div class="splash-divider" aria-hidden="true"></div>
+          <div class="splash-cloud">
+            <img src="./splash/icon-cloud.svg" alt="" width="19" height="19" />
+            <p>Connecting Figma assets securely</p>
+          </div>
+          <p class="splash-footnote">Your project will open automatically</p>
+        </div>
+      </div>
+    </div>
+    <div id="root"></div>
+    <script>
+      (function () {
+        if (navigator.userAgent.indexOf('Electron') !== -1) {
+          document.documentElement.classList.add('is-desktop');
+        }
+        var canvas = document.querySelector('.splash-canvas');
+        function fitSplash() {
+          if (!canvas) return;
+          var scale = Math.min(1, window.innerWidth / 1560, (window.innerHeight - 67) / 913);
+          canvas.style.transform = 'scale(' + scale + ')';
+        }
+        fitSplash();
+        window.addEventListener('resize', fitSplash);
+
+        var fill = document.getElementById('splash-progress-fill');
+        var pct = document.getElementById('splash-percent');
+        var started = performance.now();
+        function tick(now) {
+          if (!fill || !pct || fill.dataset.done === '1') return;
+          var t = Math.min(1, (now - started) / 1400);
+          var eased = 1 - Math.pow(1 - t, 3);
+          var value = Math.round(eased * 68);
+          fill.style.width = (302 * (value / 68)) + 'px';
+          pct.textContent = value + '%';
+          if (t < 1) requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      })();
+    </script>
+  </body>
+</html>
