@@ -28,9 +28,9 @@ const STORAGE_KEY = 'mockup-studio.license.v1';
 
 /**
  * Testing bypass — unlocks Pro Max entitlements without a key.
- * Flip back to `false` before shipping.
+ * Keep `false` for freemium (few free devices; Pro unlocks the full library).
  */
-export const LICENSING_DISABLED = true;
+export const LICENSING_DISABLED = false;
 
 /** How the current entitlement was unlocked. `mas` reserved for a future App Store build. */
 export type LicenseSource = 'none' | 'key' | 'mas';

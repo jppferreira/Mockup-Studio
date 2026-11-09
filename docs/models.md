@@ -37,6 +37,13 @@ node scripts/upload-device-models.mjs
 2. Function returns a short-lived signed URL for that single object.
 3. App downloads once, encrypts into IndexedDB, loads via a temporary `blob:` URL.
 
+## Freemium access
+
+- **Free:** only devices listed in `FREE_DEVICE_IDS` (`shared/pricing.ts`) — currently iPhone 15 Pro Max + Galaxy S26 Ultra.
+- **Pro / Pro Max:** signed license key unlocks the full library (Edge Function verifies the key before minting paid model URLs).
+
+The UI already locks Pro devices; the Edge Function enforces the same rule so free clients cannot scrape paid meshes.
+
 ## Rights
 
-Do not publish the GLBs on GitHub, in public buckets, or as release assets. Customer installs only receive models they actually use, through the gated signed-URL path.
+Do not publish the GLBs on GitHub, in public buckets, or as release assets. Customer installs only receive models they are entitled to, through the gated signed-URL path.

@@ -5,6 +5,7 @@
  */
 
 import { DEVICE_MODEL_PACK_VERSION } from './devices';
+import { isDeviceUnlocked, loadLicense } from './license';
 
 const DB_NAME = 'mockup-studio.model-cache';
 const DB_VERSION = 1;
@@ -110,18 +111,24 @@ async function decryptBytes(iv: ArrayBuffer, cipher: ArrayBuffer): Promise<Array
   return crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(iv) }, key, cipher);
 }
 
-async function requestSignedUrl(deviceId: string): Promise<string> {
+async function requestSignedUrl(deviceId: string, licenseKey: string | null): Promise<string> {
   const { url, anonKey, appSecret } = supabaseConfig();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${anonKey}`,
+    apikey: anonKey,
+    'Content-Type': 'application/json',
+    'x-mockup-model-secret': appSecret,
+  };
+  if (licenseKey) headers['x-mockup-license-key'] = licenseKey;
+
   const response = await fetch(`${url}/functions/v1/device-model-url`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${anonKey}`,
-      apikey: anonKey,
-      'Content-Type': 'application/json',
-      'x-mockup-model-secret': appSecret,
-    },
-    body: JSON.stringify({ deviceId }),
+    headers,
+    body: JSON.stringify({ deviceId, licenseKey: licenseKey || undefined }),
   });
+  if (response.status === 403) {
+    throw new Error('This device requires Pro — upgrade to unlock the full library');
+  }
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
     throw new Error(`Model URL request failed (${response.status})${detail ? `: ${detail}` : ''}`);
@@ -149,6 +156,11 @@ function toBlobUrl(bytes: ArrayBuffer): string {
  * Downloads on first use; later calls reuse the encrypted IndexedDB cache.
  */
 export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
+  const license = loadLicense();
+  if (!isDeviceUnlocked(license.tier, deviceId)) {
+    throw new Error('This device requires Pro — upgrade to unlock the full library');
+  }
+
   const existing = liveUrls.get(deviceId);
   if (existing) return existing;
 
@@ -165,7 +177,7 @@ export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
       return blobUrl;
     }
 
-    const signedUrl = await requestSignedUrl(deviceId);
+    const signedUrl = await requestSignedUrl(deviceId, license.key);
     const plain = await downloadModel(signedUrl);
     const encrypted = await encryptBytes(plain);
     await idbPut({
