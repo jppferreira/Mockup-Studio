@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { RoundedBox } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
@@ -118,6 +118,10 @@ function ScreenPlane({
     };
   }, [dropHighlight, material]);
 
+  const applyUv = useCallback((tex: THREE.Texture) => {
+    tex.flipY = false;
+  }, []);
+
   useScreenEmissiveMap({
     material,
     screenshot,
@@ -125,9 +129,7 @@ function ScreenPlane({
     width: screenSize.width,
     height: screenSize.height,
     playing: mediaPlaying,
-    applyUv: (tex) => {
-      tex.flipY = false;
-    },
+    applyUv,
   });
 
   return (

@@ -193,7 +193,7 @@ uniform sampler2D tDepth;
 uniform vec2 uTexel;
 uniform float uFocus;
 uniform float uFeather;
-uniform float uAperture;
+uniform float uFalloff;
 uniform float uMaxBlur;
 uniform float uNear;
 uniform float uFar;
@@ -202,19 +202,24 @@ varying vec2 vUv;
 float viewDistance(vec2 uv) {
   float depth = texture2D(tDepth, uv).r;
   float viewZ = (uNear * uFar) / ((uFar - uNear) * depth - uFar);
-  return -viewZ;
+  return max(uNear, -viewZ);
 }
 
+// 0 on the focal plane. Grows toward 1 as the surface approaches the camera
+// or recedes to twice the focus distance.
 float circleOfConfusion(float dist) {
-  float delta = max(0.0, abs(dist - uFocus) - uFeather);
-  return min(uMaxBlur, delta * uAperture);
+  float focus = max(uFocus, uNear + 0.01);
+  float rel = abs(dist - focus) / focus;
+  float t = smoothstep(uFeather, uFeather + max(uFalloff, 0.02), rel);
+  return t * uMaxBlur;
 }
 
 void main() {
   float dist = viewDistance(vUv);
   float coc = circleOfConfusion(dist);
   vec4 center = texture2D(tColor, vUv);
-  if (coc < 0.45) {
+  float blend = smoothstep(0.6, 2.2, coc);
+  if (blend <= 0.001) {
     gl_FragColor = center;
     return;
   }
@@ -222,26 +227,33 @@ void main() {
   vec3 rgb = center.rgb * center.a;
   float alpha = center.a;
   float weightSum = 1.0;
-  const int SAMPLES = 24;
+  const int SAMPLES = 64;
   const float GOLDEN = 2.39996323;
   for (int i = 0; i < SAMPLES; i++) {
     float fi = float(i);
     float radius = sqrt((fi + 0.5) / float(SAMPLES));
     float theta = fi * GOLDEN;
-    vec2 uv = vUv + vec2(cos(theta), sin(theta)) * radius * coc * uTexel;
+    float tap = radius * coc;
+    vec2 uv = clamp(vUv + vec2(cos(theta), sin(theta)) * tap * uTexel, vec2(0.001), vec2(0.999));
     float sampleDist = viewDistance(uv);
-    float behind = smoothstep(0.2, 1.1, sampleDist - dist);
-    float sharp = 1.0 - smoothstep(0.45, 2.2, coc);
-    float w = mix(1.0, 1.0 - behind, sharp);
+    float sampleCoc = circleOfConfusion(sampleDist);
+    // Sharp pixels only contribute inside their own blur disk, so the device
+    // does not smear into the background as a stack of copies.
+    float cover = smoothstep(tap - 1.0, tap + 0.65, sampleCoc + 0.45);
+    float gauss = exp(-radius * radius * 3.4);
+    float w = gauss * cover;
     vec4 sampleColor = texture2D(tColor, uv);
-    float luma = dot(sampleColor.rgb, vec3(0.2126, 0.7152, 0.0722));
-    w *= 1.0 + smoothstep(0.78, 1.5, luma) * smoothstep(2.0, 12.0, coc) * 0.8;
     rgb += sampleColor.rgb * sampleColor.a * w;
     alpha += sampleColor.a * w;
     weightSum += w;
   }
 
-  gl_FragColor = vec4(rgb / max(alpha, 1e-4), alpha / max(weightSum, 1e-4));
+  vec3 blurred = rgb / max(alpha, 1e-4);
+  float blurredAlpha = alpha / max(weightSum, 1e-4);
+  gl_FragColor = vec4(
+    mix(center.rgb, blurred, blend),
+    mix(center.a, blurredAlpha, blend)
+  );
 }
 `;
 
@@ -314,31 +326,36 @@ void main() {
 }
 `;
 
-type DofState = { amount: number; focusDistance: number };
+type DofState = { amount: number; focus: THREE.Vector3 };
 
 const dofStates = new WeakMap<THREE.WebGLRenderer, DofState>();
 const aoStates = new WeakMap<THREE.WebGLRenderer, number>();
 
-/** `amount` is 0–1. Zero skips the pass. `focusDistance` is camera-to-subject, in world units. */
+/** `amount` is 0–1. Zero skips the pass. `focus` is the world-space point that stays sharp. */
 export function setDepthOfField(
   gl: THREE.WebGLRenderer,
-  settings: { amount: number; focusDistance: number },
+  settings: { amount: number; focus: { x: number; y: number; z: number } },
 ) {
   let state = dofStates.get(gl);
   if (!state) {
-    state = { amount: 0, focusDistance: 8 };
+    state = { amount: 0, focus: new THREE.Vector3() };
     dofStates.set(gl, state);
   }
   const amount = settings.amount;
-  const focus = settings.focusDistance;
   state.amount = typeof amount === 'number' && Number.isFinite(amount) ? Math.min(1, Math.max(0, amount)) : 0;
-  state.focusDistance = typeof focus === 'number' && Number.isFinite(focus)
-    ? Math.max(0.05, focus)
-    : state.focusDistance;
+  const focus = settings.focus;
+  if (
+    focus
+    && Number.isFinite(focus.x)
+    && Number.isFinite(focus.y)
+    && Number.isFinite(focus.z)
+  ) {
+    state.focus.set(focus.x, focus.y, focus.z);
+  }
 }
 
 function readDof(gl: THREE.WebGLRenderer): DofState {
-  return dofStates.get(gl) ?? { amount: 0, focusDistance: 8 };
+  return dofStates.get(gl) ?? { amount: 0, focus: new THREE.Vector3() };
 }
 
 /** `amount` is 0–1. Zero skips the pass. Subtle values (0.2–0.4) read as product photography. */
@@ -431,9 +448,9 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
       tDepth: { value: null as THREE.Texture | null },
       uTexel: { value: new THREE.Vector2(1, 1) },
       uFocus: { value: 8 },
-      uFeather: { value: 0.5 },
-      uAperture: { value: 8 },
-      uMaxBlur: { value: 24 },
+      uFeather: { value: 0.07 },
+      uFalloff: { value: 0.22 },
+      uMaxBlur: { value: 18 },
       uNear: { value: 0.1 },
       uFar: { value: 100 },
     },
@@ -460,6 +477,7 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
   aoTarget.texture.generateMipmaps = false;
 
   const aoInvProjection = new THREE.Matrix4();
+  const dofFocusView = new THREE.Vector3();
   const aoMaterial = new THREE.ShaderMaterial({
     uniforms: {
       tColor: { value: null as THREE.Texture | null },
@@ -522,16 +540,21 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
 
       if (useDof && depthTarget.depthTexture) {
         fitTarget(dofTarget, width, height);
+        camera.updateMatrixWorld();
+        dofFocusView.copy(dof.focus).applyMatrix4(camera.matrixWorldInverse);
+        const focusDistance = Math.max(camera.near + 0.02, -dofFocusView.z);
         const px = height / 900;
-        const shaped = Math.pow(dof.amount, 1.15);
+        const shaped = Math.pow(Math.max(dof.amount, 0), 0.85);
         const uniforms = dofMaterial.uniforms;
         uniforms.tColor.value = buffer.texture;
         uniforms.tDepth.value = depthTarget.depthTexture;
         uniforms.uTexel.value.set(1 / width, 1 / height);
-        uniforms.uFocus.value = dof.focusDistance;
-        uniforms.uFeather.value = Math.max(0.5, dof.focusDistance * 0.055);
-        uniforms.uAperture.value = shaped * 14 * px;
-        uniforms.uMaxBlur.value = shaped * 52 * px;
+        uniforms.uFocus.value = focusDistance;
+        // Wide enough that the device body and its on-canvas gizmo stay sharp.
+        // Backdrop blur still ramps once a surface is well behind that band.
+        uniforms.uFeather.value = 0.12;
+        uniforms.uFalloff.value = 0.28;
+        uniforms.uMaxBlur.value = shaped * 20 * px;
         uniforms.uNear.value = camera.near;
         uniforms.uFar.value = Math.max(camera.far, camera.near + 0.01);
 

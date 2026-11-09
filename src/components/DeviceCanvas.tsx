@@ -1111,10 +1111,6 @@ function GltfDeviceContent({
       if (!looksLikeScreen) found = null;
     }
     if (found) {
-      // Only keep a real emissive map. Falling back to albedo `map` painted the
-      // shared GLB texture atlas onto the display (Apple logos / camera circles).
-      const authoredEmissive = (found.emissiveMap || null) as THREE.Texture | null;
-      const uvReference = (authoredEmissive || found.map || null) as THREE.Texture | null;
       // Isolated display clones must not run replaceMaterialEverywhere on the body.
       const screenMaterial = found.userData?.isolatedDisplay
         ? ((found as THREE.MeshPhysicalMaterial).isMeshPhysicalMaterial
@@ -1127,23 +1123,54 @@ function GltfDeviceContent({
             return phys;
           })())
         : upgradeToPhysical(root, found);
-      screenMaterial.emissive = new THREE.Color(0xffffff);
-      screenMaterial.emissiveIntensity = 1;
-      screenMaterial.toneMapped = false;
-      screenMaterial.metalness = 0;
-      screenMaterial.roughness = 1;
-      screenMaterial.envMapIntensity = 0;
-      screenMaterial.clearcoat = 0;
-      screenMaterial.clearcoatRoughness = 0.2;
-      screenMaterial.color = new THREE.Color(0x000000);
-      screenMaterial.map = null;
-      // Black until a screenshot is painted — never show the packed atlas.
-      screenMaterial.emissiveMap = null;
-      screenMaterial.transparent = false;
-      screenMaterial.opacity = 1;
-      screenMaterial.blending = THREE.NormalBlending;
-      screenMaterial.needsUpdate = true;
-      setScreen({ material: screenMaterial, originalEmissiveMap: uvReference });
+
+      // First configure only — re-entry must not wipe a painted placeholder
+      // (white emissive + null map was the green↔white flicker).
+      const alreadyConfigured = Boolean(screenMaterial.userData?.studioScreenConfigured);
+      let uvReference = screenMaterial.userData?.studioUvReference as THREE.Texture | null | undefined;
+      if (!alreadyConfigured) {
+        // Keep UV from the authored emissive/albedo before clearing the atlas map.
+        const authoredEmissive = (found.emissiveMap || null) as THREE.Texture | null;
+        uvReference = (authoredEmissive || found.map || null) as THREE.Texture | null;
+        screenMaterial.userData.studioUvReference = uvReference ?? null;
+        screenMaterial.userData.studioScreenConfigured = true;
+        // Off until useScreenEmissiveMap paints — black plate, not white flash.
+        screenMaterial.emissive = new THREE.Color(0x000000);
+        screenMaterial.emissiveIntensity = 1;
+        screenMaterial.toneMapped = false;
+        screenMaterial.metalness = 0;
+        screenMaterial.roughness = 1;
+        screenMaterial.envMapIntensity = 0;
+        screenMaterial.clearcoat = 0;
+        screenMaterial.clearcoatRoughness = 0.2;
+        screenMaterial.color = new THREE.Color(0x000000);
+        screenMaterial.map = null;
+        screenMaterial.emissiveMap = null;
+        screenMaterial.transparent = false;
+        screenMaterial.opacity = 1;
+        screenMaterial.blending = THREE.NormalBlending;
+        screenMaterial.needsUpdate = true;
+      } else {
+        // Cosmetic re-runs: keep the live emissiveMap / UV reference intact.
+        screenMaterial.toneMapped = false;
+        screenMaterial.color = new THREE.Color(0x000000);
+        screenMaterial.map = null;
+        screenMaterial.transparent = false;
+        screenMaterial.opacity = 1;
+        screenMaterial.blending = THREE.NormalBlending;
+        if (screenMaterial.emissiveMap) {
+          screenMaterial.emissive = new THREE.Color(0xffffff);
+          screenMaterial.emissiveIntensity = 1;
+        }
+        screenMaterial.needsUpdate = true;
+      }
+
+      const nextUv = (uvReference ?? null) as THREE.Texture | null;
+      setScreen((prev) => (
+        prev?.material === screenMaterial && prev.originalEmissiveMap === nextUv
+          ? prev
+          : { material: screenMaterial, originalEmissiveMap: nextUv }
+      ));
     } else {
       setScreen(null);
     }
@@ -1153,20 +1180,31 @@ function GltfDeviceContent({
       highlightMaterialSelection(root, selectedMaterialName, device.screenMat);
     });
     return () => { cancelled = true; };
-  }, [root, device, deviceColor, clayMode, mergedTweaks, selectedMaterialName]);
+  }, [
+    root,
+    device.id,
+    device.hasScreen,
+    device.lockMaterials,
+    device.screenMat,
+    deviceColor,
+    clayMode,
+    mergedTweaks,
+    selectedMaterialName,
+  ]);
 
   useEffect(() => {
     highlightMaterialSelection(root, selectedMaterialName, device.screenMat);
   }, [root, selectedMaterialName, device.screenMat]);
 
   const envMap = useContext(SceneEnvMapContext);
+  const screenMaterial = screen?.material ?? null;
   useEffect(() => {
     // Imported GLBs / scene sets keep authored metal, glass, transmission, and maps.
     // Only attach the studio HDRI so reflections still light under in-app softboxes.
     if (device.hasScreen === false || device.lockMaterials) {
       try {
         const skip = new Set<string>();
-        if (screen?.material?.name) skip.add(screen.material.name);
+        if (screenMaterial?.name) skip.add(screenMaterial.name);
         if (device.screenMat) skip.add(device.screenMat);
         attachStudioEnvMap(root, envMap, skip);
       } catch (err) {
@@ -1184,12 +1222,25 @@ function GltfDeviceContent({
         device.glassMats,
         mergedTweaks as Record<string, Record<string, number | boolean | string>> | undefined,
         envMap,
-        screen?.material ?? null,
+        screenMaterial,
       );
     } catch (err) {
       console.warn('[glass reflection]', err);
     }
-  }, [root, device, glassReflection, reflectionStyle, envMap, screen, clayMode, mergedTweaks]);
+  }, [
+    root,
+    device.id,
+    device.hasScreen,
+    device.lockMaterials,
+    device.screenMat,
+    device.glassMats,
+    glassReflection,
+    reflectionStyle,
+    envMap,
+    screenMaterial,
+    clayMode,
+    mergedTweaks,
+  ]);
 
   const applyUv = useCallback((tex: THREE.Texture, original?: THREE.Texture | null) => {
     applyUvTransform(tex, device.uv, original);

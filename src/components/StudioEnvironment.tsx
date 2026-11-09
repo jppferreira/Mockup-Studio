@@ -139,19 +139,14 @@ export function StudioAmbientOcclusion({ amount }: { amount: number }) {
 /** Focus stays on the selected device. Amount 0 leaves the frame sharp. */
 export function StudioDepthOfField({ amount, focus }: { amount: number; focus: Vec3 }) {
   const gl = useThree((state) => state.gl);
-  const camera = useThree((state) => state.camera);
   const amountRef = useRef(amount);
   const focusRef = useRef(focus);
-  const point = useRef(new THREE.Vector3());
   amountRef.current = amount;
   focusRef.current = focus;
   useFrame(() => {
-    const target = focusRef.current;
-    point.current.set(target.x, target.y, target.z);
-    const distance = camera.position.distanceTo(point.current);
     setDepthOfField(gl, {
       amount: amountRef.current,
-      focusDistance: Math.max(camera.near + 0.05, distance),
+      focus: focusRef.current,
     });
   });
   return null;

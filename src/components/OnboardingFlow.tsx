@@ -13,25 +13,25 @@ const SLIDES: Slide[] = [
     id: 'create',
     title: 'Create stunning 3D mockups',
     body: 'Build polished scenes for apps, websites, and presentations in minutes.',
-    image: './onboarding/create-mockups.png',
+    image: './onboarding/create-mockups-v3.png',
   },
   {
     id: 'import',
     title: 'Import from your workflow',
     body: 'Drag in screens, connect Figma, or add assets to build scenes faster.',
-    image: './onboarding/import-workflow.png',
+    image: './onboarding/import-workflow-v3.png',
   },
   {
     id: 'style',
     title: 'Style every detail',
     body: 'Adjust lighting, shadows, materials, and camera angles with precision.',
-    image: './onboarding/style-detail.png',
+    image: './onboarding/style-detail-v3.png',
   },
   {
     id: 'export',
     title: 'Animate and export',
     body: 'Preview motion, create polished presentations, and export ready-to-share mockups.',
-    image: './onboarding/animate-export.png',
+    image: './onboarding/animate-export-v3.png',
   },
 ];
 

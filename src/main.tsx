@@ -7,11 +7,28 @@ import { isSiteUnlocked, SiteGate } from './components/SiteGate';
 import { applyAccentTheme, readAccentColor, readAccentTheme } from './lib/accentTheme';
 import { installNumberScrub } from './lib/numberScrub';
 import { clearOnboardingComplete, isOnboardingComplete } from './lib/onboarding';
+import { clearStudioTourComplete } from './lib/studioTour';
 import './styles.css';
 
 installNumberScrub();
 
 applyAccentTheme(readAccentTheme(), readAccentColor());
+
+/** Bump when onboarding/tour content changes so returning users see the new flow once. */
+const GUIDE_VERSION = '3';
+const GUIDE_VERSION_KEY = 'mockup-studio.guide-version';
+
+function shouldForceGuideReplay(): boolean {
+  try {
+    if (localStorage.getItem(GUIDE_VERSION_KEY) === GUIDE_VERSION) return false;
+    localStorage.setItem(GUIDE_VERSION_KEY, GUIDE_VERSION);
+    clearOnboardingComplete();
+    clearStudioTourComplete();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const SPLASH_MIN_MS = 1200;
 const SPLASH_FADE_MS = 420;
@@ -49,7 +66,10 @@ function dismissSplash(immediate = false) {
 
 function Root() {
   const [locked, setLocked] = useState(() => !isSiteUnlocked());
-  const [needsOnboarding, setNeedsOnboarding] = useState(() => !isOnboardingComplete());
+  const [needsOnboarding, setNeedsOnboarding] = useState(() => {
+    if (shouldForceGuideReplay()) return true;
+    return !isOnboardingComplete();
+  });
 
   useEffect(() => {
     dismissSplash(locked);
@@ -57,6 +77,7 @@ function Root() {
 
   const showOnboarding = () => {
     clearOnboardingComplete();
+    clearStudioTourComplete();
     setNeedsOnboarding(true);
   };
 

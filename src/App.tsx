@@ -1,12 +1,12 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
   Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Bot, Box, Camera, Check, ChevronDown, Circle, CircleOff, Cuboid,
-  Cone, Cylinder, Disc, Disc3, Dna, Film, Frame, Hand, Landmark, MessageSquare, Mountain, MoveHorizontal, MousePointer2, PenTool, Pyramid,
-  RectangleHorizontal, Square, Theater, Torus, Triangle, Type, ZoomIn,
+  Cone, Cylinder, Disc, Disc3, Dna, Film, Focus, Frame, Hand, Landmark, Maximize2, MessageSquare, Mountain, MoveHorizontal, MousePointer2, PenTool, Pyramid,
+  RectangleHorizontal, Scan, Square, Theater, Torus, Triangle, Type, ZoomIn,
   ClipboardPaste, Columns2, Command, Copy, Download, FileImage, FlipHorizontal2, Gauge, Glasses, Headphones,
   ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, MessageSquarePlus, Minus,
-  Menu, Monitor, MonitorSmartphone, MoreHorizontal, Orbit, PanelLeftClose, PanelLeftOpen,
+  Menu, Monitor, MonitorSmartphone, MoreHorizontal, Orbit, PanelLeftClose, PanelLeftOpen, PanelRightClose,
   Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, Upload, UserRound, Watch, Waves, Wrench, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -20,6 +20,7 @@ import ProjectsDashboard from './components/ProjectsDashboard';
 import ChangeLogPanel from './components/ChangeLogPanel';
 import CompositionSwitcher from './components/CompositionSwitcher';
 import SceneHierarchy, { sameLayerSelection, type SceneLayerSelection } from './components/SceneHierarchy';
+import StudioTour, { type StudioTourStep } from './components/StudioTour';
 import TemplateThumb from './components/TemplateThumb';
 import DeviceModelThumb from './components/DeviceModelThumb';
 import CropFocusOverlay from './components/CropFocusOverlay';
@@ -191,7 +192,9 @@ import {
   loadSessionWorkspace, sanitizeSessionFrameSize, saveSessionWorkspace,
   type SessionFrameSize,
 } from './lib/sessionWorkspace';
-import { PROMPT_SUGGESTIONS } from './lib/promptAnimate';
+import {
+  clearStudioTourComplete, isStudioTourComplete,
+} from './lib/studioTour';
 import {
   REFLECTION_STYLES,
   amountForReflectionStyle,
@@ -314,6 +317,20 @@ const STAGE_TYPES: StageTypeOption[] = [
 ];
 /** Prop kinds the Stage tool owns; switching stage type replaces these and leaves other shapes alone. */
 const STAGE_PROP_KINDS = new Set<ScenePropKind>(STAGE_TYPES.flatMap((type) => (type.prop ? [type.prop.kind] : [])));
+
+const CAMERA_VIEW_OPTIONS: { id: CameraView; label: string; hint: string; icon: LucideIcon }[] = [
+  { id: 'front', label: 'Front', hint: 'Look at the device head-on', icon: Square },
+  { id: 'left', label: 'Left', hint: 'Orbit to the left side', icon: PanelLeftClose },
+  { id: 'right', label: 'Right', hint: 'Orbit to the right side', icon: PanelRightClose },
+  { id: 'top', label: 'Top', hint: 'Look down from above', icon: ArrowDownToLine },
+];
+
+const CAMERA_LENS_OPTIONS: { id: (typeof CAMERA_LENSES)[number]['id']; label: string; hint: string; icon: LucideIcon }[] = [
+  { id: 'ultrawide', label: 'Ultrawide', hint: '~16 mm', icon: Scan },
+  { id: 'wide', label: 'Wide', hint: '~24 mm', icon: Maximize2 },
+  { id: 'standard', label: 'Standard', hint: '~50 mm', icon: Aperture },
+  { id: 'telephoto', label: 'Telephoto', hint: '~85 mm', icon: ZoomIn },
+];
 
 /** Which stage type a composition is currently showing. */
 function stageTypeOf(project: MockupProject): StageType {
@@ -1009,12 +1026,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [figmaExploreOpen, setFigmaExploreOpen] = useState(false);
   const [figmaLinkDraft, setFigmaLinkDraft] = useState('');
   const [assetsDropActive, setAssetsDropActive] = useState(false);
-  const [studioAiOpen, setStudioAiOpen] = useState(false);
-  const [studioAiPrompt, setStudioAiPrompt] = useState('');
   const [studioAiStatus, setStudioAiStatus] = useState<string | null>(null);
   const [studioAiBusy, setStudioAiBusy] = useState(false);
-  const studioAiInputRef = useRef<HTMLInputElement>(null);
-  const studioAiShellRef = useRef<HTMLDivElement>(null);
   const [svgExplodeModel, setSvgExplodeModel] = useState<SvgDocumentModel | null>(null);
   const [license, setLicense] = useState<LicenseState>(() => loadLicense());
   useEffect(() => {
@@ -1053,6 +1066,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [meshExtracting, setMeshExtracting] = useState(false);
   const hoveredDeviceIdRef = useRef<string | null>(null);
   const [canvasHintVisible, setCanvasHintVisible] = useState(() => !canvasHintAlreadySeen());
+  const pendingStudioTourRef = useRef(false);
+  const [studioTourOpen, setStudioTourOpen] = useState(false);
   const dismissCanvasHint = useCallback(() => {
     setCanvasHintVisible(false);
     try {
@@ -2388,6 +2403,131 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
   notifyRef.current = notify;
 
+  const prepareStudioTourChrome = useCallback(() => {
+    setSidePanelsHidden(false);
+    setLeftPanelHidden(false);
+    setFileMenuOpen(false);
+    setShapeMenu(null);
+    setTextMenu(false);
+  }, []);
+
+  const requestStudioTour = useCallback(() => {
+    clearStudioTourComplete();
+    pendingStudioTourRef.current = true;
+    if (!hasOpenProject) {
+      notify('Open a project to start the tool walkthrough');
+      return;
+    }
+    prepareStudioTourChrome();
+    setStudioTourOpen(true);
+  }, [hasOpenProject, prepareStudioTourChrome]);
+
+  const prepareTourLayers = useCallback(() => {
+    prepareStudioTourChrome();
+    setLeftWorkspaceTab('scenes');
+    setRightWorkspaceTab('inspect');
+    setCanvasTool('composition');
+    setTimelineOpen(false);
+  }, [prepareStudioTourChrome, setTimelineOpen]);
+
+  const prepareTourAssets = useCallback(() => {
+    prepareStudioTourChrome();
+    setLeftWorkspaceTab('assets');
+  }, [prepareStudioTourChrome]);
+
+  const prepareTourCanvas = useCallback(() => {
+    prepareStudioTourChrome();
+    setLeftWorkspaceTab('scenes');
+  }, [prepareStudioTourChrome]);
+
+  const prepareTourTools = useCallback(() => {
+    prepareStudioTourChrome();
+    setCanvasTool('composition');
+    setTimelineOpen(false);
+  }, [prepareStudioTourChrome, setTimelineOpen]);
+
+  const prepareTourInspect = useCallback(() => {
+    prepareStudioTourChrome();
+    setRightWorkspaceTab('inspect');
+  }, [prepareStudioTourChrome]);
+
+  const studioTourSteps = useMemo<StudioTourStep[]>(() => [
+    {
+      id: 'layers',
+      title: 'Layers',
+      body: 'Devices, props, and scene structure live here. Select anything to edit it in the inspector.',
+      target: '[data-tour="layers"]',
+      placement: 'right',
+      prepare: prepareTourLayers,
+    },
+    {
+      id: 'assets',
+      title: 'Assets',
+      body: 'Import screenshots, Figma frames, and 3D models. Drag files onto a device screen to drop them in.',
+      target: '[data-tour="assets"]',
+      placement: 'right',
+      prepare: prepareTourAssets,
+    },
+    {
+      id: 'canvas',
+      title: 'Canvas',
+      body: 'Orbit beside the model, drag the device to spin it, Shift-drag to move, and Space-drag to pan.',
+      target: '[data-tour="canvas"]',
+      placement: 'left',
+      prepare: prepareTourCanvas,
+    },
+    {
+      id: 'tools',
+      title: 'Canvas tools',
+      body: 'Add 2D or 3D shapes, pick a stage under the device, and drop text, comments, or annotations.',
+      target: '[data-tour="tools"]',
+      placement: 'top',
+      prepare: prepareTourTools,
+    },
+    {
+      id: 'modes',
+      title: 'Compose or animate',
+      body: 'Composition is for laying out the shot. Animate opens the timeline for motion and keyframes.',
+      target: '[data-tour="modes"]',
+      placement: 'top',
+      prepare: prepareTourTools,
+    },
+    {
+      id: 'inspect',
+      title: 'Inspect',
+      body: 'Camera, materials, light, shadows, and look controls. Presets and Agent sit in the tabs above.',
+      target: '[data-tour="inspect"]',
+      placement: 'left',
+      prepare: prepareTourInspect,
+    },
+    {
+      id: 'export',
+      title: 'Export',
+      body: 'Ship stills or animated videos from here. Add formats, pick scale, then export the composition.',
+      target: '[data-tour="export"]',
+      placement: 'left',
+      prepare: prepareTourInspect,
+    },
+  ], [
+    prepareTourAssets,
+    prepareTourCanvas,
+    prepareTourInspect,
+    prepareTourLayers,
+    prepareTourTools,
+  ]);
+
+  useEffect(() => {
+    if (!hasOpenProject) {
+      setStudioTourOpen(false);
+      return;
+    }
+    if (!pendingStudioTourRef.current && isStudioTourComplete()) return;
+    pendingStudioTourRef.current = false;
+    prepareStudioTourChrome();
+    const timer = window.setTimeout(() => setStudioTourOpen(true), 480);
+    return () => window.clearTimeout(timer);
+  }, [hasOpenProject, prepareStudioTourChrome]);
+
   persistCloudRef.current = async (tabId, snapshot, knownPath, options) => {
     const api = window.mockupDesktop;
     if (!api?.cloudWrite || !cloudRef.current?.configured) return null;
@@ -3168,16 +3308,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     notify(`${preset.label} motion applied`);
   };
 
-  const openStudioAi = () => {
-    setStudioAiOpen(true);
-    setStudioAiStatus(null);
-  };
-
-  const closeStudioAi = useCallback(() => {
-    setStudioAiOpen(false);
-    setStudioAiStatus(null);
-  }, []);
-
   const runStudioAiPrompt = useCallback((raw: string, opts?: { fromAgent?: boolean }) => {
     const text = raw.trim();
     if (!text || studioAiBusy) return;
@@ -3198,7 +3328,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       setAnimPlaying(result.label !== 'Clear');
       setTimelineOpen(true);
       setStudioAiStatus(result.summary);
-      setStudioAiPrompt('');
       if (fromAgent) {
         setAgentMessages((current) => [
           ...current,
@@ -3219,31 +3348,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       window.setTimeout(() => setStudioAiBusy(false), 140);
     });
   }, [animation, project, studioAiBusy, updateProject, setAnimTime, setAnimPlaying, setTimelineOpen]);
-
-  useEffect(() => {
-    if (!studioAiOpen) return;
-    const focusId = window.requestAnimationFrame(() => {
-      studioAiInputRef.current?.focus();
-    });
-    const onPointerDown = (event: PointerEvent) => {
-      if (!studioAiShellRef.current?.contains(event.target as Node)) {
-        closeStudioAi();
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeStudioAi();
-      }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.cancelAnimationFrame(focusId);
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [studioAiOpen, closeStudioAi]);
 
   useEffect(() => {
     if (!aspectDropdownOpen) return;
@@ -5493,6 +5597,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           }}
           onFeedback={() => setFeedbackOpen(true)}
           onShowOnboarding={onShowOnboarding}
+          onShowStudioTour={requestStudioTour}
           deviceUnlocked={(deviceId) => isDeviceUnlocked(license.tier, deviceId)}
         />
       ) : (
@@ -5548,7 +5653,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
           <div className="left-panel-main">
             {leftWorkspaceTab === 'scenes' ? (
-              <section className="left-scenes-content" aria-label="Scenes">
+              <section className="left-scenes-content" aria-label="Scenes" data-tour="layers">
                 <SceneHierarchy
                   project={project}
                   scenes={compositionScenes}
@@ -5593,7 +5698,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             ) : leftWorkspaceTab === 'log' ? (
               <ChangeLogPanel entries={activeChangeLog} onRestore={restoreChange} />
             ) : (
-              <div className="left-scroll" ref={leftScrollRef}>
+              <div className="left-scroll" ref={leftScrollRef} data-tour="assets">
                 <div className="assets-stack">
                   <section className="assets-block" aria-label="Import">
                     <div className="field-caption section-label assets-section-label">
@@ -5896,44 +6001,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             ref={canvasStageRef}
           >
             <div className="canvas-top-right">
-              {toolsetSwitchAvailable && (
-                <div
-                  className={`workspace-view-toggle${rightWorkspaceTab === 'agent' ? ' is-agent' : isDeveloperToolset ? ' is-dev' : ' is-user'}`}
-                  role="group"
-                  aria-label="Workspace view"
-                >
-                  <button
-                    type="button"
-                    className={rightWorkspaceTab !== 'agent' && isDeveloperToolset ? 'is-active' : ''}
-                    aria-pressed={rightWorkspaceTab !== 'agent' && isDeveloperToolset}
-                    title="Dev view — quick-edit templates and ship updates to User"
-                    onClick={() => setToolset('developer')}
-                  >
-                    <Wrench size={12} strokeWidth={2.2} aria-hidden />
-                    Dev
-                  </button>
-                  <button
-                    type="button"
-                    className={rightWorkspaceTab !== 'agent' && !isDeveloperToolset ? 'is-active' : ''}
-                    aria-pressed={rightWorkspaceTab !== 'agent' && !isDeveloperToolset}
-                    title="User view — preview the templates customers get"
-                    onClick={() => setToolset('user')}
-                  >
-                    <UserRound size={12} strokeWidth={2.2} aria-hidden />
-                    User view
-                  </button>
-                  <button
-                    type="button"
-                    className={rightWorkspaceTab === 'agent' ? 'is-active' : ''}
-                    aria-pressed={rightWorkspaceTab === 'agent'}
-                    title="Agent mode — AI chat for animation"
-                    onClick={openAgentMode}
-                  >
-                    <Bot size={12} strokeWidth={2.2} aria-hidden />
-                    Agent
-                  </button>
-                </div>
-              )}
               <div className="view-buttons canvas-gesture-bar" role="toolbar" aria-label="Gestures">
                 {VIEW_GESTURES.map((gesture) => {
                   const Icon = gesture.icon;
@@ -5978,7 +6045,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                     Stop
                   </button>
                 </div>
-              ) : canvasHintVisible ? (
+              ) : canvasHintVisible && !studioTourOpen ? (
                 <p className="canvas-usage-hint" role="status">
                   Drag beside the model to orbit the camera · Drag the model to spin it · <kbd>Shift</kbd>+drag to move · <kbd>Space</kbd>+drag to pan
                   <button
@@ -5992,7 +6059,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 </p>
               ) : null}
             </div>
-            <div className={`canvas-render ${project.background === 'transparent' ? 'transparent-grid' : ''} ${isDualCanvas ? 'is-dual' : ''}`}>
+            <div
+              className={`canvas-render ${project.background === 'transparent' ? 'transparent-grid' : ''} ${isDualCanvas ? 'is-dual' : ''}`}
+              data-tour="canvas"
+            >
               {isDualCanvas && iosDisplayProject && androidDisplayProject ? (
                 <DualCanvasLayout
                   ratio={previewAspect?.ratio ?? null}
@@ -6358,85 +6428,46 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             />
           )}
           <div className={`workspace-bottom-chrome ${timelineOpen && !sidePanelsHidden ? 'is-raised' : ''}`}>
-            {!sidePanelsHidden && (
+            {toolsetSwitchAvailable && (
               <div
-                ref={studioAiShellRef}
-                className={`studio-ai ${studioAiOpen ? 'is-open' : 'is-compact'}`}
+                className={`workspace-view-toggle${rightWorkspaceTab === 'agent' ? ' is-agent' : isDeveloperToolset ? ' is-dev' : ' is-user'}`}
+                role="group"
+                aria-label="Workspace view"
               >
-                {!studioAiOpen ? (
-                  <button
-                    type="button"
-                    className="studio-ai-trigger"
-                    onClick={openStudioAi}
-                    aria-expanded={false}
-                    aria-controls="studio-ai-panel"
-                    title="AI assistant"
-                  >
-                    <span className="studio-ai-glow" aria-hidden />
-                    <Sparkles size={15} aria-hidden />
-                    <span>AI</span>
-                  </button>
-                ) : (
-                  <form
-                    id="studio-ai-panel"
-                    className="studio-ai-panel"
-                    onSubmit={(event: FormEvent) => {
-                      event.preventDefault();
-                      runStudioAiPrompt(studioAiPrompt);
-                    }}
-                  >
-                    <span className="studio-ai-glow studio-ai-glow-panel" aria-hidden />
-                    <div className="studio-ai-field">
-                      <Sparkles size={14} className="studio-ai-icon" aria-hidden />
-                      <input
-                        ref={studioAiInputRef}
-                        type="text"
-                        value={studioAiPrompt}
-                        onChange={(e) => {
-                          setStudioAiPrompt(e.target.value);
-                          if (studioAiStatus) setStudioAiStatus(null);
-                        }}
-                        placeholder={studioAiBusy ? 'Building motion…' : 'Ask AI to animate…'}
-                        aria-label="AI assistant prompt"
-                        disabled={studioAiBusy}
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                      <button
-                        type="submit"
-                        className="studio-ai-go"
-                        disabled={studioAiBusy || !studioAiPrompt.trim()}
-                        title="Generate"
-                      >
-                        Go
-                      </button>
-                    </div>
-                    <div className="studio-ai-meta">
-                      {studioAiStatus ? (
-                        <span className="studio-ai-status">{studioAiStatus}</span>
-                      ) : (
-                        <div className="studio-ai-chips" role="list">
-                          {PROMPT_SUGGESTIONS.slice(0, 6).map((chip) => (
-                            <button
-                              key={chip}
-                              type="button"
-                              role="listitem"
-                              className="studio-ai-chip"
-                              onClick={() => runStudioAiPrompt(chip)}
-                              title={`Animate: ${chip}`}
-                            >
-                              {chip}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </form>
-                )}
+                <button
+                  type="button"
+                  className={rightWorkspaceTab !== 'agent' && isDeveloperToolset ? 'is-active' : ''}
+                  aria-pressed={rightWorkspaceTab !== 'agent' && isDeveloperToolset}
+                  title="Dev view — quick-edit templates and ship updates to User"
+                  onClick={() => setToolset('developer')}
+                >
+                  <Wrench size={12} strokeWidth={2.2} aria-hidden />
+                  Dev
+                </button>
+                <button
+                  type="button"
+                  className={rightWorkspaceTab !== 'agent' && !isDeveloperToolset ? 'is-active' : ''}
+                  aria-pressed={rightWorkspaceTab !== 'agent' && !isDeveloperToolset}
+                  title="User view — preview the templates customers get"
+                  onClick={() => setToolset('user')}
+                >
+                  <UserRound size={12} strokeWidth={2.2} aria-hidden />
+                  User view
+                </button>
+                <button
+                  type="button"
+                  className={rightWorkspaceTab === 'agent' ? 'is-active' : ''}
+                  aria-pressed={rightWorkspaceTab === 'agent'}
+                  title="Agent mode — AI chat for animation"
+                  onClick={openAgentMode}
+                >
+                  <Bot size={12} strokeWidth={2.2} aria-hidden />
+                  Agent
+                </button>
               </div>
             )}
               <div className="workspace-mode-cluster">
-                <div className="canvas-tool-bar-row" role="toolbar" aria-label="Canvas tools">
+                <div className="canvas-tool-bar-row" role="toolbar" aria-label="Canvas tools" data-tour="tools">
                   <div className="canvas-tool-pops" ref={shapeMenuRef}>
                     <div className="canvas-tool-pop">
                       <button
@@ -6656,7 +6687,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                     document.body,
                   )}
                   <span className="canvas-tool-divider" />
-                  <div className="canvas-tool-nest" role="tablist" aria-label="Workspace mode">
+                  <div className="canvas-tool-nest" role="tablist" aria-label="Workspace mode" data-tour="modes">
                     <button
                       type="button"
                       role="tab"
@@ -6815,23 +6846,34 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               </div>
             </div>
           )}
-          <div className="right-panel-scroll-shell">
+          <div className="right-panel-scroll-shell" data-tour="inspect">
           <div className="inspector-scroll" ref={inspectorScrollRef}>
             {studioSetFocus && (
               <div className="surround-colour-dock is-active" data-stop={studioSetFocus}>
                 <div className="surround-colour-dock-head">
-                  <strong>
-                    {studioSetFocus === 'sky'
-                      ? 'Surround colour'
-                      : studioSetFocus === 'floor'
-                        ? 'Floor colour'
-                        : 'Backdrop'}
-                  </strong>
-                  <span>
-                    {isTransparent
-                      ? 'Pick a look below, or restore the last coloured background'
-                      : 'Opened from background tap · drag canvas still orbits'}
-                  </span>
+                  <div className="surround-colour-dock-copy">
+                    <strong>
+                      {studioSetFocus === 'sky'
+                        ? 'Surround colour'
+                        : studioSetFocus === 'floor'
+                          ? 'Floor colour'
+                          : 'Backdrop'}
+                    </strong>
+                    <span>
+                      {isTransparent
+                        ? 'Pick a look below, or restore the last coloured background'
+                        : 'Opened from background tap · drag canvas still orbits'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="surround-colour-dock-collapse"
+                    title="Collapse backdrop controls"
+                    aria-label="Collapse backdrop controls"
+                    onClick={() => setStudioSetFocus(null)}
+                  >
+                    <ChevronDown size={15} aria-hidden />
+                  </button>
                 </div>
                 <BackdropLooksPicker
                   looks={allScenes}
@@ -6888,27 +6930,48 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 )}
               </div>
             )}
-            <SettingsSection id="camera" title="Camera" hint="Control the camera view, lens, and focus" icon={Settings2} open={openSectionId === 'camera'} onToggle={toggleSection}>
+            <SettingsSection id="camera" title="Camera" hint="Control the camera view, lens, and focus" icon={Camera} open={openSectionId === 'camera'} onToggle={toggleSection}>
               <div className="field-caption">Angle</div>
-              <div className="camera-preset-grid">
-                {(['front', 'left', 'right', 'top'] as CameraView[]).map((view) => (
-                  <button key={view} onClick={() => updateProject({ cameraView: view })}
-                    className={project.cameraView === view ? 'selected' : ''}>{view[0].toUpperCase() + view.slice(1)}</button>
-                ))}
+              <div className="camera-icon-rail" role="toolbar" aria-label="Camera angle">
+                {CAMERA_VIEW_OPTIONS.map((view) => {
+                  const Icon = view.icon;
+                  const active = project.cameraView === view.id;
+                  return (
+                    <button
+                      key={view.id}
+                      type="button"
+                      className={`camera-icon-btn${active ? ' is-active' : ''}`}
+                      title={`${view.label} · ${view.hint}`}
+                      aria-label={view.label}
+                      aria-pressed={active}
+                      onClick={() => updateProject({ cameraView: view.id })}
+                    >
+                      <Icon size={16} strokeWidth={1.9} aria-hidden />
+                      <span>{view.label}</span>
+                    </button>
+                  );
+                })}
               </div>
               <div className="field-caption" style={{ marginTop: 12 }}>Lens</div>
-              <div className="camera-preset-grid">
-                {CAMERA_LENSES.map((lens) => (
-                  <button
-                    key={lens.id}
-                    type="button"
-                    title={`${lens.label} ${lens.hint}`}
-                    onClick={() => updateProject({ cameraLens: lens.id })}
-                    className={(project.cameraLens ?? 'standard') === lens.id ? 'selected' : ''}
-                  >
-                    {lens.label}
-                  </button>
-                ))}
+              <div className="camera-icon-rail" role="toolbar" aria-label="Camera lens">
+                {CAMERA_LENS_OPTIONS.map((lens) => {
+                  const Icon = lens.icon;
+                  const active = (project.cameraLens ?? 'standard') === lens.id;
+                  return (
+                    <button
+                      key={lens.id}
+                      type="button"
+                      className={`camera-icon-btn${active ? ' is-active' : ''}`}
+                      title={`${lens.label} · ${lens.hint}`}
+                      aria-label={`${lens.label} ${lens.hint}`}
+                      aria-pressed={active}
+                      onClick={() => updateProject({ cameraLens: lens.id })}
+                    >
+                      <Icon size={16} strokeWidth={1.9} aria-hidden />
+                      <span>{lens.label}</span>
+                    </button>
+                  );
+                })}
               </div>
               <p className="field-caption" style={{ marginTop: 8 }}>
                 {CAMERA_LENSES.find((l) => l.id === (project.cameraLens ?? 'standard'))?.hint ?? '~50 mm'} · changes perspective FOV
@@ -8697,7 +8760,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           </div>
           <div className="right-panel-edge-fade" aria-hidden />
           </div>
-          <div className="inspector-footer inspector-export-panel">
+          <div className="inspector-footer inspector-export-panel" data-tour="export">
             <div className="figma-export-head">
               <span className="figma-export-title"><Download size={15} strokeWidth={1.8} /> Export</span>
               <button
@@ -9568,6 +9631,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         onNotify={notify}
         onApply={(dataUrl, layerName) => {
           applyScreenImage(dataUrl, layerName, `Applied “${layerName}” from SVG`);
+        }}
+      />
+      <StudioTour
+        open={studioTourOpen && hasOpenProject}
+        steps={studioTourSteps}
+        onComplete={() => {
+          setStudioTourOpen(false);
+          dismissCanvasHint();
         }}
       />
       {toast && <div className="toast"><span className="toast-dot" /> {toast}<button aria-label="Dismiss notification" onClick={() => setToast(null)}><X size={14} /></button></div>}

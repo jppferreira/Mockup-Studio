@@ -985,11 +985,22 @@ export function deviceAssetUrl(url: string | undefined): string | undefined {
   return `${url}${sep}v=${DEVICE_MODEL_PACK_VERSION}`;
 }
 
+/**
+ * Versioned builtin models — cached so callers get a stable object identity.
+ * Returning `{ ...builtin, url }` on every getDevice() made React effects that
+ * depend on `device` re-run every parent render (screen placeholder flicker).
+ */
+const versionedDeviceCache = new Map<string, DeviceModel>();
+
 export function getDevice(id: DeviceId | string | undefined): DeviceModel {
   const builtin = DEVICE_MODELS.find((d) => d.id === id);
   if (builtin) {
+    const cached = versionedDeviceCache.get(builtin.id);
+    if (cached) return cached;
     const url = deviceAssetUrl(builtin.url);
-    return url && url !== builtin.url ? { ...builtin, url } : builtin;
+    const model = url && url !== builtin.url ? { ...builtin, url } : builtin;
+    versionedDeviceCache.set(builtin.id, model);
+    return model;
   }
   if (typeof id === 'string' && isCustomDeviceId(id)) {
     const custom = resolveCustomDevice(id);

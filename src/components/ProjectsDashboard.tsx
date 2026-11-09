@@ -133,6 +133,7 @@ export default function ProjectsDashboard({
   onExplorePro,
   onFeedback,
   onShowOnboarding,
+  onShowStudioTour,
   deviceUnlocked,
 }: {
   recentProjects: RecentProjectEntry[];
@@ -166,6 +167,7 @@ export default function ProjectsDashboard({
   onExplorePro: () => void;
   onFeedback: () => void;
   onShowOnboarding?: () => void;
+  onShowStudioTour?: () => void;
   deviceUnlocked: (deviceId: string) => boolean;
 }) {
   const [section, setSection] = useState<DashSection>('projects');
@@ -787,7 +789,13 @@ export default function ProjectsDashboard({
               {onShowOnboarding && (
                 <button type="button" className="dash-setting" onClick={onShowOnboarding}>
                   <strong>Replay onboarding</strong>
-                  <span>Preview the intro screens again</span>
+                  <span>Intro screens, then the in-app tool walkthrough</span>
+                </button>
+              )}
+              {onShowStudioTour && (
+                <button type="button" className="dash-setting" onClick={onShowStudioTour}>
+                  <strong>Replay tool walkthrough</strong>
+                  <span>Highlight each workspace section again</span>
                 </button>
               )}
             </div>

@@ -100,6 +100,9 @@ export function useScreenEmissiveMap({
       const tex = texRef.current;
       applyUv?.(tex, originalEmissiveMap ?? null);
       tex.needsUpdate = true;
+      // White emissive so the painted plate reads; stay black until this paint.
+      if (material.emissive) material.emissive.set(0xffffff);
+      material.emissiveIntensity = 1;
       material.emissiveMap = tex;
       material.needsUpdate = true;
       // Demand frameloop: push a redraw after the texture changes.
@@ -123,21 +126,24 @@ export function useScreenEmissiveMap({
       videoRef.current = null;
     };
 
+    // Keep the canvas texture across dep-only restarts. Disposing it while the
+    // material still showed it flashed white over the size-guide placeholder.
+    const releaseBinding = () => {
+      cancelled = true;
+      stopLoop();
+      disposeVideo();
+    };
+
     if (kind === 'none' || (!screenshot && !liveStream)) {
       stopLoop();
       disposeVideo();
       // Keep the display black. originalEmissiveMap is only a UV reference —
       // assigning a packed albedo atlas here showed random logos on the screen.
       material.emissiveMap = null;
+      if (material.emissive) material.emissive.set(0x000000);
       material.needsUpdate = true;
       invalidateRef.current();
-      return () => {
-        cancelled = true;
-        stopLoop();
-        disposeVideo();
-        texRef.current?.dispose();
-        texRef.current = null;
-      };
+      return releaseBinding;
     }
 
     if (kind === 'image' && screenshot) {
@@ -146,13 +152,12 @@ export function useScreenEmissiveMap({
       const image = new Image();
       image.onload = () => paintFromSource(image, image.width, image.height);
       image.src = screenshot;
-      return () => {
-        cancelled = true;
-        stopLoop();
-        disposeVideo();
-        texRef.current?.dispose();
-        texRef.current = null;
-      };
+      // Cached data-URL placeholders often complete synchronously — paint now
+      // so we never show a blank white frame between effect runs.
+      if (image.complete && image.naturalWidth > 0) {
+        paintFromSource(image, image.width, image.height);
+      }
+      return releaseBinding;
     }
 
     // Live USB mirror or embedded video
@@ -206,15 +211,18 @@ export function useScreenEmissiveMap({
     }
 
     return () => {
-      cancelled = true;
       unregister?.();
-      stopLoop();
       video.removeEventListener('loadeddata', onReady);
-      disposeVideo();
-      texRef.current?.dispose();
-      texRef.current = null;
+      releaseBinding();
     };
   }, [material, originalEmissiveMap, screenshot, liveStream, width, height, inset?.border, inset?.radius, applyUv, playing]);
+
+  // Dispose the canvas texture only when the material binding itself goes away.
+  useEffect(() => () => {
+    texRef.current?.dispose();
+    texRef.current = null;
+    canvasRef.current = null;
+  }, [material]);
 
   useEffect(() => {
     const video = videoRef.current;
