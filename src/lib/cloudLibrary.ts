@@ -81,9 +81,15 @@ export function projectFromCloudRow(row: CloudListRow): CloudProjectEntry {
   };
 }
 
-export function syncButtonLabel(status: CloudLibraryStatus | null) {
+/** Live activity for the Sync chip — Figma-style Saving… / Synced. */
+export type SyncActivity = 'idle' | 'saving' | 'synced' | 'error';
+
+export function syncButtonLabel(status: CloudLibraryStatus | null, activity: SyncActivity = 'idle') {
   if (!status?.configured) return 'Sync';
-  if (status.missing) return 'Sync off';
+  if (status.missing) return 'Reconnect';
+  if (activity === 'saving') return 'Saving…';
+  if (activity === 'error') return 'Sync error';
+  if (activity === 'synced') return 'Synced';
   if (status.provider === 'icloud') return 'iCloud';
   if (status.provider === 'google-drive') return 'Drive';
   return 'Synced';
