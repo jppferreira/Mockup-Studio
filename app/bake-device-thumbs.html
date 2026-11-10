@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Bake clay device thumbs</title>
+  <style>
+    html, body { margin: 0; background: transparent; overflow: hidden; }
+    canvas { display: block; width: 1024px; height: 1024px; }
+    #status { position: fixed; left: 12px; top: 12px; color: #9ae6b4; font: 12px/1.4 ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <div id="status">booting…</div>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/vendor/three/three.module.js"
+    }
+  }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from '/vendor/three/examples/jsm/loaders/GLTFLoader.js';
+
+    const SIZE = 1024;
+    // Match website / "iPhone 17 Sage" clay hero: soft slate body, darker face
+    const CLAY_BODY = new THREE.Color('#5c616a');
+    const CLAY_SCREEN = new THREE.Color('#2a2e36');
+    const CLAY_DETAIL = new THREE.Color('#6a707a');
+
+    const status = document.getElementById('status');
+    const params = new URLSearchParams(location.search);
+    const id = params.get('id') || '';
+    const url = params.get('url') || (id ? `./models/${id}.glb` : '');
+    const rot = (params.get('rot') || '0,0,0').split(',').map(Number);
+    const yaw = Number(params.get('yaw') || '0.42'); // extra hero turn toward camera
+
+    window.__thumb = { ready: false, error: null, dataUrl: null, id };
+
+    function setStatus(msg) {
+      status.textContent = msg;
+      window.__thumb.status = msg;
+    }
+
+    if (!url) {
+      setStatus('missing id/url');
+      window.__thumb.error = 'missing id/url';
+      throw new Error(window.__thumb.error);
+    }
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      premultipliedAlpha: false,
+      preserveDrawingBuffer: true,
+      powerPreference: 'high-performance',
+    });
+    renderer.setPixelRatio(1);
+    renderer.setSize(SIZE, SIZE, false);
+    renderer.setClearColor(0x000000, 0);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.NoToneMapping;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = null;
+
+    const camera = new THREE.PerspectiveCamera(26, 1, 0.05, 120);
+
+    // Soft diffused clay lighting (no hot specular)
+    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x2a2c32, 0.7));
+    const key = new THREE.DirectionalLight(0xffffff, 1.35);
+    key.position.set(3.2, 4.2, 5.0);
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0xdce2f0, 0.7);
+    fill.position.set(-4.0, 1.8, 2.2);
+    scene.add(fill);
+    const rim = new THREE.DirectionalLight(0xffffff, 0.55);
+    rim.position.set(-2.0, 3.0, -4.0);
+    scene.add(rim);
+
+    function isScreenName(name) {
+      const n = (name || '').toLowerCase();
+      return n.includes('screen') || n.includes('display') || n.includes('lcd')
+        || n.includes('oled') || n.includes('panel') || n.includes('monitor')
+        || n.includes('emissive') || n === 'emmissive';
+    }
+
+    function clayify(root) {
+      root.traverse((obj) => {
+        if (!obj.isMesh) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        const next = mats.map((mat) => {
+          if (!mat) return mat;
+          const name = mat.name || '';
+          const screen = isScreenName(name);
+          const detail = /button|key|port|logo|camera|lens|island|bezel|frame|crown|band/i.test(name);
+          const clay = new THREE.MeshStandardMaterial({
+            name: name || (screen ? 'clay_screen' : 'clay_body'),
+            color: screen ? CLAY_SCREEN.clone() : (detail ? CLAY_DETAIL.clone() : CLAY_BODY.clone()),
+            metalness: 0,
+            roughness: screen ? 0.98 : 0.88,
+            envMapIntensity: 0,
+            flatShading: false,
+            transparent: false,
+            opacity: 1,
+            side: THREE.DoubleSide,
+          });
+          clay.map = clay.normalMap = clay.roughnessMap = clay.metalnessMap = null;
+          clay.emissiveMap = clay.aoMap = null;
+          clay.emissive = new THREE.Color(0x000000);
+          return clay;
+        });
+        obj.material = Array.isArray(obj.material) ? next : next[0];
+      });
+    }
+
+    /** Prefer screen-facing hero angle when a screen mesh exists. */
+    function faceScreenTowardCamera(root) {
+      let screenMesh = null;
+      root.traverse((obj) => {
+        if (!obj.isMesh || screenMesh) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        if (mats.some((m) => m && isScreenName(m.name))) screenMesh = obj;
+      });
+      if (!screenMesh) return;
+      const normal = new THREE.Vector3(0, 0, 1);
+      const normalMatrix = new THREE.Matrix3().getNormalMatrix(screenMesh.matrixWorld);
+      normal.applyMatrix3(normalMatrix).normalize();
+      // Rotate so screen normal aims toward +Z (camera)
+      const target = new THREE.Vector3(0, 0, 1);
+      const q = new THREE.Quaternion().setFromUnitVectors(normal, target);
+      root.quaternion.premultiply(q);
+      root.updateMatrixWorld(true);
+    }
+
+    const loader = new GLTFLoader();
+    setStatus(`loading ${url}`);
+
+    loader.load(
+      url,
+      (gltf) => {
+        try {
+          const root = gltf.scene;
+          clayify(root);
+          root.rotation.set(rot[0] || 0, rot[1] || 0, rot[2] || 0);
+          root.updateMatrixWorld(true);
+          faceScreenTowardCamera(root);
+
+          // Hero three-quarter yaw (like the Sage clay reference)
+          root.rotation.y += yaw;
+          root.updateMatrixWorld(true);
+
+          const box = new THREE.Box3().setFromObject(root);
+          const size = new THREE.Vector3();
+          const center = new THREE.Vector3();
+          box.getSize(size);
+          box.getCenter(center);
+          root.position.sub(center);
+
+          const span = Math.max(size.x, size.y, size.z, 0.001);
+          const dist = span * 2.55;
+          camera.position.set(dist * 0.38, dist * 0.16, dist);
+          camera.lookAt(0, -span * 0.02, 0);
+          camera.updateProjectionMatrix();
+
+          scene.add(root);
+          renderer.render(scene, camera);
+          requestAnimationFrame(() => {
+            renderer.render(scene, camera);
+            const dataUrl = renderer.domElement.toDataURL('image/png');
+            window.__thumb.dataUrl = dataUrl;
+            window.__thumb.ready = true;
+            setStatus(`ready ${id} (${Math.round(dataUrl.length / 1024)}kb)`);
+          });
+        } catch (error) {
+          window.__thumb.error = String(error);
+          setStatus(`error ${error}`);
+        }
+      },
+      undefined,
+      (error) => {
+        window.__thumb.error = String(error?.message || error);
+        setStatus(`load failed ${window.__thumb.error}`);
+      },
+    );
+  </script>
+</body>
+</html>
