@@ -519,6 +519,8 @@ async function writeTemplates(contents) {
 
 let watchers = [];
 let watchTimer = null;
+let pollTimer = null;
+let lastFingerprint = '';
 
 function stopWatch() {
   for (const watcher of watchers) {
@@ -527,6 +529,9 @@ function stopWatch() {
   watchers = [];
   if (watchTimer) clearTimeout(watchTimer);
   watchTimer = null;
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
+  lastFingerprint = '';
 }
 
 function notifyChanged() {
@@ -537,6 +542,27 @@ function notifyChanged() {
       if (!win.isDestroyed()) win.webContents.send('cloud:changed');
     }
   }, 600);
+}
+
+async function fingerprintLibrary(dir) {
+  try {
+    const names = await fs.readdir(dir);
+    const parts = [];
+    for (const name of names) {
+      if (name.startsWith('.') || name.endsWith('.tmp')) continue;
+      if (!isProjectFileName(name) && name !== TEMPLATES_FILE_NAME) continue;
+      try {
+        const stat = await fs.stat(path.join(dir, name));
+        if (stat.isFile()) parts.push(`${name}:${stat.size}:${stat.mtimeMs}`);
+      } catch {
+        parts.push(`${name}:err`);
+      }
+    }
+    parts.sort();
+    return parts.join('|');
+  } catch {
+    return '';
+  }
 }
 
 async function restartWatch() {
@@ -550,6 +576,18 @@ async function restartWatch() {
   } catch {
     /* folder may appear later */
   }
+  // iCloud/Drive often skip FSEvents when Chrome writes via File System Access.
+  // Poll the library fingerprint so web-created .mockup files still surface.
+  lastFingerprint = await fingerprintLibrary(config.dir);
+  pollTimer = setInterval(() => {
+    void (async () => {
+      const configNow = await readConfig();
+      if (!configNow || !(await existsDir(configNow.dir))) return;
+      const next = await fingerprintLibrary(configNow.dir);
+      if (lastFingerprint && next !== lastFingerprint) notifyChanged();
+      lastFingerprint = next;
+    })();
+  }, 2000);
 }
 
 function registerCloudLibraryIpc(ipcMain) {
