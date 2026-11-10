@@ -118,7 +118,7 @@ function prepareGizmos(rotate: ControlsHandle | null, translate: ControlsHandle 
   const rotateRoot = rotateGroups.gizmo?.rotate;
   const rotatePicker = rotateGroups.picker?.rotate;
   // Versioned so HMR clears leftover custom torus meshes / picker sizes.
-  const PREP = 'stock-arcs-v5';
+  const PREP = 'stock-arcs-v7';
   if (rotate && rotateRoot && rotatePicker && rotate.userData.gizmoPrepared !== PREP) {
     for (const child of [...rotateRoot.children]) {
       if (child.userData.customRing) child.removeFromParent();
@@ -128,14 +128,19 @@ function prepareGizmos(rotate: ControlsHandle | null, translate: ControlsHandle 
     for (const child of rotatePicker.children) {
       const mesh = child as THREE.Mesh;
       if (!mesh.isMesh) continue;
-      // Keep pickers tight — fat tubes steal empty-canvas / floor taps and
-      // make the gimbal jump when TransformControls still wins the raycast.
+      // Fat enough to grab without zooming in. DeviceCanvas still suppresses
+      // the gimbal when the floor / empty canvas is the nearer solid hit, so
+      // these tubes do not freeze camera orbit beside the device.
       const major = child.name === 'E' ? 1.15 : 1;
-      const tube = child.name === 'E' ? 0.04 : 0.05;
-      if (!mesh.userData.torusThickened) {
-        thickenTorus(mesh.geometry, major, tube);
-        mesh.userData.torusThickened = true;
+      const tube = child.name === 'E' ? 0.1 : 0.12;
+      if (!mesh.userData.stockPickerGeometry) {
+        mesh.userData.stockPickerGeometry = mesh.geometry.clone();
       }
+      const stock = mesh.userData.stockPickerGeometry as THREE.BufferGeometry;
+      if (mesh.geometry !== stock) mesh.geometry.dispose();
+      mesh.geometry = stock.clone();
+      thickenTorus(mesh.geometry, major, tube);
+      mesh.userData.torusThickened = true;
     }
     markGizmoHandles(rotatePicker, 'rotate');
     markGizmoHandles(rotateRoot, 'rotate');
@@ -149,15 +154,18 @@ function prepareGizmos(rotate: ControlsHandle | null, translate: ControlsHandle 
     dropHandles(translateRoot, TRANSLATE_DROP);
     dropHandles(translatePicker, TRANSLATE_DROP);
     // Stock cones are thin in screen space; fatten invisible pickers so
-    // coloured arrows stay grabbable without needing to zoom in. Keep the
-    // boost radial (X/Z) so shafts don't overlap into free multi-axis drags.
+    // coloured arrows stay easy to grab from a distance. Keep the boost
+    // mostly radial (X/Z) so shafts don't collapse into free multi-axis drags.
+    // Reset from stock scale each prep so HMR / version bumps don't compound.
     for (const handle of translatePicker.children) {
       handle.traverse((child) => {
         const mesh = child as THREE.Mesh;
-        if (!mesh.isMesh || mesh.userData.pickerEnlarged) return;
-        mesh.scale.x *= 2.2;
-        mesh.scale.z *= 2.2;
-        mesh.scale.y *= 1.15;
+        if (!mesh.isMesh) return;
+        if (!mesh.userData.stockPickerScale) {
+          mesh.userData.stockPickerScale = mesh.scale.clone();
+        }
+        const stock = mesh.userData.stockPickerScale as THREE.Vector3;
+        mesh.scale.set(stock.x * 3.6, stock.y * 1.35, stock.z * 3.6);
         mesh.userData.pickerEnlarged = true;
       });
     }
@@ -569,9 +577,12 @@ export default function RotationBall({
   const rotateEnabled = listening && !suppressed && (dragTool === null || dragTool === 'rotate');
 
   // Keep sizes stable during a drag — resizing mid-gesture breaks TC's plane math
-  // and makes axis arrows feel like they stopped working.
-  const translateSize = mode === 'translate' ? 1.35 : 1.2;
-  const rotateSize = mode === 'rotate' ? 0.48 : 0.42;
+  // and makes axis arrows feel like they stopped working. Slightly larger
+  // translate handles so shafts stay easy to aim at when the camera is far.
+  const translateSize = mode === 'translate' ? 1.55 : 1.35;
+  // Rotate rings used to sit at ~0.48 and were hard to catch; keep them smaller
+  // than the arrows so shafts still win crossings, but large enough to grab.
+  const rotateSize = mode === 'rotate' ? 0.72 : 0.6;
 
   return (
     <>

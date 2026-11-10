@@ -6071,17 +6071,17 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
   contain: paint;
 }
 .device-card-grid.is-preview-crop .device-model-card-thumb .device-model-shot-img {
-  /* Stay inside the plate; equal L/R insets; top gap; size crop via background */
+  /* Stay inside the plate; equal L/R insets; top gap */
   left: 0;
   right: 0;
   top: 12px;
   bottom: 0;
-  width: auto;
+  width: 100%;
+  height: calc(100% - 12px);
   margin: 0;
   padding: 0;
-  background-size: 148% auto;
-  background-position: 50% top;
-  background-repeat: no-repeat;
+  object-fit: cover;
+  object-position: 50% top;
   transform: none;
 }
 /* Watches, Vision Pro, and AirPods read smaller than phones in the cropped plate */
@@ -6092,16 +6092,20 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
   bottom: 8px;
   left: 10%;
   right: 10%;
-  background-size: 92% auto;
-  background-position: center 18%;
+  width: 80%;
+  height: calc(100% - 24px);
+  object-fit: contain;
+  object-position: center 18%;
 }
 .device-card-grid.is-preview-fit .device-model-card-thumb .device-model-shot-img {
   left: 14px;
   right: 14px;
   top: 12px;
   bottom: 10px;
-  background-size: contain;
-  background-position: center center;
+  width: calc(100% - 28px);
+  height: calc(100% - 22px);
+  object-fit: contain;
+  object-position: center center;
   transform: none;
 }
 .device-card-empty {
@@ -6202,7 +6206,10 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
 .device-model-card-thumb {
   position: relative;
   display: block;
-  width: auto;
+  /* Explicit width — Electron/Chromium <button> flex can collapse auto-width plates to 0 */
+  width: calc(100% - 16px);
+  align-self: center;
+  box-sizing: border-box;
   height: 88px;
   margin: 8px 8px 0;
   overflow: hidden;
@@ -6218,15 +6225,18 @@ h2 { margin: 0; font-family: 'Plus Jakarta Sans', sans-serif; font-size: 15px; l
   top: 6px;
   bottom: 0;
   display: block;
-  width: auto;
+  /* Replaced <img> needs explicit box size — left/right alone won't stretch it */
+  width: calc(100% - 12px);
+  height: calc(100% - 6px);
   max-width: none;
   margin: 0;
   padding: 0;
   border: 0;
+  object-fit: contain;
+  object-position: center bottom;
   background-color: transparent;
-  background-repeat: no-repeat;
-  background-position: center bottom;
-  background-size: contain;
+  /* Dark clay PNGs need a lift on near-black plates */
+  filter: brightness(1.65) contrast(1.08);
 }
 .device-model-card-copy {
   display: flex;
@@ -7832,15 +7842,18 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
   place-items: center;
   background: #12151a;
 }
+.template-shot.is-static .device-model-shot-img,
 .template-shot.is-static .device-model-shot {
   position: relative;
   display: block;
   width: 78%;
   height: 90%;
+  object-fit: contain;
+  object-position: center;
   background-repeat: no-repeat;
   background-position: center;
   background-size: contain;
-  filter: brightness(1.55) contrast(1.08);
+  filter: brightness(1.65) contrast(1.08);
 }
 .template-shot.is-static.count-2 {
   grid-template-columns: 1fr 1fr;
@@ -7850,7 +7863,9 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
   grid-template-columns: 1fr 1fr 1fr;
   padding: 4px 2px;
 }
+.template-shot.is-static.count-2 .device-model-shot-img,
 .template-shot.is-static.count-2 .device-model-shot,
+.template-shot.is-static.count-3 .device-model-shot-img,
 .template-shot.is-static.count-3 .device-model-shot {
   width: 100%;
   height: 100%;
@@ -10811,6 +10826,8 @@ button.dash-card > .dash-model-thumb {
   right: 22px;
   top: 20px;
   bottom: 18px;
+  width: calc(100% - 44px);
+  height: calc(100% - 38px);
 }
 .dash-card-thumb > .device-model-shot-img,
 .dash-card-thumb .device-model-shot-img {
@@ -10820,16 +10837,17 @@ button.dash-card > .dash-model-thumb {
   top: 10px;
   bottom: 6px;
   display: block;
-  width: auto;
-  height: auto;
+  width: calc(100% - 28px);
+  height: calc(100% - 16px);
   margin: 0;
   padding: 0;
   border: 0;
+  object-fit: contain;
+  object-position: center;
   background-color: transparent;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
   pointer-events: none;
+  /* Dark clay PNGs need a lift on near-black plates */
+  filter: brightness(1.65) contrast(1.08);
 }
 .dash-card-thumb .template-shot,
 .dash-card-thumb .device-model-shot {
@@ -10855,12 +10873,15 @@ button.dash-card > .dash-model-thumb {
   width: 72%;
   height: 88%;
   padding: 0;
+  object-fit: contain;
+  object-position: center;
 }
 .dash-card-thumb .template-shot.is-static.count-2 {
   grid-template-columns: 1fr 1fr;
   gap: 0;
   padding: 8px 10px;
 }
+.dash-card-thumb .template-shot.is-static.count-2 .device-model-shot-img,
 .dash-card-thumb .template-shot.is-static.count-2 .device-model-shot {
   width: 100%;
   height: 100%;
@@ -10870,6 +10891,7 @@ button.dash-card > .dash-model-thumb {
   gap: 0;
   padding: 10px 8px;
 }
+.dash-card-thumb .template-shot.is-static.count-3 .device-model-shot-img,
 .dash-card-thumb .template-shot.is-static.count-3 .device-model-shot {
   width: 100%;
   height: 100%;

@@ -605,18 +605,34 @@ function withIdentityAncestors(root: THREE.Object3D, run: () => void) {
   }
 }
 
+/** Ensure display meshes have normals so upright planar UVs / facing checks work. */
+function ensureScreenNormals(root: THREE.Object3D, screenMat: string) {
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const named = mats.some((mat) => mat?.name === screenMat);
+    if (!named && !isScreenMeshName(mesh.name)) return;
+    if (!mesh.geometry.getAttribute('normal')) {
+      mesh.geometry.computeVertexNormals();
+    }
+  });
+}
+
 /**
  * Orient, scale to a fixed upright height, and center on the geometric middle.
  * Scaling by height (not the longest axis) keeps every model sitting just above
  * the studio floor with a soft contact shadow, while the gimbal stays through
  * the product center.
  */
-function fitDeviceRoot(root: THREE.Object3D, rot: [number, number, number]) {
+function fitDeviceRoot(root: THREE.Object3D, rot: [number, number, number], screenMat?: string) {
   withIdentityAncestors(root, () => {
     root.rotation.set(rot[0], rot[1], rot[2]);
     root.position.set(0, 0, 0);
     root.scale.setScalar(1);
     root.updateMatrixWorld(true);
+
+    if (screenMat) ensureScreenNormals(root, screenMat);
 
     const sized = deviceBounds(root);
     const size = new THREE.Vector3();
@@ -641,7 +657,9 @@ function isDisplayScreenMaterialName(name: string): boolean {
 function isScreenMeshName(name: string): boolean {
   const lower = (name || '').toLowerCase().trim();
   if (!lower || /glass/.test(lower)) return false;
-  return /^(fold_)?screen([._-]?\d+)?$/.test(lower) || /^(display)([._-]?\d+)?$/.test(lower);
+  return /^(fold_)?screen([._-]?\d+)?$/.test(lower)
+    || /^(display)([._-]?\d+)?$/.test(lower)
+    || /replaceable.*display|display.*replaceable/.test(lower);
 }
 
 /**
@@ -1106,7 +1124,7 @@ function GltfDeviceContent({
   // Those cosmetic updates used to re-run world-space centering and shove the
   // body off the gimbal whenever the parent pivots were already posed.
   useLayoutEffect(() => {
-    fitDeviceRoot(root, device.rot);
+    fitDeviceRoot(root, device.rot, device.screenMat);
     if (device.uv.planar) planarizeScreen(root, device.screenMat);
   }, [root, device.id, device.rot[0], device.rot[1], device.rot[2], device.uv.planar, device.screenMat]);
 
@@ -1383,13 +1401,19 @@ function pickGrabTarget(
     }
   }
   if (gizmoDistance === Number.POSITIVE_INFINITY) return { object, gizmoWins: false };
-  // Empty canvas / floor beside the model: always leave OrbitControls alone.
-  // Fat translate pickers cover a lot of ground around the device at default
-  // framing and were freezing camera orbit. Arrows still win when the ray
-  // hits them into true void, or when the body is also under the pointer
-  // (slack below) — that is the zoomed-in / on-silhouette path.
+  // Empty canvas / floor: rotate rings stay suppressed so fat tubes do not
+  // freeze orbit beside the model. Translate arrows stick out past the
+  // silhouette — especially when zoomed out — so let them win when the
+  // shaft is clearly in front of the floor/backdrop. Pickers behind the
+  // surface still lose (that path used to teleport the device).
   if (!object) {
     if (solidDistance < Number.POSITIVE_INFINITY) {
+      if (
+        translateGizmoDistance < Number.POSITIVE_INFINITY
+        && translateGizmoDistance <= solidDistance + 0.35
+      ) {
+        return { object: null, gizmoWins: true };
+      }
       return { object: null, gizmoWins: false };
     }
     return {
@@ -1403,7 +1427,7 @@ function pickGrabTarget(
   // tips beside the body still win when the gizmo is large on screen.
   if (
     translateGizmoDistance < Number.POSITIVE_INFINITY
-    && translateGizmoDistance <= object.distance + 1.25
+    && translateGizmoDistance <= object.distance + 2.5
   ) {
     return { object, gizmoWins: true };
   }
@@ -3938,6 +3962,11 @@ function DeviceCanvasImpl({
           backdropSelected={backdropSelected}
           onSelectBackdrop={onSelectBackdrop}
           onSelectFloor={onSelectFloor}
+          backdropYaw={
+            project.cameraView === 'left' ? -90
+              : project.cameraView === 'right' ? 90
+                : 0
+          }
         >
           <KeyLightRig
             position={lightPosition}

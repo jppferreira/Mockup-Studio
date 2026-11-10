@@ -666,6 +666,8 @@ export interface StudioLightingProps {
   onSelectBackdrop?: () => void;
   /** Tap empty floor plane → Floor colour in the Look side panel. */
   onSelectFloor?: () => void;
+  /** Degrees around Y — turns the paper wall to face Left / Right / Front. */
+  backdropYaw?: number;
   /** Device footprints for soft contact that climbs the cyclorama cove. */
   contactPoints?: CycloramaContactPoint[];
   /** When true, show the key-light directional gizmo path via children / parent. */
@@ -702,6 +704,7 @@ export function StudioLighting({
   backdropSelected = false,
   onSelectBackdrop,
   onSelectFloor,
+  backdropYaw = 0,
   contactPoints = [],
   children,
 }: StudioLightingProps) {
@@ -709,6 +712,18 @@ export function StudioLighting({
     && !hasStudioBackdropProp
     && background !== 'transparent';
   const studioSet = hasStudioBackdropProp || showCyclorama;
+  const yawRad = (backdropYaw * Math.PI) / 180;
+  const localContactPoints = useMemo(() => {
+    if (!backdropYaw || contactPoints.length === 0) return contactPoints;
+    const cos = Math.cos(-yawRad);
+    const sin = Math.sin(-yawRad);
+    return contactPoints.map((point) => ({
+      ...point,
+      x: point.x * cos - point.z * sin,
+      z: point.x * sin + point.z * cos,
+      yaw: (point.yaw ?? 0) - backdropYaw,
+    }));
+  }, [backdropYaw, contactPoints, yawRad]);
   /** Same floor for every look so fitted models always sit above a soft shadow. */
   const floorY = STUDIO_FLOOR_Y;
   const groundAllowed = showGroundBase
@@ -818,13 +833,13 @@ export function StudioLighting({
       />
       {children}
       {showCyclorama && gradientColors && (
-        <group position={[0, floorY, 0]}>
+        <group position={[0, floorY, 0]} rotation={[0, yawRad, 0]}>
           <CycloramaBackdrop
             color={gradientColors.center}
             floor={gradientColors.edge}
             selected={backdropSelected}
             onSelect={onSelectBackdrop}
-            contactPoints={contactPoints}
+            contactPoints={localContactPoints}
             contactStrength={coveContactStrength}
             shadowOpacity={paperShadowOpacity}
             shadowColor={floorShadowColor}

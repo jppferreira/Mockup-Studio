@@ -39,13 +39,14 @@ export const STUDIO_POSES: StudioPose[] = [
     id: 'iso',
     label: 'Iso',
     hint: 'Even isometric studio angle',
-    rotation: { x: -24, y: 34, z: 6 },
+    // Keep Z near 0 so the product stays right-side up in frame.
+    rotation: { x: -22, y: 34, z: 2 },
   },
   {
     id: 'float',
     label: 'Float',
     hint: 'Hover with a soft roll',
-    rotation: { x: -6, y: 14, z: -5 },
+    rotation: { x: -8, y: 16, z: -2 },
   },
   {
     id: 'lean',

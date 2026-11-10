@@ -86,6 +86,7 @@ import {
 } from './lib/animation';
 import { applyAnimationPreset, getAnimationPreset, shiftDeviceRotation } from './lib/animationPresets';
 import { STUDIO_POSES, getStudioPose, studioPoseIdFor } from './lib/studioPoses';
+import { nextCompositionSlot } from './lib/compositionLayout';
 import {
   DEFAULT_SHADOW_COLOR,
   SHADOW_DISTANCE_MAX,
@@ -361,6 +362,13 @@ const CAMERA_VIEW_OPTIONS: { id: CameraView; label: string; hint: string; icon: 
   { id: 'right', label: 'Right', hint: 'Orbit to the right side', icon: PanelRightClose },
   { id: 'top', label: 'Top', hint: 'Look down from above', icon: ArrowDownToLine },
 ];
+
+/** Yaw so the cyclorama wall stays behind the product for preset camera angles. */
+function backdropYawForView(view: CameraView): number {
+  if (view === 'left') return -90;
+  if (view === 'right') return 90;
+  return 0;
+}
 
 const CAMERA_LENS_OPTIONS: { id: (typeof CAMERA_LENSES)[number]['id']; label: string; hint: string; icon: LucideIcon }[] = [
   { id: 'ultrawide', label: 'Ultrawide', hint: '~16 mm', icon: Scan },
@@ -1142,6 +1150,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const orbitAppliedTabRef = useRef<string | null>(null);
   /** Skip the next camera-preset clear so restored template orbits survive project apply. */
   const preserveOrbitRef = useRef(false);
+  /** Side-panel / gizmo Front·Left·Right·Top picks must win over a saved free-orbit. */
+  const pickingCameraViewRef = useRef(false);
+  /** Ignore canvas orbit publishes while a preset view is snapping into place. */
+  const suppressOrbitSaveRef = useRef(false);
   /** Bumped on format/device changes so both panes snap to center instantly. */
   const [cameraRecenterToken, setCameraRecenterToken] = useState(0);
   const [openSectionId, setOpenSectionId] = useState<string | null>('device');
@@ -2193,10 +2205,18 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   ]);
 
   // Format / camera-preset / composition changes: snap both panes to center.
-  // A saved free-orbit pose stays. Template restore sets preserveOrbitRef.
-  // A live orbit that has not been written onto the project yet must also stay —
-  // clearing it here was what dropped the angle before autosave could seal it.
+  // Explicit Front·Left·Right·Top picks always clear free-orbit. Template restore
+  // and a live unsaved orbit still use preserveOrbitRef / cameraOrbit so reload
+  // does not drop a sealed angle.
   useEffect(() => {
+    if (pickingCameraViewRef.current) {
+      pickingCameraViewRef.current = false;
+      preserveOrbitRef.current = false;
+      sharedOrbitRef.current = null;
+      setSharedOrbit(null);
+      setCameraRecenterToken((n) => n + 1);
+      return;
+    }
     if (preserveOrbitRef.current || project.cameraOrbit?.offset || sharedOrbitRef.current?.offset) {
       preserveOrbitRef.current = false;
       setCameraRecenterToken((n) => n + 1);
@@ -2305,23 +2325,47 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   }, [setProject]);
 
   const rememberCameraOrbit = useCallback((orbit: { offset: Vec3; lookOffset?: Vec3 } | null) => {
-    if (!orbit?.offset) return;
+    if (!orbit?.offset || suppressOrbitSaveRef.current || pickingCameraViewRef.current) return;
     sharedOrbitRef.current = orbit;
     setSharedOrbit(orbit);
     if (orbitSaveTimerRef.current != null) window.clearTimeout(orbitSaveTimerRef.current);
     orbitSaveTimerRef.current = window.setTimeout(() => {
       orbitSaveTimerRef.current = null;
+      if (suppressOrbitSaveRef.current || pickingCameraViewRef.current) return;
       writeCameraOrbit(orbit);
     }, 320);
   }, [writeCameraOrbit]);
 
   const selectCameraView = useCallback((cameraView: CameraView) => {
-    if (orbitSaveTimerRef.current != null) window.clearTimeout(orbitSaveTimerRef.current);
+    if (orbitSaveTimerRef.current != null) {
+      window.clearTimeout(orbitSaveTimerRef.current);
+      orbitSaveTimerRef.current = null;
+    }
+    pickingCameraViewRef.current = true;
+    suppressOrbitSaveRef.current = true;
+    preserveOrbitRef.current = false;
     orbitEchoRef.current = '';
     sharedOrbitRef.current = null;
     setSharedOrbit(null);
-    updateProject({ cameraView, cameraOrbit: null });
-  }, [updateProject]);
+    setCameraRecenterToken((n) => n + 1);
+    const yaw = backdropYawForView(cameraView);
+    setProject((current) => {
+      const sceneProps = (current.sceneProps ?? []).map((prop) => (
+        prop.kind === 'studio_backdrop'
+          ? { ...prop, rotation: { ...prop.rotation, y: yaw } }
+          : prop
+      ));
+      return {
+        ...current,
+        cameraView,
+        cameraOrbit: null,
+        sceneProps,
+      };
+    });
+    window.setTimeout(() => {
+      suppressOrbitSaveRef.current = false;
+    }, 180);
+  }, [setProject]);
 
   const openShapeMenu = (kind: 'flat' | 'solid' | 'stage', button: HTMLButtonElement | null) => {
     if (shapeMenu === kind) {
@@ -3962,6 +4006,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       window.clearTimeout(orbitSaveTimerRef.current);
       orbitSaveTimerRef.current = null;
     }
+    // Preset Front·Left·Right·Top snaps must not seal the old free-orbit again.
+    if (suppressOrbitSaveRef.current || pickingCameraViewRef.current) {
+      if (!timelineOpenRef.current) return;
+      keyCameraPosition(position, animTimeRef.current);
+      return;
+    }
     // Prefer the pose the canvas just read. Falling back to the ref was how a
     // gated publish no-op left mouse-orbit unsaved while typed Rotate X/Y/Z worked.
     const sealed = orbit?.offset ? orbit : sharedOrbitRef.current;
@@ -4154,15 +4204,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         for (const meta of rest) {
           if (devices.length >= Math.min(MAX_DEVICES, entitlementsMaxDevices)) break;
           added += 1;
+          const seat = nextCompositionSlot(devices.length, base);
           devices = [...devices, createDeviceInstance({
             deviceId: meta.id,
-            rotation: { ...base.rotation, y: base.rotation.y + (added % 2 === 0 ? 18 : -18) },
-            scale: base.scale,
-            position: {
-              x: base.position.x + 1.15 * added,
-              y: base.position.y,
-              z: base.position.z - added * 0.08,
-            },
+            rotation: { ...seat.rotation },
+            scale: seat.scale,
+            position: { ...seat.position },
             glassReflection: base.glassReflection,
             reflectionStyle: base.reflectionStyle,
             screenshot: null,
@@ -4226,16 +4273,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         return current;
       }
       const selected = getSelectedDevice(current);
-      const slot = current.devices.length;
+      const seat = nextCompositionSlot(current.devices.length, selected);
       const copy = createDeviceInstance({
         deviceId,
-        rotation: { ...STUDIO_START_ROTATION },
-        scale: selected.scale,
-        position: {
-          x: selected.position.x + (slot > 0 ? 1.15 : 0),
-          y: selected.position.y,
-          z: selected.position.z - slot * 0.08,
-        },
+        rotation: current.devices.length === 0 ? { ...STUDIO_START_ROTATION } : { ...seat.rotation },
+        scale: current.devices.length === 0 ? selected.scale : seat.scale,
+        position: current.devices.length === 0
+          ? { ...STUDIO_START_POSITION }
+          : { ...seat.position },
         glassReflection: selected.glassReflection,
         reflectionStyle: selected.reflectionStyle,
         screenshot: isPlaceholderScreenshot(deviceScreenMedia(selected, current.screenshot))
@@ -5180,6 +5225,31 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const selectBackdrop = () => {
+    const existing = (project.sceneProps ?? []).find((prop) => prop.kind === 'studio_backdrop');
+    if (existing) {
+      selectSceneProp(existing.id);
+      return;
+    }
+    // Built-in Soft Studio paper has no prop yet — promote it so the gizmo can
+    // attach and the user can drag / rotate the cyclorama after the tap.
+    if (project.background !== 'transparent') {
+      const yaw = backdropYawForView(project.cameraView);
+      const prop = createSceneProp({
+        kind: 'studio_backdrop',
+        position: { x: 0, y: -1.55, z: 0 },
+        rotation: { x: 0, y: yaw, z: 0 },
+        scale: 1,
+        color: project.gradientColors.center,
+      });
+      updateProject({ sceneProps: [...(project.sceneProps ?? []), prop] });
+      pinLayer('prop', prop.id);
+      setLightGizmoActive(false);
+      setSidePanelsHidden(false);
+      setDeviceMenu(null);
+      setPickedMaterial(null);
+      setStudioSetFocus('backdrop');
+      return;
+    }
     focusStudioColour('backdrop');
   };
 
@@ -5194,6 +5264,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const selectEmptyCanvas = (target: 'sky' | 'floor' | 'backdrop') => {
+    if (target === 'backdrop') {
+      selectBackdrop();
+      return;
+    }
     focusStudioColour(target);
   };
 
@@ -5343,16 +5417,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         return current;
       }
       const selected = getSelectedDevice(current);
-      const slot = current.devices.length;
+      const seat = nextCompositionSlot(current.devices.length, selected);
       const copy = createDeviceInstance({
         deviceId: selected.deviceId,
-        rotation: { ...selected.rotation, y: selected.rotation.y + (slot % 2 === 0 ? 18 : -18) },
-        scale: selected.scale,
-        position: {
-          x: selected.position.x + 1.15,
-          y: selected.position.y,
-          z: selected.position.z - slot * 0.08,
-        },
+        rotation: { ...seat.rotation },
+        scale: seat.scale,
+        position: { ...seat.position },
         glassReflection: selected.glassReflection,
         reflectionStyle: selected.reflectionStyle,
         screenshot: deviceScreenMedia(selected, current.screenshot),
@@ -6887,7 +6957,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         overlayTime={animTime}
                         selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
                         onSelectProp={selectSceneProp}
-                        backdropSelected={layerSelection.kind === 'backdrop'}
+                        backdropSelected={
+                          layerSelection.kind === 'backdrop'
+                          || selectedSceneProp?.kind === 'studio_backdrop'
+                        }
                         onSelectBackdrop={selectBackdrop}
                         onSelectSky={selectSky}
                         onSelectFloor={selectFloor}
@@ -6953,7 +7026,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         overlayTime={animTime}
                         selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
                         onSelectProp={selectSceneProp}
-                        backdropSelected={layerSelection.kind === 'backdrop'}
+                        backdropSelected={
+                          layerSelection.kind === 'backdrop'
+                          || selectedSceneProp?.kind === 'studio_backdrop'
+                        }
                         onSelectBackdrop={selectBackdrop}
                         onSelectSky={selectSky}
                         onSelectFloor={selectFloor}
@@ -7007,7 +7083,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   overlayTime={animTime}
                   selectedPropId={layerSelection.kind === 'prop' ? layerSelection.id : null}
                   onSelectProp={selectSceneProp}
-                  backdropSelected={layerSelection.kind === 'backdrop'}
+                  backdropSelected={
+                    layerSelection.kind === 'backdrop'
+                    || selectedSceneProp?.kind === 'studio_backdrop'
+                  }
                   onSelectBackdrop={selectBackdrop}
                   onSelectSky={selectSky}
                   onSelectFloor={selectFloor}
@@ -7685,42 +7764,65 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                     Restore coloured background
                   </button>
                 ) : (
-                  <div className="gradient-color-grid is-separate-stops">
-                    {([
-                      ['mid', 'Sky · surround', 'sky'],
-                      ['edge', 'Floor', 'floor'],
-                      ['center', 'Backdrop', 'backdrop'],
-                    ] as const).map(([key, label, stop]) => (
-                      <label
-                        key={key}
-                        className={`gradient-color-field${studioSetFocus === stop ? ' is-highlighted' : ''}`}
-                        onPointerDown={() => setStudioSetFocus(stop)}
-                      >
-                        <span className="gradient-color-label">{label}</span>
-                        <span className="gradient-color-input">
-                          <input
-                            type="color"
-                            value={project.gradientColors[key]}
-                            aria-label={`${label} colour`}
-                            onFocus={() => setStudioSetFocus(stop)}
-                            onChange={(e) => updateGradient(key, e.target.value)}
-                          />
-                          <input
-                            type="text"
-                            defaultValue={project.gradientColors[key]}
-                            key={`dock-${key}-${project.gradientColors[key]}`}
-                            maxLength={7}
-                            aria-label={`${label} hex`}
-                            onFocus={() => setStudioSetFocus(stop)}
-                            onBlur={(e) => updateGradient(key, e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') e.currentTarget.blur();
-                            }}
-                          />
-                        </span>
-                      </label>
-                    ))}
-                  </div>
+                  <>
+                    <div className="field-caption" style={{ marginTop: 10 }}>Wall faces</div>
+                    <div className="camera-icon-rail" role="toolbar" aria-label="Backdrop direction">
+                      {CAMERA_VIEW_OPTIONS.filter((view) => view.id !== 'top').map((view) => {
+                        const Icon = view.icon;
+                        const active = project.cameraView === view.id;
+                        return (
+                          <button
+                            key={view.id}
+                            type="button"
+                            className={`camera-icon-btn${active ? ' is-active' : ''}`}
+                            title={`${view.label} · turn the cyclorama wall to face this side`}
+                            aria-label={`Backdrop faces ${view.label}`}
+                            aria-pressed={active}
+                            onClick={() => selectCameraView(view.id)}
+                          >
+                            <Icon size={16} strokeWidth={1.9} aria-hidden />
+                            <span>{view.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="gradient-color-grid is-separate-stops">
+                      {([
+                        ['mid', 'Sky · surround', 'sky'],
+                        ['edge', 'Floor', 'floor'],
+                        ['center', 'Backdrop', 'backdrop'],
+                      ] as const).map(([key, label, stop]) => (
+                        <label
+                          key={key}
+                          className={`gradient-color-field${studioSetFocus === stop ? ' is-highlighted' : ''}`}
+                          onPointerDown={() => setStudioSetFocus(stop)}
+                        >
+                          <span className="gradient-color-label">{label}</span>
+                          <span className="gradient-color-input">
+                            <input
+                              type="color"
+                              value={project.gradientColors[key]}
+                              aria-label={`${label} colour`}
+                              onFocus={() => setStudioSetFocus(stop)}
+                              onChange={(e) => updateGradient(key, e.target.value)}
+                            />
+                            <input
+                              type="text"
+                              defaultValue={project.gradientColors[key]}
+                              key={`dock-${key}-${project.gradientColors[key]}`}
+                              maxLength={7}
+                              aria-label={`${label} hex`}
+                              onFocus={() => setStudioSetFocus(stop)}
+                              onBlur={(e) => updateGradient(key, e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') e.currentTarget.blur();
+                              }}
+                            />
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -7746,6 +7848,9 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   );
                 })}
               </div>
+              <p className="field-caption" style={{ marginTop: 8 }}>
+                Turns the view and keeps the cyclorama wall behind the product.
+              </p>
               <div className="field-caption" style={{ marginTop: 12 }}>Lens</div>
               <div className="camera-icon-rail" role="toolbar" aria-label="Camera lens">
                 {CAMERA_LENS_OPTIONS.map((lens) => {
@@ -9359,7 +9464,43 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         />
                       </span>
                     </label>
-                    {selectedSceneProp.kind !== 'studio_backdrop' && (
+                    {selectedSceneProp.kind === 'studio_backdrop' ? (
+                      <>
+                        <div className="field-caption scene-look-sub" style={{ marginTop: 10 }}>
+                          Wall direction
+                        </div>
+                        <div className="camera-icon-rail" role="toolbar" aria-label="Cyclorama direction">
+                          {CAMERA_VIEW_OPTIONS.filter((view) => view.id !== 'top').map((view) => {
+                            const Icon = view.icon;
+                            const yaw = backdropYawForView(view.id);
+                            const active = Math.abs(selectedSceneProp.rotation.y - yaw) < 0.75;
+                            return (
+                              <button
+                                key={view.id}
+                                type="button"
+                                className={`camera-icon-btn${active ? ' is-active' : ''}`}
+                                title={`${view.label} · face the paper wall this way`}
+                                aria-label={`Cyclorama faces ${view.label}`}
+                                aria-pressed={active}
+                                onClick={() => selectCameraView(view.id)}
+                              >
+                                <Icon size={16} strokeWidth={1.9} aria-hidden />
+                                <span>{view.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <SliderField
+                          label="Rotate Y"
+                          min={-180}
+                          max={180}
+                          value={selectedSceneProp.rotation.y}
+                          onChange={(v) => patchSceneProp(selectedSceneProp.id, {
+                            rotation: { ...selectedSceneProp.rotation, y: v },
+                          })}
+                        />
+                      </>
+                    ) : (
                       <>
                         <div className="field-caption scene-look-sub" style={{ marginTop: 10 }}>
                           Shape transform

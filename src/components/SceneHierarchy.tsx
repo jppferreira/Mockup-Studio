@@ -505,20 +505,37 @@ export default function SceneHierarchy({
                   {(revealAll || textHit('Backdrop', needle)) && (
                     <div className="scene-tree-branch" role="group" data-backdrop-branch="">
                       <div
-                        className={`scene-tree-row is-studio ${selection.kind === 'backdrop' ? 'is-selected' : ''}`}
+                        className={`scene-tree-row is-studio ${
+                          selection.kind === 'backdrop'
+                          || (selection.kind === 'prop' && (project.sceneProps ?? []).some(
+                            (prop) => prop.id === selection.id && prop.kind === 'studio_backdrop',
+                          ))
+                            ? 'is-selected'
+                            : ''
+                        }`}
                         role="treeitem"
-                        aria-selected={selection.kind === 'backdrop'}
+                        aria-selected={
+                          selection.kind === 'backdrop'
+                          || (selection.kind === 'prop' && (project.sceneProps ?? []).some(
+                            (prop) => prop.id === selection.id && prop.kind === 'studio_backdrop',
+                          ))
+                        }
                       >
                         <button
                           type="button"
                           className="scene-tree-main"
                           title={project.background === 'transparent'
                             ? 'Backdrop is off · tap to open looks on the right'
-                            : 'Tap to edit backdrop looks and colours on the right · Backspace or ✕ removes'}
+                            : 'Tap to transform the cyclorama · looks and colours open on the right · Backspace or ✕ removes'}
                           onClick={() => {
-                            setSelection({ kind: 'backdrop' });
+                            // Let onSelectBackdrop own selection (prop + gizmo when a
+                            // cyclorama exists) — don't force kind:'backdrop' first or
+                            // onSelectionChange will clobber the prop pin.
                             if (onSelectBackdrop) onSelectBackdrop();
-                            else onOpenSection('look');
+                            else {
+                              setSelection({ kind: 'backdrop' });
+                              onOpenSection('look');
+                            }
                           }}
                         >
                           <img src={iconImage} alt="" />

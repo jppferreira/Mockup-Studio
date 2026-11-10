@@ -917,7 +917,7 @@ export function CycloramaBackdrop({
           onSelect?.();
         }}
         onPointerDown={(event) => {
-          // Claim the tap so orbit / device grab don't steal backdrop colour edits.
+          // Claim the tap so orbit / device grab don't steal backdrop selection.
           if (event.button === 0) event.stopPropagation();
         }}
       >
@@ -953,7 +953,7 @@ function ClayHelix({ color, seed, selected = false }: { color: string; seed: num
 const MOVABLE_PROP_KINDS = new Set<SceneProp['kind']>([
   'clay_sphere', 'clay_cube', 'clay_cylinder', 'clay_torus', 'clay_helix',
   'clay_cone', 'clay_pyramid', 'pedestal', 'stone_plinth', 'metal_disc', 'rock',
-  'stage', 'concrete_slab',
+  'stage', 'concrete_slab', 'studio_backdrop',
 ]);
 
 function PropMesh({

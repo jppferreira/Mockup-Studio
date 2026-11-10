@@ -471,7 +471,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/apple_watch_series_7.glb',
     screenMat: 'Material.001',
     screenSize: { width: 396, height: 484 },
-    rot: [0, 0, 0],
+    // Tip ~35° so the authored reclined face sits upright toward +Z.
+    rot: [Math.PI * (35 / 180), 0, 0],
     uv: { flipY: true },
     glassMats: ['Glass_Clear2'],
     lockMaterials: true,
@@ -739,7 +740,8 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/apple_watch_ultra_2.glb',
     screenMat: 'edYkGGAdRWeopLP',
     screenSize: { width: 410, height: 502 },
-    rot: [Math.PI, Math.PI, 0],
+    // Tip ~35° so the face is front-on (+Z) with 12 o'clock up — not the old 180° tumble.
+    rot: [Math.PI * (35 / 180), 0, 0],
     uv: { mirrorX: true },
     glassMats: ['VJcIxaYCeMHzzAJ', 'EbFYvXZFEOELnji', 'IsuszdatyklnjoT', 'JlRKetQcktLwJwa'],
     lockMaterials: true,
@@ -754,8 +756,9 @@ export const DEVICE_MODELS: DeviceModel[] = [
     url: './models/pixel_watch.glb',
     screenMat: 'replaceable_screen_black',
     screenSize: { width: 450, height: 450 },
-    rot: [0, 0, 0],
-    uv: {},
+    // Authored screen faces −Z; yaw 180 keeps 12 o'clock up and the face toward camera.
+    rot: [0, Math.PI, 0],
+    uv: { planar: true },
     glassMats: ['Gorilla_Glass_5_black_high_gloss_clearcoat', 'optical_sensor_glass'],
     lockMaterials: true,
   },
