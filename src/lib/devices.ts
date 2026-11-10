@@ -1096,8 +1096,10 @@ export const DEVICE_MODEL_PACK_VERSION = 'texpack3';
 export function deviceAssetUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
   if (/^(blob:|data:|https?:)/i.test(url)) return url;
+  const marker = `v=${DEVICE_MODEL_PACK_VERSION}`;
+  if (url.includes(marker)) return url;
   const sep = url.includes('?') ? '&' : '?';
-  return `${url}${sep}v=${DEVICE_MODEL_PACK_VERSION}`;
+  return `${url}${sep}${marker}`;
 }
 
 /**

@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
     dataBase64, proposedName, extension, mimeType,
   }),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+  takePendingAuthCallback: () => ipcRenderer.invoke('auth:takePendingCallback'),
+  onAuthCallback: (handler) => {
+    const listener = (_event, url) => handler(url);
+    ipcRenderer.on('auth:callback', listener);
+    return () => ipcRenderer.removeListener('auth:callback', listener);
+  },
   updateStatus: () => ipcRenderer.invoke('updater:status'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
   onUpdateStatus: (handler) => {

@@ -11,6 +11,10 @@ import {
   loadLicense,
   modelAccessLicenseKey,
 } from './license';
+import {
+  isDeviceBlockedOnWeb,
+  modelAccessSessionToken,
+} from './entitlements';
 
 const DB_NAME = 'mockup-studio.model-cache';
 const DB_VERSION = 1;
@@ -104,6 +108,16 @@ async function idbPut(record: CacheRecord): Promise<void> {
   });
 }
 
+async function idbDelete(key: string): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('indexedDB delete failed'));
+  });
+}
+
 async function encryptBytes(plain: ArrayBuffer): Promise<{ iv: ArrayBuffer; cipher: ArrayBuffer }> {
   const key = await getCryptoKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -118,20 +132,33 @@ async function decryptBytes(iv: ArrayBuffer, cipher: ArrayBuffer): Promise<Array
 
 async function requestSignedUrl(deviceId: string, licenseKey: string | null): Promise<string> {
   const { url, anonKey, appSecret } = supabaseConfig();
+  const sessionToken = await modelAccessSessionToken();
+  const client = typeof window !== 'undefined' && window.mockupDesktop ? 'desktop' : 'web';
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${anonKey}`,
+    Authorization: `Bearer ${sessionToken || anonKey}`,
     apikey: anonKey,
     'Content-Type': 'application/json',
     'x-mockup-model-secret': appSecret,
+    'x-mockup-client': client,
   };
   if (licenseKey) headers['x-mockup-license-key'] = licenseKey;
 
   const response = await fetch(`${url}/functions/v1/device-model-url`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ deviceId, licenseKey: licenseKey || undefined }),
+    body: JSON.stringify({
+      deviceId,
+      licenseKey: licenseKey || undefined,
+      client,
+    }),
   });
   if (response.status === 403) {
+    const payload = await response.json().catch(() => ({})) as { error?: string };
+    if (payload.error === 'license_review_required') {
+      throw new Error(
+        'This device model is not cleared for browser use yet — open it in the Mac app, or wait for licence review.',
+      );
+    }
     throw new Error('This device requires Pro — upgrade to unlock the full library');
   }
   if (!response.ok) {
@@ -163,14 +190,21 @@ function toBlobUrl(bytes: ArrayBuffer): string {
  */
 export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
   const license = loadLicense();
+  if (isDeviceBlockedOnWeb(deviceId)) {
+    throw new Error(
+      'This device model is not cleared for browser use yet — open it in the Mac app, or wait for licence review.',
+    );
+  }
   if (!isDeviceUnlocked(license.tier, deviceId)) {
     throw new Error('This device requires Pro — upgrade to unlock the full library');
   }
 
   const accessKey = modelAccessLicenseKey(license);
-  if (!isFreeDevice(deviceId) && !accessKey) {
+  const sessionToken = await modelAccessSessionToken();
+  const accountUnlocks = Boolean(sessionToken) && license.source === 'account' && license.tier !== 'free';
+  if (!isFreeDevice(deviceId) && !accessKey && !accountUnlocks) {
     throw new Error(
-      'Activate your Pro license key to download this device into the app',
+      'Activate your Pro license key (or sign in with a linked account) to download this device',
     );
   }
 
@@ -184,10 +218,15 @@ export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
     const key = cacheKey(deviceId);
     const cached = await idbGet(key);
     if (cached) {
-      const plain = await decryptBytes(cached.iv, cached.cipher);
-      const blobUrl = toBlobUrl(plain);
-      liveUrls.set(deviceId, blobUrl);
-      return blobUrl;
+      try {
+        const plain = await decryptBytes(cached.iv, cached.cipher);
+        const blobUrl = toBlobUrl(plain);
+        liveUrls.set(deviceId, blobUrl);
+        return blobUrl;
+      } catch {
+        // Machine-key drift or a truncated write — drop the bad row and re-fetch.
+        await idbDelete(key).catch(() => undefined);
+      }
     }
 
     const signedUrl = await requestSignedUrl(deviceId, accessKey);

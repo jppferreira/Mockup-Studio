@@ -16,6 +16,7 @@
     "website": "vite --config website/vite.config.ts",
     "website:build": "vite build --config website/vite.config.ts",
     "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
     "preview": "vite preview",
     "dist:mac": "npm run build && electron-builder --mac dmg zip --arm64 -c.mac.identity=null",
     "dist:mac:beta": "node scripts/dist-mac-beta.mjs",
@@ -52,6 +53,7 @@
     "electron-builder": "^25.1.8",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",
+    "vitest": "^3.2.4",
     "wait-on": "^8.0.1"
   },
   "build": {
@@ -79,6 +81,14 @@
         "mimeType": "application/x-mockup-studio",
         "role": "Editor",
         "rank": "Owner"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "mokstudio Auth",
+        "schemes": [
+          "mokstudio"
+        ]
       }
     ],
     "mac": {

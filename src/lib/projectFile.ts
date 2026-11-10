@@ -1,5 +1,13 @@
 /** mokstudio project container: MKUP + version + gzip(JSON). */
 
+import {
+  parseProjectPayload,
+  serializeSceneDocument,
+  wrapProject,
+  type SceneDocument,
+} from './sceneDocument';
+import type { MockupProject } from '../types';
+
 export const MOCKUP_EXTENSION = 'mockup';
 export const MOCKUP_LEGACY_EXTENSION = 'mockup.json';
 export const MOCKUP_MIME = 'application/x-mockup-studio';
@@ -61,6 +69,29 @@ export async function decodeMockupFile(bytes: Uint8Array): Promise<string> {
 export async function readProjectFileContents(file: Blob): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   return decodeMockupFile(bytes);
+}
+
+/** Decode file JSON into a SceneDocument (wraps legacy MockupProject payloads). */
+export function parseMockupJson(jsonText: string): { document: SceneDocument; project: MockupProject } {
+  return parseProjectPayload(JSON.parse(jsonText) as unknown);
+}
+
+/** Build portable .mockup JSON from a document or plain project + optional stable id. */
+export function encodeProjectJson(
+  project: MockupProject,
+  options?: { document?: SceneDocument | null; documentId?: string | null },
+): string {
+  if (options?.document) {
+    return serializeSceneDocument({
+      ...options.document,
+      scene: project,
+      updatedAt: Date.now(),
+    });
+  }
+  const document = wrapProject(project, {
+    id: options?.documentId?.trim() || undefined,
+  });
+  return serializeSceneDocument({ ...document, scene: project, updatedAt: Date.now() });
 }
 
 export function isProjectFileName(name: string) {

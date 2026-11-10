@@ -4,6 +4,12 @@ export type ScreenMediaKind = 'image' | 'video' | 'none';
 
 const IMAGE_RE = /^data:image\/(png|jpeg|jpg|webp);base64,/i;
 const VIDEO_RE = /^data:video\/(mp4|webm|quicktime);base64,/i;
+/** Content-addressed placeholder written by sceneDocument externalisation. */
+const ASSET_REF_RE = /^asset:sha256:[a-z0-9_]{8,128}$/i;
+
+export function isSceneAssetRef(value: unknown): value is string {
+  return typeof value === 'string' && ASSET_REF_RE.test(value);
+}
 
 export function screenMediaKind(dataUrl: string | null | undefined): ScreenMediaKind {
   if (!dataUrl) return 'none';
@@ -13,7 +19,11 @@ export function screenMediaKind(dataUrl: string | null | undefined): ScreenMedia
 }
 
 export function isValidScreenMediaDataUrl(value: unknown): value is string {
-  return typeof value === 'string' && (IMAGE_RE.test(value) || VIDEO_RE.test(value));
+  return typeof value === 'string' && (
+    IMAGE_RE.test(value)
+    || VIDEO_RE.test(value)
+    || ASSET_REF_RE.test(value)
+  );
 }
 
 export function isImageFile(file: File) {

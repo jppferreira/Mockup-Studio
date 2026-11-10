@@ -1,4 +1,5 @@
 import { validateProject } from './project';
+import { isSceneDocument, parseProjectPayload } from './sceneDocument';
 import type { MockupProject } from '../types';
 
 export type CloudProvider = 'icloud' | 'google-drive' | 'folder';
@@ -49,6 +50,12 @@ export function canonicalProjectJson(project: MockupProject) {
   }
 }
 
+/** Parse cloud / disk JSON that may be a SceneDocument or legacy MockupProject. */
+export function projectFromStoredJson(raw: unknown): MockupProject {
+  if (isSceneDocument(raw)) return parseProjectPayload(raw).project;
+  return validateProject(raw);
+}
+
 export function isPathInsideLibrary(filePath: string, libraryPath: string) {
   const root = libraryPath.replace(/[/\\]+$/, '');
   return filePath === root || filePath.startsWith(`${root}/`) || filePath.startsWith(`${root}\\`);
@@ -58,7 +65,7 @@ export function projectFromCloudRow(row: CloudListRow): CloudProjectEntry {
   let project: MockupProject | null = null;
   if (row.slim) {
     try {
-      project = validateProject(JSON.parse(row.slim) as unknown);
+      project = projectFromStoredJson(JSON.parse(row.slim) as unknown);
     } catch {
       project = null;
     }

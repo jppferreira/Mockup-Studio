@@ -1,4 +1,4 @@
-/** Dev vs User workspace toolsets — only available in development builds. */
+/** Dev vs User workspace toolsets. Local dev builds always unlock it; production follows the signed-in email. */
 
 export type WorkspaceToolset = 'developer' | 'user';
 
@@ -6,8 +6,32 @@ const TOOLSET_KEY = 'mockup-studio.workspace-toolset.v1';
 /** Legacy key from when modeling was a single on/off switch. */
 const LEGACY_MODELING_KEY = 'mockup-studio.modeling-mode.v1';
 
-export function isDevToolsetAvailable(): boolean {
-  return Boolean(import.meta.env.DEV);
+/**
+ * Account that keeps the Dev toolset on production web and desktop builds.
+ * Local `vite` dev still enables it for every session via `import.meta.env.DEV`.
+ */
+export const DEV_ACCESS_EMAILS = ['hello@jppferreira.com'] as const;
+
+let signedInEmail: string | null = null;
+
+function normalizeEmail(email: string | null | undefined): string | null {
+  const next = email?.trim().toLowerCase();
+  return next || null;
+}
+
+/** Remember the signed-in account so Dev access follows that email. */
+export function setDevAccessAccount(email: string | null | undefined): void {
+  signedInEmail = normalizeEmail(email);
+}
+
+export function isDevAccessEmail(email: string | null | undefined): boolean {
+  const next = normalizeEmail(email);
+  return Boolean(next && (DEV_ACCESS_EMAILS as readonly string[]).includes(next));
+}
+
+export function isDevToolsetAvailable(email?: string | null): boolean {
+  if (import.meta.env.DEV) return true;
+  return isDevAccessEmail(email === undefined ? signedInEmail : email);
 }
 
 /** @deprecated Prefer isDevToolsetAvailable */

@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { BetaSignupModal } from './BetaSignupModal';
 import { ContactModal, type ContactIntent } from './ContactModal';
 import { Logo } from './Logo';
+import { SiteNav } from './SiteNav';
 import { useParallax } from '../hooks/useParallax';
 
 export function SiteChrome({ children }: { children: ReactNode }) {
@@ -29,40 +30,7 @@ export function SiteChrome({ children }: { children: ReactNode }) {
         <div className="grid-wash" style={parallax.layer(0.04, 0)} />
       </div>
 
-      <div className="nav-shell">
-        <header className="nav">
-          <Logo size={28} className="nav-brand" />
-          <nav className="nav-links" aria-label="Primary">
-            <Link to="/features" className={location.pathname === '/features' ? 'is-active' : undefined}>
-              Features
-            </Link>
-            <Link to="/workflow" className={location.pathname === '/workflow' ? 'is-active' : undefined}>
-              Workflow
-            </Link>
-            <Link to="/pricing" className={location.pathname === '/pricing' ? 'is-active' : undefined}>
-              Pricing
-            </Link>
-            <Link to="/releases" className={location.pathname === '/releases' ? 'is-active' : undefined}>
-              Releases
-            </Link>
-            <Link to="/privacy" className={location.pathname === '/privacy' ? 'is-active' : undefined}>
-              Privacy
-            </Link>
-            <Link to="/terms" className={location.pathname === '/terms' ? 'is-active' : undefined}>
-              Terms
-            </Link>
-            <button type="button" className="nav-text-btn" onClick={() => openContact('feedback')}>
-              Feedback
-            </button>
-            <button type="button" className="nav-text-btn" onClick={() => openContact('contact')}>
-              Contact
-            </button>
-          </nav>
-          <button type="button" className="nav-cta" onClick={() => setBetaOpen(true)}>
-            Sign up to beta
-          </button>
-        </header>
-      </div>
+      <SiteNav onBeta={() => setBetaOpen(true)} onContact={openContact} />
 
       {children}
 

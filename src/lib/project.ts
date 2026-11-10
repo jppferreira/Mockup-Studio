@@ -1,16 +1,16 @@
 import { getDevice, isKnownDeviceId } from './devices';
 import { ensureCompositionLayers } from './layers';
 import { createOverlay, type SceneOverlay } from './overlays';
-import { isValidScreenMediaDataUrl } from './screenMedia';
+import { isSceneAssetRef, isValidScreenMediaDataUrl } from './screenMedia';
 import { REFLECTION_MAPS } from './reflectionMaps';
 import {
   ANIM_PROPERTIES, BACKGROUNDS, BUILTIN_GRADIENTS, CAMERA_TARGET_ID, DEFAULT_GRADIENT, DEFAULT_PROJECT,
   DEVICE_COLORS, MAX_COMPOSITION_SCENES, MAX_SCENE_LIGHTS, SCENE_LIGHT_KINDS, SCENE_PROP_KINDS,
   createCompositionScene, createDefaultAnimation, createDeviceInstance, createSceneLight, createSceneProp,
   ensureCompositionScenes, getSelectedDevice,
-  applySceneStage, captureSceneStage, resolveSceneGradient, syncProjectFromActiveScene, syncProjectFromSelected,
+  applySceneStage, captureSceneStage, commitActiveScene, resolveSceneGradient, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimKeyframe, type AnimProperty, type AnimTrack, type AnimationClip,
-  type CompositionScene, type DeviceColor, type DeviceInstance, type MockupProject,
+  type CameraOrbitPose, type CompositionScene, type DeviceColor, type DeviceInstance, type MockupProject,
   type PublishTarget, type ReflectionMapSetting, type SceneLight, type SceneLightKind, type SceneProp,
   type ScenePropKind, type SceneStage, type Vec3,
 } from '../types';
@@ -28,6 +28,35 @@ const REFLECTION_IDS = new Set<string>([...REFLECTION_MAPS.map((m) => m.id), 'cu
 
 function number(n: unknown, fallback: number, min: number, max: number): number {
   return typeof n === 'number' && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+
+function normalizeCameraOrbit(value: unknown): CameraOrbitPose | null {
+  if (!value || typeof value !== 'object') return null;
+  const entry = value as { offset?: Partial<Vec3>; lookOffset?: Partial<Vec3> };
+  if (!entry.offset) return null;
+  const offset = vec3(entry.offset, { x: 0, y: 0, z: 0 });
+  const distance = Math.hypot(offset.x, offset.y, offset.z);
+  // Allow zoomed + panned framing. The old 80 cap dropped valid free-orbit
+  // poses during validate/sync, so the other device reopened on the default.
+  if (distance < 0.05 || distance > 250) return null;
+  const look = entry.lookOffset ? vec3(entry.lookOffset, { x: 0, y: 0, z: 0 }) : null;
+  const hasLook = !!look && (Math.abs(look.x) + Math.abs(look.y) + Math.abs(look.z)) > 1e-4;
+  return {
+    offset: {
+      x: Number(offset.x.toFixed(4)),
+      y: Number(offset.y.toFixed(4)),
+      z: Number(offset.z.toFixed(4)),
+    },
+    ...(hasLook && look
+      ? {
+        lookOffset: {
+          x: Number(look.x.toFixed(4)),
+          y: Number(look.y.toFixed(4)),
+          z: Number(look.z.toFixed(4)),
+        },
+      }
+      : {}),
+  };
 }
 
 function vec3(input: Partial<Vec3> | undefined, fallback: Vec3): Vec3 {
@@ -147,6 +176,61 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
   ];
 }
 
+function rotationIsDefault(rotation: Vec3 | undefined) {
+  return !rotation || (rotation.x === 0 && rotation.y === 0 && rotation.z === 0);
+}
+
+function animationSignature(clip: MockupProject['animation'] | undefined): string {
+  if (!clip) return '';
+  return JSON.stringify({
+    duration: clip.duration,
+    fps: clip.fps,
+    loop: clip.loop,
+    tracks: (clip.tracks ?? []).map((track) => ({
+      targetId: track.targetId,
+      property: track.property,
+      keyframes: track.keyframes.map((frame) => [frame.time, frame.value, frame.ease ?? null]),
+    })),
+  });
+}
+
+/**
+ * The open tab can hold a camera, animation, or device angle that the last file
+ * write missed. Keep that session state when the stored file is still on the default.
+ */
+export function keepSessionPose(stored: MockupProject, session: MockupProject): MockupProject {
+  const cameraOrbit = stored.cameraOrbit?.offset
+    ? stored.cameraOrbit
+    : (session.cameraOrbit?.offset ? session.cameraOrbit : (stored.cameraOrbit ?? null));
+  const deviceId = stored.devices[0]?.id ?? session.devices[0]?.id ?? 'device-main';
+  const defaultAnim = animationSignature(createDefaultAnimation(deviceId));
+  const storedAnim = animationSignature(stored.animation);
+  const sessionAnim = animationSignature(session.animation);
+  const animation = storedAnim === defaultAnim && sessionAnim !== defaultAnim
+    ? session.animation
+    : stored.animation;
+  const sessionDevices = new Map(session.devices.map((device) => [device.id, device]));
+  let devicesChanged = false;
+  const devices = stored.devices.map((device) => {
+    const live = sessionDevices.get(device.id);
+    if (!live || !rotationIsDefault(device.rotation) || rotationIsDefault(live.rotation)) return device;
+    devicesChanged = true;
+    return {
+      ...device,
+      rotation: { ...live.rotation },
+      position: live.position ? { ...live.position } : device.position,
+    };
+  });
+  const animationChanged = animationSignature(animation) !== storedAnim;
+  if (!devicesChanged && cameraOrbit === stored.cameraOrbit && !animationChanged) return stored;
+  return commitActiveScene({
+    ...stored,
+    cameraOrbit,
+    animation,
+    ...(devicesChanged ? { devices } : {}),
+  });
+}
+
 export function validateProject(value: unknown): MockupProject {
   if (!value || typeof value !== 'object') throw new Error('This is not a valid mokstudio project.');
   const input = value as Partial<MockupProject>;
@@ -197,7 +281,10 @@ export function validateProject(value: unknown): MockupProject {
   const publishClay = publishDevice.clayMode ?? clayMode;
 
   const soundtrackData = typeof input.soundtrackData === 'string'
-    && /^data:audio\/(mpeg|mp3|wav|wave|ogg|mp4|x-m4a|aac);base64,/i.test(input.soundtrackData)
+    && (
+      /^data:audio\/(mpeg|mp3|wav|wave|ogg|mp4|x-m4a|aac);base64,/i.test(input.soundtrackData)
+      || isSceneAssetRef(input.soundtrackData)
+    )
     ? input.soundtrackData
     : null;
   const soundtrackName = soundtrackData
@@ -233,7 +320,10 @@ export function validateProject(value: unknown): MockupProject {
     : DEFAULT_PROJECT.reflectionMap;
   const reflectionMapImage = reflectionMap === 'custom'
     && typeof input.reflectionMapImage === 'string'
-    && /^data:image\/(png|jpeg|webp);base64,/.test(input.reflectionMapImage)
+    && (
+      /^data:image\/(png|jpeg|webp);base64,/.test(input.reflectionMapImage)
+      || isSceneAssetRef(input.reflectionMapImage)
+    )
     ? input.reflectionMapImage
     : null;
 
@@ -307,6 +397,7 @@ export function validateProject(value: unknown): MockupProject {
     cameraLens: (['ultrawide', 'wide', 'standard', 'telephoto'] as const).includes(input.cameraLens as never)
       ? (input.cameraLens as MockupProject['cameraLens'])
       : DEFAULT_PROJECT.cameraLens,
+    cameraOrbit: normalizeCameraOrbit(input.cameraOrbit),
     compositionMode,
     devices,
     selectedDeviceId,
@@ -329,8 +420,15 @@ export function validateProject(value: unknown): MockupProject {
 
   const scenes = normalizeCompositionScenes(input, bg, gradientColors, draft);
   const activeScene = scenes.find((scene) => scene.id === activeSceneId) ?? scenes[0];
+  // Prefer whichever copy still has a free-orbit pose. Older scene snapshots
+  // without cameraOrbit used to wipe a good top-level angle on open/sync.
+  const stageOrbit = activeScene.stage?.cameraOrbit ?? null;
+  const draftOrbit = draft.cameraOrbit ?? null;
+  const resolvedOrbit = stageOrbit?.offset ? stageOrbit : (draftOrbit?.offset ? draftOrbit : (stageOrbit ?? draftOrbit));
+  if (activeScene.stage) activeScene.stage.cameraOrbit = resolvedOrbit;
   return applySceneStage({
     ...draft,
+    cameraOrbit: resolvedOrbit,
     scenes,
     activeSceneId: activeScene.id,
     background: activeScene.background,
@@ -342,7 +440,7 @@ function normalizeStoredStage(raw: unknown, fallback: MockupProject): SceneStage
   const source = (raw && typeof raw === 'object' ? raw : {}) as Partial<SceneStage>;
   const hasDevices = Array.isArray(source.devices) && source.devices.length > 0;
   if (!hasDevices) return captureSceneStage(fallback);
-  const devices = normalizeDevices({
+  const normalizedDevices = normalizeDevices({
     devices: source.devices,
     deviceId: source.devices?.[0]?.deviceId ?? fallback.deviceId,
     deviceColor: source.devices?.[0]?.deviceColor ?? fallback.deviceColor,
@@ -351,11 +449,40 @@ function normalizeStoredStage(raw: unknown, fallback: MockupProject): SceneStage
     scale: fallback.scale,
     screenshot: null,
   });
+  // Cloud sync strips inline images off the scene snapshot. If that copy is empty
+  // but the live device still has the picture, keep the live one.
+  const liveDevices = new Map(fallback.devices.map((device) => [device.id, device]));
+  const devices = normalizedDevices.map((device) => {
+    const live = liveDevices.get(device.id);
+    if (!live) return device;
+    const screenshot = device.screenshot
+      || (live.screenshot && isValidScreenMediaDataUrl(live.screenshot) ? live.screenshot : null);
+    const screenLayers = device.screenLayers?.length
+      ? device.screenLayers
+      : (live.screenLayers?.length ? live.screenLayers : device.screenLayers);
+    if (screenshot === device.screenshot && screenLayers === device.screenLayers) return device;
+    return { ...device, screenshot, screenLayers };
+  });
   const selectedDeviceId = devices.some((device) => device.id === source.selectedDeviceId)
     ? String(source.selectedDeviceId)
     : devices[0].id;
   const sceneProps = normalizeSceneProps({ sceneProps: source.sceneProps });
-  const overlays = normalizeOverlays({ overlays: source.overlays });
+  const normalizedOverlays = normalizeOverlays({ overlays: source.overlays });
+  const liveOverlays = new Map((fallback.overlays ?? []).map((overlay) => [overlay.id, overlay]));
+  const seenOverlays = new Set(normalizedOverlays.map((overlay) => overlay.id));
+  const restoredOverlays = Array.isArray(source.overlays)
+    ? source.overlays.flatMap((raw) => {
+      if (!raw || typeof raw !== 'object') return [];
+      const id = typeof (raw as { id?: unknown }).id === 'string' ? (raw as { id: string }).id : '';
+      if (!id || seenOverlays.has(id)) return [];
+      const live = liveOverlays.get(id);
+      if (!live || live.kind !== 'image' || !live.imageData || !isValidScreenMediaDataUrl(live.imageData)) return [];
+      return [live];
+    })
+    : [];
+  const overlays = restoredOverlays.length
+    ? [...normalizedOverlays, ...restoredOverlays]
+    : normalizedOverlays;
   const animation = normalizeAnimation(source.animation, devices);
   const cameraView = ['front', 'left', 'right', 'top'].includes(String(source.cameraView))
     ? source.cameraView!
@@ -363,15 +490,32 @@ function normalizeStoredStage(raw: unknown, fallback: MockupProject): SceneStage
   const cameraLens = (['ultrawide', 'wide', 'standard', 'telephoto'] as const).includes(source.cameraLens as never)
     ? source.cameraLens!
     : fallback.cameraLens;
+  const cameraOrbit = Object.prototype.hasOwnProperty.call(source, 'cameraOrbit')
+    ? normalizeCameraOrbit(source.cameraOrbit)
+    : normalizeCameraOrbit(fallback.cameraOrbit);
   const reflectionRaw = typeof source.reflectionMap === 'string' ? source.reflectionMap : fallback.reflectionMap;
   const reflectionMap = REFLECTION_IDS.has(reflectionRaw)
     ? reflectionRaw as ReflectionMapSetting
     : fallback.reflectionMap;
-  const reflectionMapImage = reflectionMap === 'custom'
+  const sourceReflection = reflectionMap === 'custom'
     && typeof source.reflectionMapImage === 'string'
-    && /^data:image\/(png|jpeg|webp);base64,/.test(source.reflectionMapImage)
+    && (
+      /^data:image\/(png|jpeg|webp);base64,/.test(source.reflectionMapImage)
+      || isSceneAssetRef(source.reflectionMapImage)
+    )
     ? source.reflectionMapImage
     : null;
+  const reflectionMapImage = sourceReflection
+    ?? (
+      reflectionRaw === 'custom'
+      && typeof fallback.reflectionMapImage === 'string'
+      && (
+        /^data:image\/(png|jpeg|webp);base64,/.test(fallback.reflectionMapImage)
+        || isSceneAssetRef(fallback.reflectionMapImage)
+      )
+        ? fallback.reflectionMapImage
+        : null
+    );
   return {
     devices,
     selectedDeviceId,
@@ -386,6 +530,7 @@ function normalizeStoredStage(raw: unknown, fallback: MockupProject): SceneStage
     animation,
     cameraView,
     cameraLens,
+    cameraOrbit,
     compositionMode: source.compositionMode === 'split' ? 'split' : 'single',
     linkSplitTransform: source.linkSplitTransform !== false,
     publishTarget: source.publishTarget === 'ios' || source.publishTarget === 'android'
@@ -508,7 +653,10 @@ function normalizeOverlays(input: Partial<MockupProject>): SceneOverlay[] {
     if (!kind) return [];
     const imageData = kind === 'image'
       && typeof item.imageData === 'string'
-      && /^data:image\/(png|jpeg|webp);base64,/i.test(item.imageData)
+      && (
+        /^data:image\/(png|jpeg|webp);base64,/i.test(item.imageData)
+        || isSceneAssetRef(item.imageData)
+      )
       ? item.imageData
       : null;
     if (kind === 'image' && !imageData) return [];

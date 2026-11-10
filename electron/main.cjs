@@ -4,14 +4,65 @@ const { existsSync, appendFileSync } = require('node:fs');
 const path = require('node:path');
 
 const APP_NAME = 'mokstudio';
+const AUTH_PROTOCOL = 'mokstudio';
 app.setName(APP_NAME);
 
 const { decodeProjectFile, encodeProjectFile, isProjectFileName } = require('./projectFile.cjs');
 
 /** Absolute path Finder/Explorer asked us to open (macOS can fire before ready). */
 let pendingOpenPath = null;
+/** OAuth deep-link that arrived before the renderer was ready. */
+let pendingAuthCallbackUrl = null;
 /** @type {Electron.BrowserWindow | null} */
 let mainWindow = null;
+
+function isAuthCallbackUrl(raw) {
+  if (typeof raw !== 'string' || !raw) return false;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === `${AUTH_PROTOCOL}:`
+      && (parsed.hostname === 'auth' || parsed.pathname.startsWith('//auth') || parsed.pathname.includes('auth'));
+  } catch {
+    return raw.startsWith(`${AUTH_PROTOCOL}://`);
+  }
+}
+
+function notifyRendererAuthCallback(url) {
+  const win = focusMainWindow();
+  if (!win) {
+    pendingAuthCallbackUrl = url;
+    return;
+  }
+  if (win.webContents.isLoadingMainFrame()) {
+    pendingAuthCallbackUrl = url;
+    win.webContents.once('did-finish-load', () => {
+      if (!win.isDestroyed()) win.webContents.send('auth:callback', url);
+    });
+    return;
+  }
+  pendingAuthCallbackUrl = null;
+  win.webContents.send('auth:callback', url);
+}
+
+function queueAuthCallback(url) {
+  if (!isAuthCallbackUrl(url)) return;
+  pendingAuthCallbackUrl = url;
+  if (app.isReady()) notifyRendererAuthCallback(url);
+}
+
+// Register before ready so cold-start deep links resolve to this app.
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
+  }
+} else {
+  app.setAsDefaultProtocolClient(AUTH_PROTOCOL);
+}
+
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  queueAuthCallback(url);
+});
 
 function isOpenableProjectPath(filePath) {
   if (typeof filePath !== 'string' || !filePath) return false;
@@ -66,6 +117,13 @@ if (!gotSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
+    const authUrl = Array.isArray(argv)
+      ? argv.find((arg) => typeof arg === 'string' && isAuthCallbackUrl(arg))
+      : null;
+    if (authUrl) {
+      queueAuthCallback(authUrl);
+      return;
+    }
     const fromArgv = projectPathFromArgv(argv);
     if (fromArgv) queueOpenPath(fromArgv);
     else focusMainWindow();
@@ -178,8 +236,40 @@ function createWindow() {
     if (mainWindow === win) mainWindow = null;
   });
   const devUrl = process.env.VITE_DEV_SERVER_URL;
-  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+  let failRetries = 0;
+  win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
     console.error('[mockup-studio] did-fail-load', code, desc, url);
+    if (!isMainFrame || !devUrl) return;
+    // Dev server briefly offline → blank #0c0d0f window. Retry, then show a recovery page.
+    if (failRetries < 8) {
+      failRetries += 1;
+      setTimeout(() => {
+        if (!win.isDestroyed()) win.loadURL(devUrl);
+      }, 600 * failRetries);
+      return;
+    }
+    const safeDev = JSON.stringify(devUrl);
+    win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html>
+<html><head><meta charset="utf-8"/><title>mokstudio</title>
+<style>
+  html,body{margin:0;height:100%;background:#0c0d0f;color:#f6f7fb;font:15px/1.45 -apple-system,BlinkMacSystemFont,sans-serif}
+  main{min-height:100%;display:grid;place-content:center;gap:14px;padding:32px;text-align:center}
+  button{appearance:none;border:0;border-radius:10px;padding:10px 16px;background:#b794ff;color:#12141a;font-weight:600;cursor:pointer}
+  p{margin:0;color:#a0a7b6} code{color:#e8ecef}
+</style></head><body><main>
+  <h1 style="margin:0;font-size:22px">Dev server is offline</h1>
+  <p>Could not reach <code>${devUrl.replace(/</g, '')}</code> (${desc}).</p>
+  <p>Start it with <code>npm run dev</code>, then retry.</p>
+  <button id="retry">Retry</button>
+  <script>
+    const target = ${safeDev};
+    document.getElementById('retry').onclick = () => location.href = target;
+    setTimeout(() => { location.href = target; }, 2500);
+  </script>
+</main></body></html>`)}`);
+  });
+  win.webContents.on('did-finish-load', () => {
+    failRetries = 0;
   });
   win.webContents.on('render-process-gone', (_e, details) => {
     console.error('[mockup-studio] render-process-gone', details);
@@ -419,6 +509,12 @@ app.whenReady().then(() => {
     }
     await shell.openExternal(parsed.toString());
     return { ok: true };
+  });
+
+  ipcMain.handle('auth:takePendingCallback', async () => {
+    const url = pendingAuthCallbackUrl;
+    pendingAuthCallbackUrl = null;
+    return url;
   });
 
   ipcMain.handle('figma:request', async (_event, { apiPath, token }) => {

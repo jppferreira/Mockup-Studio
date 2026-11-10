@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Cuboid, Glasses, Headphones, Laptop, LayoutGrid, Monitor, Smartphone, Tablet, UserRound, Watch, Wrench,
 } from 'lucide-react';
@@ -32,12 +32,27 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
   cuboid: Cuboid,
 };
 import AccentThemePicker from './AccentThemePicker';
-import CloudSyncPanel, { type CloudTarget } from './CloudSyncPanel';
 import CloudAccountPanel from './CloudAccountPanel';
-import type { CloudLibraryStatus, CloudProjectEntry } from '../lib/cloudLibrary';
-import { syncButtonLabel } from '../lib/cloudLibrary';
+import {
+  cloudRowToDocument,
+  fetchCloudProjectMeta,
+  fetchCloudProjectRow,
+  listCloudProjectMeta,
+  shouldAdoptRemoteDocument,
+  type CloudProjectMeta,
+} from '../lib/cloudProjects';
+import { getProjectDocument, putProjectDocument } from '../lib/projectStore';
+import { getAuthSnapshot } from '../lib/supabaseClient';
 import { isDesktopApp } from '../lib/phoneMirror';
-import type { RecentProjectEntry } from '../lib/recentProjects';
+import {
+  documentToRecentEntry,
+  loadRecentProjects,
+  normalizeProjectName,
+  PROJECT_NAME_MAX,
+  shouldAdoptCloudName,
+  type RecentProjectEntry,
+} from '../lib/recentProjects';
+import { formatSyncedClock, lastSyncedStatus, useLastSyncedAt, type SyncConflict } from '../lib/cloudSync';
 import type { RecentScreenshot } from '../lib/recentScreenshots';
 import {
   templatesByCategory,
@@ -73,6 +88,47 @@ const NAV: { id: DashSection; label: string; icon: string }[] = [
   { id: 'settings', label: 'Settings', icon: iconSettings },
 ];
 
+const DASH_TABS_KEY = 'mockup-studio-dash-tabs';
+
+type DashTabMemory = {
+  section: DashSection;
+  deviceFilter: DeviceCategoryFilter;
+  templateCategory: TemplateCategory;
+};
+
+function isDashSection(value: unknown): value is DashSection {
+  return value === 'projects' || value === 'models' || value === 'templates' || value === 'assets' || value === 'settings';
+}
+
+function isTemplateCategory(value: unknown): value is TemplateCategory {
+  return value === 'devices' || value === 'scenes' || value === 'saved';
+}
+
+function isDeviceFilter(value: unknown): value is DeviceCategoryFilter {
+  return typeof value === 'string' && DEVICE_CATEGORY_TABS.some((tab) => tab.id === value);
+}
+
+/** Last home-screen tab, including the chips inside 3D models and Templates. */
+function readDashTabMemory(): DashTabMemory {
+  const fallback: DashTabMemory = {
+    section: 'projects',
+    deviceFilter: 'all',
+    templateCategory: 'devices',
+  };
+  try {
+    const raw = localStorage.getItem(DASH_TABS_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<DashTabMemory>;
+    return {
+      section: isDashSection(parsed.section) ? parsed.section : fallback.section,
+      deviceFilter: isDeviceFilter(parsed.deviceFilter) ? parsed.deviceFilter : fallback.deviceFilter,
+      templateCategory: isTemplateCategory(parsed.templateCategory) ? parsed.templateCategory : fallback.templateCategory,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 function editedPhrase(timestamp: number) {
   const startOf = (value: number) => {
     const date = new Date(value);
@@ -98,7 +154,23 @@ type ListedProject = {
   preview: string | null;
   filePath?: string;
   recent?: RecentProjectEntry;
+  cloudOnly?: boolean;
 };
+
+function syncWhereLabel(
+  onCloud: boolean,
+  email: string | null | undefined,
+  checked: boolean,
+  checkFailed: boolean,
+  desktop: boolean,
+) {
+  const here = desktop ? 'This Mac' : 'This browser';
+  if (!email) return { text: `${here} only`, kind: 'local' as const };
+  if (onCloud) return { text: `Cloud · ${email}`, kind: 'cloud' as const };
+  if (checkFailed) return { text: 'Cloud · check timed out', kind: 'local' as const };
+  if (!checked) return { text: 'Checking cloud…', kind: 'local' as const };
+  return { text: `${here} · not uploaded`, kind: 'local' as const };
+}
 
 function projectMeta(entry: { updatedAt: number; project: MockupProject | null }) {
   const edited = editedPhrase(entry.updatedAt);
@@ -116,15 +188,9 @@ export default function ProjectsDashboard({
   devices,
   license,
   licensingDisabled,
-  cloud,
-  cloudBusy,
-  cloudProjects,
-  onCloudUse,
-  onCloudStop,
-  onOpenCloudProject,
-  onRemoveCloudProject,
   onOpenProject,
   onRemoveProject,
+  onRenameProject,
   onNewProject,
   onBlankFile,
   onOpenFile,
@@ -144,6 +210,10 @@ export default function ProjectsDashboard({
   onShowOnboarding,
   onShowStudioTour,
   onMergeCloudProjects,
+  onApplyCloudDeletes,
+  onSyncConflicts,
+  onCloudSignedInChange,
+  cloudSignedInEmail,
   deviceUnlocked,
 }: {
   recentProjects: RecentProjectEntry[];
@@ -151,15 +221,13 @@ export default function ProjectsDashboard({
   devices: DeviceModel[];
   license: LicenseState;
   licensingDisabled: boolean;
-  cloud: CloudLibraryStatus | null;
-  cloudBusy: boolean;
-  cloudProjects: CloudProjectEntry[];
-  onCloudUse: (target: CloudTarget) => void;
-  onCloudStop: () => void;
-  onOpenCloudProject: (filePath: string) => void;
-  onRemoveCloudProject: (filePath: string) => void;
-  onOpenProject: (entry: RecentProjectEntry) => void;
+  onOpenProject: (entry: RecentProjectEntry, options?: { alreadySynced?: boolean }) => void;
   onRemoveProject: (id: string) => void;
+  onRenameProject: (
+    id: string,
+    name: string,
+    options?: { pushCloud?: boolean },
+  ) => Promise<{ ok: boolean; error?: string }>;
   onNewProject: () => void;
   onBlankFile?: () => void;
   onOpenFile: () => void;
@@ -179,18 +247,116 @@ export default function ProjectsDashboard({
   onShowOnboarding?: () => void;
   onShowStudioTour?: () => void;
   onMergeCloudProjects: (entries: RecentProjectEntry[]) => void;
+  onApplyCloudDeletes?: (localIds: string[]) => void;
+  onSyncConflicts?: (conflicts: SyncConflict[]) => void;
+  onCloudSignedInChange?: (email: string | null) => void;
+  cloudSignedInEmail?: string | null;
   deviceUnlocked: (deviceId: string) => boolean;
 }) {
-  const [section, setSection] = useState<DashSection>('projects');
+  const [rememberedTabs] = useState(readDashTabMemory);
+  const [section, setSection] = useState<DashSection>(rememberedTabs.section);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortMode>('edited');
   const [sortOpen, setSortOpen] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
-  const [deviceFilter, setDeviceFilter] = useState<DeviceCategoryFilter>('all');
-  const [templateCategory, setTemplateCategory] = useState<TemplateCategory>('devices');
+  const [deviceFilter, setDeviceFilter] = useState<DeviceCategoryFilter>(rememberedTabs.deviceFilter);
+  const [templateCategory, setTemplateCategory] = useState<TemplateCategory>(rememberedTabs.templateCategory);
   const syncMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DASH_TABS_KEY, JSON.stringify({ section, deviceFilter, templateCategory }));
+    } catch {
+      /* private mode */
+    }
+  }, [section, deviceFilter, templateCategory]);
   const desktop = isDesktopApp();
+  const [sessionEmail, setSessionEmail] = useState<string | null>(cloudSignedInEmail ?? null);
+  const accountEmail = cloudSignedInEmail || sessionEmail;
+  const lastSyncedAt = useLastSyncedAt();
+  const syncLabel = lastSyncedStatus(Boolean(accountEmail), lastSyncedAt);
+  const [cloudRows, setCloudRows] = useState<CloudProjectMeta[]>([]);
+  const [cloudChecked, setCloudChecked] = useState(false);
+  const [cloudCheckFailed, setCloudCheckFailed] = useState(false);
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameNotice, setRenameNotice] = useState<string | null>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const renamingIdRef = useRef<string | null>(null);
+  const renameCancelRef = useRef(false);
+  const recentRef = useRef(recentProjects);
+  const onRenameProjectRef = useRef(onRenameProject);
+  recentRef.current = recentProjects;
+  onRenameProjectRef.current = onRenameProject;
+  const cloudIds = useMemo(() => new Set(cloudRows.map((row) => row.local_id)), [cloudRows]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getAuthSnapshot().then((snap) => {
+      if (cancelled) return;
+      const email = snap.user?.email ?? null;
+      setSessionEmail(email);
+      onCloudSignedInChange?.(email);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [onCloudSignedInChange]);
+
+  const refreshCloudIds = useCallback(async () => {
+    if (!accountEmail) {
+      setCloudRows([]);
+      setCloudChecked(false);
+      setCloudCheckFailed(false);
+      return;
+    }
+    const meta = await listCloudProjectMeta();
+    if (!meta.ok) {
+      setCloudCheckFailed(true);
+      setCloudChecked(true);
+      return;
+    }
+    setCloudRows(meta.rows);
+    setCloudChecked(true);
+    setCloudCheckFailed(false);
+    for (const row of meta.rows) {
+      if (!row.local_id || renamingIdRef.current === row.local_id) continue;
+      const local = recentRef.current.find((entry) => entry.id === row.local_id);
+      if (!local) continue;
+      const adopted = shouldAdoptCloudName(
+        local.name,
+        local.updatedAt,
+        row.name,
+        Date.parse(row.updated_at) || 0,
+        false,
+      );
+      if (!adopted) continue;
+      void onRenameProjectRef.current(row.local_id, adopted, { pushCloud: false });
+    }
+  }, [accountEmail]);
+
+  useEffect(() => {
+    void refreshCloudIds();
+  }, [refreshCloudIds, recentProjects.length]);
+
+  useEffect(() => {
+    if (!accountEmail) return undefined;
+    const tick = () => { void refreshCloudIds(); };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', onVisible);
+    const interval = window.setInterval(tick, 20_000);
+    return () => {
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(interval);
+    };
+  }, [accountEmail, refreshCloudIds]);
 
   useEffect(() => {
     if (!sortOpen && !menuId) return;
@@ -213,37 +379,131 @@ export default function ProjectsDashboard({
 
   const projects = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const cloudNames = new Set(cloudProjects.map((entry) => entry.name.trim().toLowerCase()));
-    const synced: ListedProject[] = cloud?.configured
-      ? cloudProjects.map((entry) => ({
-        key: entry.path,
-        name: entry.name,
-        updatedAt: entry.updatedAt,
-        deviceId: entry.deviceId,
-        project: entry.project,
-        preview: entry.preview,
-        filePath: entry.path,
-      }))
-      : [];
-    const local: ListedProject[] = recentProjects
-      .filter((entry) => !cloud?.configured || !cloudNames.has(entry.name.trim().toLowerCase()))
-      .map((entry) => ({
-        key: entry.id,
-        name: entry.name,
-        updatedAt: entry.updatedAt,
-        deviceId: entry.deviceId,
-        project: entry.project,
-        preview: entry.preview,
-        recent: entry,
+    const localIds = new Set(recentProjects.map((entry) => entry.id));
+    const local: ListedProject[] = recentProjects.map((entry) => ({
+      key: entry.id,
+      name: entry.name,
+      updatedAt: entry.updatedAt,
+      deviceId: entry.deviceId,
+      project: entry.project,
+      preview: entry.preview,
+      recent: entry,
+      cloudOnly: false,
+    }));
+    const remoteOnly: ListedProject[] = cloudRows
+      .filter((row) => row.local_id && !localIds.has(row.local_id))
+      .map((row) => ({
+        key: row.local_id,
+        name: row.name?.trim() || 'Untitled composition',
+        updatedAt: Date.parse(row.updated_at) || 0,
+        deviceId: row.device_id || 'iphone-17-pro',
+        project: null,
+        preview: null,
+        cloudOnly: true,
       }));
-    return [...synced, ...local]
+    return [...local, ...remoteOnly]
       .filter((entry) => !needle || entry.name.toLowerCase().includes(needle))
       .sort((a, b) => (
         sort === 'name'
           ? a.name.localeCompare(b.name)
           : b.updatedAt - a.updatedAt
       ));
-  }, [recentProjects, cloudProjects, cloud?.configured, query, sort]);
+  }, [recentProjects, cloudRows, query, sort]);
+
+  const openListedProject = useCallback(async (entry: ListedProject) => {
+    setOpeningId(entry.key);
+    setOpenError(null);
+    try {
+      let doc = await getProjectDocument(entry.key);
+      const meta = await fetchCloudProjectMeta(entry.key).catch(() => null);
+      const remoteRevision = meta && !meta.deleted_at && typeof meta.revision === 'number'
+        ? meta.revision
+        : 0;
+      const takeCloud = !doc || shouldAdoptRemoteDocument(
+        doc ? { revision: doc.revision, baseRevision: doc.baseRevision } : null,
+        remoteRevision,
+      );
+      let openedFromCloud = false;
+      if (takeCloud && remoteRevision > 0) {
+        const row = await fetchCloudProjectRow(entry.key);
+        if (row && !row.deleted_at) {
+          doc = await cloudRowToDocument(row);
+          await putProjectDocument(doc, { id: doc.id, enqueueOutbox: false });
+          openedFromCloud = true;
+        }
+      }
+      if (!doc && entry.recent) {
+        onOpenProject(entry.recent);
+        return;
+      }
+      if (!doc) {
+        setOpenError(`Could not open “${entry.name}”.`);
+        return;
+      }
+      const recent = documentToRecentEntry(doc);
+      onMergeCloudProjects([recent]);
+      const synced = doc.baseRevision > 0 && doc.revision <= doc.baseRevision;
+      onOpenProject(recent, { alreadySynced: synced || openedFromCloud });
+    } catch (error) {
+      setOpenError(error instanceof Error ? error.message : 'Could not open that project.');
+    } finally {
+      setOpeningId(null);
+    }
+  }, [onMergeCloudProjects, onOpenProject]);
+
+  useEffect(() => {
+    if (!renamingId) return undefined;
+    const frame = requestAnimationFrame(() => {
+      renameInputRef.current?.focus();
+      renameInputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [renamingId]);
+
+  const beginListedRename = (entry: ListedProject) => {
+    renameCancelRef.current = false;
+    renamingIdRef.current = entry.key;
+    setMenuId(null);
+    setRenameNotice(null);
+    setRenamingId(entry.key);
+    setRenameDraft(entry.name);
+  };
+
+  const cancelListedRename = () => {
+    renameCancelRef.current = true;
+    renamingIdRef.current = null;
+    setRenamingId(null);
+  };
+
+  const commitListedRename = (entry: ListedProject) => {
+    if (renameCancelRef.current) {
+      renameCancelRef.current = false;
+      return;
+    }
+    if (renamingIdRef.current !== entry.key) return;
+    renamingIdRef.current = null;
+    setRenamingId(null);
+    const nextName = normalizeProjectName(renameDraft);
+    if (!nextName) {
+      setRenameNotice('Enter a project name.');
+      return;
+    }
+    setRenameNotice(null);
+    if (nextName === entry.name) return;
+    const previousRows = cloudRows;
+    setCloudRows((rows) => rows.map((row) => (
+      row.local_id === entry.key ? { ...row, name: nextName } : row
+    )));
+    void onRenameProject(entry.key, nextName).then((result) => {
+      if (!result.ok) {
+        setCloudRows(previousRows);
+        setRenameNotice(result.error || 'Couldn\'t rename that project.');
+      }
+    }).catch(() => {
+      setCloudRows(previousRows);
+      setRenameNotice('Couldn\'t rename that project.');
+    });
+  };
 
   const visibleDevices = useMemo(
     () => filterDevicesByCategory(devices, deviceFilter),
@@ -317,29 +577,25 @@ export default function ProjectsDashboard({
           <div className="sync-menu-wrap dash-sync-menu" ref={syncMenuRef}>
             <button
               type="button"
-              className={`sync-status ${cloud?.configured && !cloud.missing ? 'is-on' : ''}`}
+              className={`sync-status ${accountEmail ? 'is-on' : ''}`}
               aria-expanded={syncMenuOpen}
               aria-haspopup="dialog"
-              title={cloud?.configured
-                ? `Saving to ${cloud.folderLabel || cloud.label}`
-                : 'Save to iCloud Drive or Google Drive'}
+              title={accountEmail
+                ? `Signed in as ${accountEmail}.${lastSyncedAt ? ` Last synced ${formatSyncedClock(lastSyncedAt)}.` : ''}`
+                : 'Sign in to sync projects across web and Mac'}
               onClick={() => setSyncMenuOpen((open) => !open)}
             >
-              {syncButtonLabel(cloud)}
+              {syncLabel}
             </button>
             {syncMenuOpen && (
-              <CloudSyncPanel
-                cloud={cloud}
-                busy={cloudBusy}
+              <CloudAccountPanel
                 variant="menu"
-                onUse={(target) => {
-                  onCloudUse(target);
-                  setSyncMenuOpen(false);
-                }}
-                onStop={() => {
-                  onCloudStop();
-                  setSyncMenuOpen(false);
-                }}
+                recentProjects={recentProjects}
+                onMergeCloudProjects={onMergeCloudProjects}
+                onApplyCloudDeletes={onApplyCloudDeletes}
+                onConflicts={onSyncConflicts}
+                onSignedInChange={onCloudSignedInChange}
+                onAfterSync={() => { void refreshCloudIds(); }}
               />
             )}
           </div>
@@ -462,7 +718,7 @@ export default function ProjectsDashboard({
           {section === 'projects' && (
             <>
               <div className="dash-section-row">
-                <h2>{cloud?.configured ? 'Synced projects' : 'Recent projects'}</h2>
+                <h2>{accountEmail ? 'Synced projects' : 'Recent projects'}</h2>
                 <span>{projects.length === 1 ? '1 project' : `${projects.length} projects`}</span>
               </div>
               <div className="dash-grid">
@@ -479,19 +735,67 @@ export default function ProjectsDashboard({
 
                 {projects.map((entry) => {
                   const openEntry = () => {
-                    if (entry.filePath) onOpenCloudProject(entry.filePath);
-                    else if (entry.recent) onOpenProject(entry.recent);
+                    const fresh = loadRecentProjects().find((item) => item.id === entry.key);
+                    void openListedProject(fresh
+                      ? {
+                        ...entry,
+                        name: fresh.name,
+                        updatedAt: fresh.updatedAt,
+                        project: fresh.project,
+                        recent: fresh,
+                        cloudOnly: false,
+                      }
+                      : entry);
                   };
+                  const renaming = renamingId === entry.key;
+                  const where = syncWhereLabel(
+                    cloudIds.has(entry.key) || Boolean(entry.cloudOnly),
+                    accountEmail,
+                    cloudChecked,
+                    cloudCheckFailed,
+                    desktop,
+                  );
+                  const copy = (
+                    <span className="dash-card-copy">
+                      {renaming ? (
+                        <label className="dash-card-rename">
+                          <span className="sr-only">Project name</span>
+                          <input
+                            ref={renameInputRef}
+                            className="dash-card-rename-input"
+                            value={renameDraft}
+                            maxLength={PROJECT_NAME_MAX}
+                            onChange={(event) => setRenameDraft(event.target.value)}
+                            onBlur={() => commitListedRename(entry)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                commitListedRename(entry);
+                              } else if (event.key === 'Escape') {
+                                event.preventDefault();
+                                cancelListedRename();
+                              }
+                            }}
+                          />
+                        </label>
+                      ) : (
+                        <strong>{entry.name}</strong>
+                      )}
+                      <span>{projectMeta(entry)}</span>
+                      <span className={`dash-sync-where is-${where.kind}`}>{where.text}</span>
+                    </span>
+                  );
                   return (
                     <article
                       key={entry.key}
-                      className={`dash-card${menuId === entry.key ? ' is-menu-open' : ''}`}
+                      className={`dash-card${menuId === entry.key ? ' is-menu-open' : ''}${renaming ? ' is-renaming' : ''}`}
                     >
                       <button
                         type="button"
                         className="dash-card-open"
                         onClick={openEntry}
-                        title={`Open ${entry.name}`}
+                        title={openingId === entry.key ? `Opening ${entry.name}` : `Open ${entry.name}`}
+                        disabled={openingId === entry.key}
                       >
                         <span className="dash-card-thumb">
                           {entry.project ? (
@@ -503,11 +807,9 @@ export default function ProjectsDashboard({
                             <img className="dash-cloud-preview" src={entry.preview} alt="" />
                           ) : null}
                         </span>
-                        <span className="dash-card-copy">
-                          <strong>{entry.name}</strong>
-                          <span>{projectMeta(entry)}</span>
-                        </span>
+                        {renaming ? null : copy}
                       </button>
+                      {renaming ? copy : null}
                       <div
                         className="dash-card-menu"
                         onPointerDown={(event) => event.stopPropagation()}
@@ -526,13 +828,21 @@ export default function ProjectsDashboard({
                             <button type="button" onClick={() => { setMenuId(null); openEntry(); }}>Open</button>
                             <button
                               type="button"
+                              aria-label={`Rename ${entry.name}`}
+                              onClick={() => beginListedRename(entry)}
+                            >
+                              Rename
+                            </button>
+                            <button
+                              type="button"
+                              className="is-danger"
                               onClick={() => {
                                 setMenuId(null);
-                                if (entry.filePath) onRemoveCloudProject(entry.filePath);
-                                else if (entry.recent) onRemoveProject(entry.recent.id);
+                                setCloudRows((rows) => rows.filter((row) => row.local_id !== entry.key));
+                                onRemoveProject(entry.recent?.id ?? entry.key);
                               }}
                             >
-                              {entry.filePath ? `Remove from ${cloud?.label || 'sync'}` : 'Remove from recent'}
+                              Delete project
                             </button>
                           </div>
                         )}
@@ -541,6 +851,12 @@ export default function ProjectsDashboard({
                   );
                 })}
               </div>
+              {openError && (
+                <p className="dash-empty" role="alert">{openError}</p>
+              )}
+              {renameNotice && (
+                <p className="dash-empty" role="alert">{renameNotice}</p>
+              )}
               {query.trim() && projects.length === 0 && (
                 <p className="dash-empty">No projects match “{query.trim()}”.</p>
               )}
@@ -623,7 +939,7 @@ export default function ProjectsDashboard({
                 )}
               </div>
               {templateCategory === 'saved' && visibleTemplates.length === 0 ? (
-                <p className="dash-empty">Save as template from the File menu or Transform while a project is open. With sync on, templates also live in your iCloud or Drive folder.</p>
+                <p className="dash-empty">Save as template from the File menu or Transform while a project is open. Signed-in accounts sync templates with your cloud projects.</p>
               ) : (
               <div className="dash-grid">
                 {toolsetSwitchAvailable && templateCategory !== 'saved' && onAddShippedTemplate && (
@@ -770,13 +1086,10 @@ export default function ProjectsDashboard({
               <CloudAccountPanel
                 recentProjects={recentProjects}
                 onMergeCloudProjects={onMergeCloudProjects}
-              />
-              <CloudSyncPanel
-                cloud={cloud}
-                busy={cloudBusy}
-                variant="settings"
-                onUse={onCloudUse}
-                onStop={onCloudStop}
+                onApplyCloudDeletes={onApplyCloudDeletes}
+                onConflicts={onSyncConflicts}
+                onSignedInChange={onCloudSignedInChange}
+                onAfterSync={() => { void refreshCloudIds(); }}
               />
               <div className="dash-setting">
                 <strong>Plan</strong>
@@ -852,8 +1165,8 @@ export default function ProjectsDashboard({
           )}
 
           <p className="dash-footer">
-            {cloud?.configured && !cloud.missing
-              ? `Saving to ${cloud.folderLabel} automatically`
+            {cloudSignedInEmail
+              ? `Signed in as ${cloudSignedInEmail} · syncing to your account`
               : 'All changes saved automatically'}
           </p>
         </main>

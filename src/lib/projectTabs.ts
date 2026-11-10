@@ -1,4 +1,5 @@
 import { placeholderForDevice } from './demo';
+import { createDocumentId } from './sceneDocument';
 import {
   DEFAULT_GRADIENT, DEFAULT_PROJECT, createDefaultAnimation,
   type MockupProject,
@@ -12,6 +13,8 @@ export interface ProjectTab {
   animTime: number;
   animPlaying: boolean;
   timelineOpen: boolean;
+  /** Stable scene-document id for local-first / cloud sync identity. */
+  documentId?: string | null;
   /** File inside the iCloud / Drive sync folder, when this tab is saved there. */
   syncPath?: string | null;
   /**
@@ -54,6 +57,7 @@ export function createProjectTab(project?: MockupProject, partial?: Partial<Omit
     animTime: partial?.animTime ?? 0,
     animPlaying: partial?.animPlaying ?? false,
     timelineOpen: partial?.timelineOpen ?? false,
+    documentId: partial?.documentId ?? createDocumentId(),
     syncPath: partial?.syncPath ?? null,
     shippedTemplateId: partial?.shippedTemplateId ?? null,
   };

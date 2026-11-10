@@ -81,6 +81,10 @@ interface Window {
       mimeType: string,
     ) => Promise<{ canceled: boolean; path?: string }>;
     openExternal: (url: string) => Promise<{ ok: boolean }>;
+    /** Consume a cold-start OAuth deep link (`mokstudio://auth/callback?code=…`). */
+    takePendingAuthCallback?: () => Promise<string | null>;
+    /** Live OAuth deep-link handoff from the system browser (Figma-style). */
+    onAuthCallback?: (handler: (url: string) => void) => () => void;
     updateStatus?: () => Promise<{
       state: 'idle' | 'downloading' | 'ready';
       version?: string | null;

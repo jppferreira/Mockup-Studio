@@ -3,7 +3,7 @@ import { useAccentTheme, type AccentTheme } from '../lib/accentTheme';
 
 const OPTIONS: { id: Exclude<AccentTheme, 'custom'>; label: string }[] = [
   { id: 'green', label: 'Green' },
-  { id: 'purple', label: 'Purple' },
+  { id: 'purple', label: 'Lilac' },
   { id: 'coral', label: 'Coral' },
 ];
 

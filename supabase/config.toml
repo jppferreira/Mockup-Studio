@@ -3,3 +3,6 @@
 
 [functions.device-model-url]
 verify_jwt = false
+
+[functions.bind-license]
+verify_jwt = false

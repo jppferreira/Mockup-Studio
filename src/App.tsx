@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
   Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Bot, Box, Camera, Check, ChevronDown, Circle, CircleOff, Cuboid,
@@ -15,7 +15,7 @@ import AgentChatPanel, { type AgentChatMessage } from './components/AgentChatPan
 import AnimationPresetsPanel from './components/AnimationPresetsPanel';
 import AnimationTimeline from './components/AnimationTimeline';
 import ViewAxisGizmo from './components/ViewAxisGizmo';
-import CloudSyncPanel, { type CloudTarget } from './components/CloudSyncPanel';
+import CloudAccountPanel from './components/CloudAccountPanel';
 import ProjectsDashboard from './components/ProjectsDashboard';
 import ChangeLogPanel from './components/ChangeLogPanel';
 import CompositionSwitcher from './components/CompositionSwitcher';
@@ -61,6 +61,7 @@ import {
 import { tweakFromPreset, type MaterialPresetId } from './lib/materialPresets';
 import {
   isDevToolsetAvailable,
+  setDevAccessAccount,
   loadWorkspaceToolset,
   saveWorkspaceToolset,
   type WorkspaceToolset,
@@ -157,7 +158,6 @@ import {
   PLAN_PRICES_GBP,
   canExportVideo,
   formatGbp,
-  isDeviceUnlocked,
   isFreeDevice,
   isResolutionAllowed,
   loadLicense,
@@ -166,14 +166,24 @@ import {
   upgradeCopy,
   type LicenseState,
 } from './lib/license';
+import { canUseDevice as isDeviceUnlocked, syncLicenseWithAccount } from './lib/entitlements';
 import {
-  canonicalProjectJson, isPathInsideLibrary, projectFromCloudRow, syncButtonLabel,
+  canonicalProjectJson, isPathInsideLibrary, projectFromCloudRow, projectFromStoredJson,
   type CloudLibraryStatus, type CloudProjectEntry,
 } from './lib/cloudLibrary';
-import { downloadBlob, safeFilename, validateProject } from './lib/project';
+import { downloadBlob, keepSessionPose, safeFilename, validateProject } from './lib/project';
 import {
-  encodeMockupFile, isProjectFileName, mockupDownloadName, MOCKUP_MIME, readProjectFileContents,
+  encodeMockupFile, encodeProjectJson, isProjectFileName, mockupDownloadName, MOCKUP_MIME,
+  parseMockupJson, readProjectFileContents,
 } from './lib/projectFile';
+import {
+  clearProjectRenames,
+  enqueueProjectRename,
+  getProjectDocument,
+  putProjectDocument,
+  sealProjectDocument,
+} from './lib/projectStore';
+import { createDocumentId } from './lib/sceneDocument';
 import {
   hydrateRecentScreenshots, loadRecentScreenshots, recentForPlatform, rememberRecentScreenshot,
   type RecentScreenshot,
@@ -196,13 +206,25 @@ import {
   type ProjectTab,
 } from './lib/projectTabs';
 import {
-  hydrateRecentProjects, loadRecentProjects, mergeRecentFromCloud, rememberRecentProject, removeRecentProject,
+  hydrateRecentProjects, loadRecentProjects, mergeRecentFromCloud, normalizeProjectName,
+  rememberRecentProject, renameRecentProject, removeRecentProject, removeRecentProjects,
+  documentToRecentEntry, MAX_RECENT, PROJECT_NAME_MAX,
   type RecentProjectEntry,
 } from './lib/recentProjects';
 import {
-  deleteCloudProject, pullCloudProjects, pushRecentToCloud,
+  cloudRowToDocument,
+  deleteCloudProject,
+  fetchCloudProjectMeta,
+  fetchCloudProjectRow,
+  pushRecentToCloud,
+  renameCloudProject,
+  shouldAdoptRemoteDocument,
 } from './lib/cloudProjects';
+import {
+  formatSyncedClock, lastSyncedStatus, noteLastSynced, pullOpenProjects, pushPendingChanges, resolveSyncConflict, syncNow, useLastSyncedAt, type ConflictResolution, type SyncConflict,
+} from './lib/cloudSync';
 import { getAuthSnapshot, onAuthChange } from './lib/supabaseClient';
+import CloudConflictModal from './components/CloudConflictModal';
 import {
   loadSessionWorkspace, sanitizeSessionFrameSize, saveSessionWorkspace,
   type SessionFrameSize,
@@ -985,6 +1007,12 @@ function measureFloatingMenu(anchor: HTMLElement): FloatingMenuBox {
   };
 }
 
+function cameraOrbitKey(orbit: { offset: Vec3; lookOffset?: Vec3 } | null | undefined) {
+  if (!orbit?.offset) return '';
+  const look = orbit.lookOffset;
+  return `${orbit.offset.x},${orbit.offset.y},${orbit.offset.z}|${look ? `${look.x},${look.y},${look.z}` : ''}`;
+}
+
 export default function App({ onShowOnboarding }: { onShowOnboarding?: () => void } = {}) {
   const [workspace, setWorkspace] = useState<Workspace>(EMPTY_WORKSPACE);
   const [customPresets, setCustomPresets] = useState<ScenePreset[]>(() => loadCustomScenePresets());
@@ -1011,12 +1039,13 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const skipSessionRestoreRef = useRef(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [workspaceToolset, setWorkspaceToolset] = useState<WorkspaceToolset>(() => loadWorkspaceToolset());
   const [pickedMaterial, setPickedMaterial] = useState<PickedMaterial | null>(null);
   const [studioSetFocus, setStudioSetFocus] = useState<StudioSetFocus>(null);
   const [templatesTick, setTemplatesTick] = useState(0);
   const [shippingTemplate, setShippingTemplate] = useState(false);
-  const toolsetSwitchAvailable = isDevToolsetAvailable();
+  const toolsetSwitchAvailable = isDevToolsetAvailable(accountEmail);
   const isDeveloperToolset = toolsetSwitchAvailable && workspaceToolset === 'developer';
 
   const setToolset = (next: WorkspaceToolset) => {
@@ -1104,6 +1133,13 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [lightGizmoActive, setLightGizmoActive] = useState(false);
   /** Dual-canvas shared orbit so both panes keep the same viewing angle (offset from device). */
   const [sharedOrbit, setSharedOrbit] = useState<{ offset: Vec3; lookOffset?: Vec3 } | null>(null);
+  const sharedOrbitRef = useRef(sharedOrbit);
+  sharedOrbitRef.current = sharedOrbit;
+  const orbitSaveTimerRef = useRef<number | null>(null);
+  const animSaveTimerRef = useRef<number | null>(null);
+  const orbitEchoRef = useRef('');
+  /** Tab id whose project.cameraOrbit was last mirrored into sharedOrbit. */
+  const orbitAppliedTabRef = useRef<string | null>(null);
   /** Skip the next camera-preset clear so restored template orbits survive project apply. */
   const preserveOrbitRef = useRef(false);
   /** Bumped on format/device changes so both panes snap to center instantly. */
@@ -1121,11 +1157,19 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [leftPanelHidden, setLeftPanelHidden] = useState(false);
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  const renamingTabIdRef = useRef<string | null>(null);
+  const renameCancelRef = useRef(false);
+  const renameDraftRef = useRef('');
+  const nameOnlySaveRef = useRef(new Set<string>());
   const [recentProjects, setRecentProjects] = useState<RecentProjectEntry[]>(() => loadRecentProjects());
+  const [syncConflicts, setSyncConflicts] = useState<SyncConflict[]>([]);
+  const [syncConflictBusy, setSyncConflictBusy] = useState(false);
   const [cloud, setCloud] = useState<CloudLibraryStatus | null>(null);
   const [cloudProjects, setCloudProjects] = useState<CloudProjectEntry[]>([]);
-  const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudSignedInEmail, setCloudSignedInEmail] = useState<string | null>(null);
+  const lastSyncedAt = useLastSyncedAt();
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
+  const folderSyncRetiredRef = useRef(false);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [canvasTool, setCanvasTool] = useState<CanvasTool>('composition');
   const [shapeMenu, setShapeMenu] = useState<'flat' | 'solid' | 'stage' | null>(null);
@@ -1162,6 +1206,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [androidMirrorSerial, setAndroidMirrorSerial] = useState<string | null>(null);
   const [mirrorBusy, setMirrorBusy] = useState(false);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const persistTabSnapshotRef = useRef<(tab: ProjectTab) => Promise<void>>(async () => undefined);
   const timelineBeforeHideRef = useRef(true);
   const overlayDragRef = useRef<{ id: string; pointerId: number } | null>(null);
   const mirrorStreamRef = useRef<MediaStream | null>(null);
@@ -1378,45 +1423,395 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     };
   }, [aspectDropdownOpen]);
 
-  const trackRecent = useCallback((nextProject: MockupProject) => {
-    const next = rememberRecentProject(nextProject);
+  const scheduleCloudSyncRef = useRef<(delayMs?: number) => void>(() => undefined);
+
+  const trackRecent = useCallback((
+    nextProject: MockupProject,
+    documentId?: string | null,
+    announceCloud = false,
+    pushCloud = true,
+  ) => {
+    const docId = documentId?.trim() || '';
+    const active = workspaceRef.current.tabs.find((tab) => tab.id === activeIdRef.current);
+    const liveCamera = docId && active?.documentId === docId
+      ? sharedOrbitRef.current
+      : null;
+    const sealed = commitActiveScene({
+      ...nextProject,
+      cameraOrbit: liveCamera?.offset ? liveCamera : (nextProject.cameraOrbit ?? null),
+    });
+    const next = rememberRecentProject(sealed, {
+      id: docId || undefined,
+      // Opening a project that is already in the account must not rewrite its row.
+      persist: pushCloud,
+    });
     setRecentProjects(next);
+    if (!pushCloud) return;
     const entry = next[0];
-    if (entry) void pushRecentToCloud(entry).catch(() => undefined);
+    if (entry) {
+      void (async () => {
+        const result = await pushRecentToCloud(entry);
+        if (result.ok) {
+          if (announceCloud) notifyRef.current('Saved to your account');
+          return;
+        }
+        if (!result.skipped) {
+          notifyRef.current(`Cloud sync: ${result.error}`);
+        }
+      })().catch((error) => {
+        notifyRef.current(error instanceof Error ? error.message : 'Could not sync this project');
+      });
+    }
   }, []);
 
   const mergeCloudProjects = useCallback((entries: RecentProjectEntry[]) => {
     setRecentProjects(mergeRecentFromCloud(entries));
   }, []);
 
+  const applyCloudDeletes = useCallback((localIds: string[]) => {
+    if (!localIds.length) return;
+    setRecentProjects(removeRecentProjects(localIds));
+  }, []);
+
+  const handleSyncConflicts = useCallback((conflicts: SyncConflict[]) => {
+    if (!conflicts.length) return;
+    setSyncConflicts((current) => {
+      const byId = new Map(current.map((item) => [item.localId, item]));
+      for (const item of conflicts) byId.set(item.localId, item);
+      return [...byId.values()];
+    });
+  }, []);
+
+  const resolveConflictChoice = useCallback(async (conflict: SyncConflict, choice: ConflictResolution) => {
+    setSyncConflictBusy(true);
+    const result = await resolveSyncConflict(conflict, choice);
+    setSyncConflictBusy(false);
+    if (!result.ok) {
+      notifyRef.current?.(result.error);
+      return;
+    }
+    setRecentProjects((current) => {
+      const without = current.filter((entry) => entry.id !== result.entry.id);
+      return mergeRecentFromCloud([result.entry, ...without]);
+    });
+    setSyncConflicts((current) => current.filter((item) => item.localId !== conflict.localId));
+    notifyRef.current?.(
+      choice === 'keep-local' ? 'Kept this device’s copy'
+        : choice === 'take-cloud' ? 'Loaded the cloud copy'
+          : 'Kept both copies',
+    );
+  }, []);
+
   const removeTrackedProject = useCallback((id: string) => {
+    const entry = loadRecentProjects().find((item) => item.id === id);
+    const name = entry?.name?.trim() || 'this project';
+    if (!window.confirm(
+      `Delete “${name}” permanently?\n\nThis cannot be undone. You won’t be able to recover this project.`,
+    )) {
+      return;
+    }
+
+    // Close open tabs for this document without re-adding it to Recent.
+    setWorkspace((ws) => {
+      const tabs = ws.tabs.filter((tab) => tab.documentId !== id);
+      if (tabs.length === ws.tabs.length) return ws;
+      for (const tab of ws.tabs) {
+        if (tab.documentId === id) changeLogsRef.current.delete(tab.id);
+      }
+      if (!tabs.length) return { tabs: [], activeId: null };
+      const activeStillOpen = tabs.some((tab) => tab.id === ws.activeId);
+      return {
+        tabs,
+        activeId: activeStillOpen ? ws.activeId : tabs[0].id,
+      };
+    });
+    setDeviceMenu(null);
+    setRenamingTabId(null);
+    setExportOpen(false);
+
     setRecentProjects(removeRecentProject(id));
     void deleteCloudProject(id).catch(() => undefined);
+    scheduleCloudSyncRef.current(400);
+    notifyRef.current(`Deleted “${name}”`);
   }, []);
+
+  const applyOpenProjectName = useCallback((id: string, nextName: string) => {
+    setWorkspace((ws) => {
+      let changed = false;
+      const tabs = ws.tabs.map((tab) => {
+        if (tab.documentId !== id || tab.project.name === nextName) return tab;
+        changed = true;
+        return { ...tab, project: { ...tab.project, name: nextName } };
+      });
+      return changed ? { ...ws, tabs } : ws;
+    });
+  }, []);
+
+  const renameTrackedProject = useCallback(async (
+    id: string,
+    name: string,
+    options?: { pushCloud?: boolean },
+  ): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const nextName = normalizeProjectName(name);
+    if (!id || !nextName) return { ok: false, error: 'Enter a project name.' };
+
+    if (options?.pushCloud === false) {
+      const dirtyOpen = workspaceRef.current.tabs.some((tab) => {
+        if (tab.documentId !== id) return false;
+        const baseline = baselineRef.current.get(tab.id);
+        if (!baseline) return false;
+        try {
+          const parsed = JSON.parse(baseline) as MockupProject;
+          return canonicalProjectJson({ ...parsed, name: tab.project.name })
+            !== canonicalProjectJson(tab.project);
+        } catch {
+          return false;
+        }
+      });
+      if (dirtyOpen) return { ok: true };
+    }
+
+    const needsTabUpdate = workspaceRef.current.tabs.some(
+      (tab) => tab.documentId === id && tab.project.name !== nextName,
+    );
+    if (needsTabUpdate) {
+      nameOnlySaveRef.current.add(id);
+      applyOpenProjectName(id, nextName);
+    }
+
+    let hadLocal = false;
+    const existing = loadRecentProjects().find((entry) => entry.id === id);
+    if (existing) {
+      hadLocal = true;
+      if (existing.name !== nextName || existing.project.name !== nextName) {
+        if (workspaceRef.current.tabs.some((tab) => tab.documentId === id)) {
+          nameOnlySaveRef.current.add(id);
+        }
+        const next = renameRecentProject(id, nextName);
+        if (next) setRecentProjects(next);
+        applyOpenProjectName(id, nextName);
+      }
+    } else {
+      const doc = await getProjectDocument(id);
+      if (doc && doc.scene.name !== nextName) {
+        hadLocal = true;
+        if (workspaceRef.current.tabs.some((tab) => tab.documentId === id)) {
+          nameOnlySaveRef.current.add(id);
+        }
+        await sealProjectDocument({
+          ...doc,
+          updatedAt: Date.now() + 1,
+          scene: { ...doc.scene, name: nextName },
+        });
+        const entry = documentToRecentEntry({
+          ...doc,
+          updatedAt: Date.now(),
+          scene: { ...doc.scene, name: nextName },
+        });
+        setRecentProjects((current) => mergeRecentFromCloud([
+          entry,
+          ...current.filter((item) => item.id !== id),
+        ]));
+        applyOpenProjectName(id, nextName);
+      } else if (doc) {
+        hadLocal = true;
+      }
+    }
+
+    if (options?.pushCloud === false) return { ok: true };
+
+    try {
+      await enqueueProjectRename(id, nextName);
+      const cloud = await renameCloudProject(id, nextName);
+      if (cloud.ok) {
+        await clearProjectRenames(id);
+        return { ok: true };
+      }
+      if (hadLocal) {
+        if (!cloud.skipped) {
+          notifyRef.current('Renamed on this device. The cloud name didn\'t update.');
+        }
+        return { ok: true };
+      }
+      await clearProjectRenames(id);
+      return {
+        ok: false,
+        error: cloud.skipped ? 'Sign in to rename cloud projects.' : 'Couldn\'t rename that project.',
+      };
+    } catch {
+      if (hadLocal) {
+        notifyRef.current('Renamed on this device. The cloud name didn\'t update.');
+        return { ok: true };
+      }
+      await clearProjectRenames(id).catch(() => undefined);
+      return { ok: false, error: 'Couldn\'t rename that project.' };
+    }
+  }, [applyOpenProjectName]);
 
   useEffect(() => {
     let cancelled = false;
-    const pullIfSignedIn = async () => {
-      const snap = await getAuthSnapshot();
+    let syncTimer = 0;
+    let syncing = false;
+    let licenseSynced = false;
+    let lastSyncError = '';
+
+    const syncIfSignedIn = async (options?: { license?: boolean; library?: boolean }) => {
+      if (syncing) return;
+      const snap = await getAuthSnapshot({ fresh: true });
       if (cancelled || !snap.user) return;
-      const remote = await pullCloudProjects();
-      if (cancelled || !remote.ok) return;
-      setRecentProjects(mergeRecentFromCloud(remote.entries));
+      syncing = true;
+      try {
+        if (options?.license !== false && !licenseSynced) {
+          const nextLicense = await syncLicenseWithAccount(loadLicense());
+          if (!cancelled) {
+            setLicense(nextLicense);
+            licenseSynced = true;
+          }
+        }
+        // Write the open canvas into the file before any upload or download.
+        // Otherwise a stale scene snapshot is what gets sent, and a cloud copy
+        // without the camera, pose, or lights replaces the live shot.
+        if (sessionReadyRef.current) {
+          for (const tab of workspaceRef.current.tabs) {
+            if (!tab.documentId?.trim()) continue;
+            const baseline = baselineRef.current.get(tab.id);
+            if (baseline) {
+              const liveCamera = tab.id === activeIdRef.current ? sharedOrbitRef.current : null;
+              const sealed = commitActiveScene({
+                ...tab.project,
+                cameraOrbit: liveCamera?.offset ? liveCamera : (tab.project.cameraOrbit ?? null),
+              });
+              // An idle canvas must not stamp a new time and beat the other
+              // device's save — that dropped added models and angles.
+              if (canonicalProjectJson(sealed) === baseline) continue;
+            }
+            try {
+              await persistTabSnapshotRef.current(tab);
+            } catch {
+              /* A failed local save should not block the account sync. */
+            }
+          }
+        }
+        // Edits upload the open file only. The full library pull runs on
+        // sign-in and Sync now — running it on every keystroke was timing out.
+        const pullLibrary = options?.library !== false;
+        const { flush, pull } = pullLibrary
+          ? await syncNow()
+          : { flush: await pushPendingChanges(), pull: { entries: [], deleted: [], conflicts: [], applied: 0, updatedIds: [] as string[], errors: [] as string[] } };
+        if (cancelled) return;
+        const openIds = workspaceRef.current.tabs
+          .map((tab) => tab.documentId?.trim() || '')
+          .filter(Boolean);
+        const openPull = await pullOpenProjects(openIds);
+        if (cancelled) return;
+        const pulledEntries = [...pull.entries];
+        const seenPullIds = new Set(pulledEntries.map((entry) => entry.id));
+        for (const entry of [...flush.entries, ...openPull.entries]) {
+          if (seenPullIds.has(entry.id)) continue;
+          seenPullIds.add(entry.id);
+          pulledEntries.push(entry);
+        }
+        const updatedIds = [...new Set([...pull.updatedIds, ...flush.updatedIds, ...openPull.updatedIds])];
+        if (pull.deleted.length) {
+          setRecentProjects(removeRecentProjects(pull.deleted.map((row) => row.local_id)));
+        }
+        if (pulledEntries.length) setRecentProjects(mergeRecentFromCloud(pulledEntries));
+        if (updatedIds.length) {
+          const updated = new Set(updatedIds);
+          const byId = new Map(pulledEntries.map((entry) => [entry.id, entry]));
+          setWorkspace((ws) => {
+            let changed = false;
+            const tabs = ws.tabs.map((tab) => {
+              const docId = tab.documentId?.trim();
+              if (!docId || !updated.has(docId)) return tab;
+              const entry = byId.get(docId);
+              if (!entry) return tab;
+              const current = canonicalProjectJson(tab.project);
+              const nextJson = canonicalProjectJson(entry.project);
+              baselineRef.current.set(tab.id, nextJson);
+              if (nextJson === current) return tab;
+              changed = true;
+              return { ...tab, project: entry.project };
+            });
+            if (changed) {
+              const active = tabs.find((tab) => tab.id === ws.activeId);
+              if (active) liveProjectRef.current = active.project;
+              workspaceRef.current = { ...ws, tabs };
+            }
+            return changed ? { ...ws, tabs } : ws;
+          });
+        }
+        const conflicts = [...flush.conflicts, ...pull.conflicts];
+        if (conflicts.length) handleSyncConflicts(conflicts);
+        const syncError = flush.errors[0] || pull.errors[0] || openPull.errors[0] || '';
+        if (syncError && syncError !== lastSyncError) {
+          lastSyncError = syncError;
+          notifyRef.current(`Cloud sync: ${syncError}`);
+        } else if (!syncError) {
+          lastSyncError = '';
+          noteLastSynced();
+        }
+      } finally {
+        syncing = false;
+      }
     };
-    void pullIfSignedIn().catch(() => undefined);
+
+    const scheduleSync = (delayMs = 1200) => {
+      window.clearTimeout(syncTimer);
+      syncTimer = window.setTimeout(() => {
+        void syncIfSignedIn({ license: false, library: false }).catch(() => undefined);
+      }, delayMs);
+    };
+    scheduleCloudSyncRef.current = scheduleSync;
+
+    const rememberAccount = (email: string | null | undefined) => {
+      setDevAccessAccount(email);
+      setAccountEmail(email?.trim().toLowerCase() || null);
+    };
+    void getAuthSnapshot().then((snap) => {
+      if (!cancelled) rememberAccount(snap.user?.email);
+    }).catch(() => undefined);
+    void syncIfSignedIn().catch(() => undefined);
     const stopAuth = onAuthChange((snap) => {
-      if (!snap.user) return;
-      void pullCloudProjects()
-        .then((remote) => {
-          if (remote.ok) setRecentProjects(mergeRecentFromCloud(remote.entries));
-        })
-        .catch(() => undefined);
+      rememberAccount(snap.user?.email);
+      if (!snap.user) {
+        licenseSynced = false;
+        return;
+      }
+      void syncIfSignedIn().catch(() => undefined);
     });
+
+    // Pull/push when returning to the app so web ↔ desktop stay aligned.
+    const onVisible = () => {
+      if (document.visibilityState === 'hidden') return;
+      scheduleSync(400);
+    };
+    const onFocus = () => scheduleSync(400);
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
+    // Periodic catch-up while both clients are open.
+    const interval = window.setInterval(() => {
+      void syncIfSignedIn({ license: false, library: false }).catch(() => undefined);
+    }, 4_000);
+
     return () => {
       cancelled = true;
       stopAuth();
+      window.clearTimeout(syncTimer);
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
+      scheduleCloudSyncRef.current = () => undefined;
     };
-  }, []);
+  }, [handleSyncConflicts]);
+
+  useEffect(() => {
+    if (!toolsetSwitchAvailable) {
+      setWorkspaceToolset('user');
+      return;
+    }
+    setWorkspaceToolset(loadWorkspaceToolset());
+  }, [toolsetSwitchAvailable]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1431,7 +1826,38 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       // so a crash / reopen lands back where you were in the workspace.
       let resumed = projects;
       if (saved?.tabs.length && !skipSessionRestoreRef.current && !workspaceRef.current.tabs.length) {
-        for (const tab of saved.tabs) resumed = rememberRecentProject(tab.project);
+        for (const tab of saved.tabs) {
+          const docId = tab.documentId?.trim() || createDocumentId();
+          tab.documentId = docId;
+          const stored = await getProjectDocument(docId).catch(() => null);
+          let project = stored?.scene ?? tab.project;
+          let adoptedCloud = false;
+          try {
+            const meta = await fetchCloudProjectMeta(docId);
+            const remoteRevision = meta && !meta.deleted_at && typeof meta.revision === 'number'
+              ? meta.revision
+              : 0;
+            if (shouldAdoptRemoteDocument(
+              stored ? { revision: stored.revision, baseRevision: stored.baseRevision } : null,
+              remoteRevision,
+            )) {
+              const row = await fetchCloudProjectRow(docId);
+              if (row && !row.deleted_at) {
+                const remoteDoc = await cloudRowToDocument(row);
+                await putProjectDocument(remoteDoc, { id: remoteDoc.id, enqueueOutbox: false });
+                project = remoteDoc.scene;
+                adoptedCloud = true;
+              }
+            }
+          } catch {
+            project = stored?.scene ?? tab.project;
+            adoptedCloud = false;
+          }
+          if (!adoptedCloud) project = keepSessionPose(project, tab.project);
+          tab.project = project;
+          baselineRef.current.set(tab.id, canonicalProjectJson(project));
+          resumed = rememberRecentProject(project, { id: docId, persist: false });
+        }
         const restored = { tabs: saved.tabs, activeId: saved.activeId };
         workspaceRef.current = restored;
         activeIdRef.current = restored.activeId;
@@ -1476,7 +1902,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           const previous = byId.get(entry.id);
           if (!previous || entry.updatedAt >= previous.updatedAt) byId.set(entry.id, entry);
         }
-        return [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 12);
+        return [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_RECENT);
       });
       sessionReadyRef.current = true;
     })();
@@ -1488,15 +1914,86 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   useEffect(() => {
     if (!sessionReadyRef.current) return undefined;
     const timer = window.setTimeout(() => {
-      void saveSessionWorkspace(workspaceRef.current, frameSizeRef.current).catch(() => undefined);
+      const liveCamera = sharedOrbitRef.current;
+      const activeId = activeIdRef.current;
+      const sealed = liveCamera?.offset && activeId
+        ? {
+          ...workspaceRef.current,
+          tabs: workspaceRef.current.tabs.map((tab) => (
+            tab.id === activeId
+              ? {
+                ...tab,
+                project: commitActiveScene({
+                  ...tab.project,
+                  cameraOrbit: liveCamera,
+                }),
+              }
+              : tab
+          )),
+        }
+        : workspaceRef.current;
+      void saveSessionWorkspace(sealed, frameSizeRef.current).catch(() => undefined);
     }, 300);
     return () => window.clearTimeout(timer);
   }, [workspace, exportAspectIds, previewFrame, exportResolution, customExportSize]);
 
+  /** Debounced local-first document autosave — cloud flush is scheduled separately. */
+  useEffect(() => {
+    if (!sessionReadyRef.current) return undefined;
+    const timer = window.setTimeout(() => {
+      const missingIds: { tabId: string; documentId: string }[] = [];
+      for (const tab of workspaceRef.current.tabs) {
+        let docId = tab.documentId?.trim() || '';
+        if (!docId) {
+          docId = createDocumentId();
+          tab.documentId = docId;
+          missingIds.push({ tabId: tab.id, documentId: docId });
+        }
+        void persistTabSnapshotRef.current(tab).catch(() => undefined);
+      }
+      if (missingIds.length) {
+        setWorkspace((ws) => ({
+          ...ws,
+          tabs: ws.tabs.map((tab) => {
+            const found = missingIds.find((item) => item.tabId === tab.id);
+            return found ? { ...tab, documentId: found.documentId } : tab;
+          }),
+        }));
+      }
+      // Push queued local edits / pull remote ones once signed in.
+      scheduleCloudSyncRef.current(1600);
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [workspace]);
+
   useEffect(() => {
     const flush = () => {
       if (!sessionReadyRef.current) return;
-      void saveSessionWorkspace(workspaceRef.current, frameSizeRef.current).catch(() => undefined);
+      const liveCamera = sharedOrbitRef.current;
+      const activeId = activeIdRef.current;
+      const sealedWs = liveCamera?.offset && activeId
+        ? {
+          ...workspaceRef.current,
+          tabs: workspaceRef.current.tabs.map((tab) => (
+            tab.id === activeId
+              ? {
+                ...tab,
+                project: commitActiveScene({
+                  ...tab.project,
+                  cameraOrbit: liveCamera,
+                }),
+              }
+              : tab
+          )),
+        }
+        : workspaceRef.current;
+      workspaceRef.current = sealedWs;
+      void saveSessionWorkspace(sealedWs, frameSizeRef.current).catch(() => undefined);
+      for (const tab of sealedWs.tabs) {
+        const docId = tab.documentId?.trim();
+        if (!docId) continue;
+        void persistTabSnapshotRef.current(tab).catch(() => undefined);
+      }
     };
     window.addEventListener('pagehide', flush);
     import.meta.hot?.dispose(flush);
@@ -1525,6 +2022,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     const next = nextRaw === current ? current : commitActiveScene(nextRaw);
     if (next !== current) {
       liveProjectRef.current = next;
+      workspaceRef.current = {
+        ...workspaceRef.current,
+        tabs: workspaceRef.current.tabs.map((tab) => (
+          tab.id === tabId ? { ...tab, project: next } : tab
+        )),
+      };
       const existing = changeLogsRef.current.get(tabId) ?? [];
       const recorded = recordProjectChange(existing, current, next);
       if (recorded !== existing) {
@@ -1690,14 +2193,16 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   ]);
 
   // Format / camera-preset / composition changes: snap both panes to center.
-  // Per-pane device model/finish swaps must NOT clear sharedOrbit — linked angle stays.
-  // Template restore sets preserveOrbitRef so authored free-orbit survives the apply.
+  // A saved free-orbit pose stays. Template restore sets preserveOrbitRef.
+  // A live orbit that has not been written onto the project yet must also stay —
+  // clearing it here was what dropped the angle before autosave could seal it.
   useEffect(() => {
-    if (preserveOrbitRef.current) {
+    if (preserveOrbitRef.current || project.cameraOrbit?.offset || sharedOrbitRef.current?.offset) {
       preserveOrbitRef.current = false;
       setCameraRecenterToken((n) => n + 1);
       return;
     }
+    sharedOrbitRef.current = null;
     setSharedOrbit(null);
     setCameraRecenterToken((n) => n + 1);
   }, [
@@ -1705,7 +2210,32 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     project.cameraLens,
     project.compositionMode,
     previewFrame,
+    project.cameraOrbit,
   ]);
+
+  // The file's free-orbit pose must land on the canvas before paint. Skipping when
+  // orbitEcho already matched left sharedOrbit null after a recenter, so reload
+  // showed the default angle even though cameraOrbit was on the project.
+  useLayoutEffect(() => {
+    const tabId = activeTab?.id ?? null;
+    const incoming = project.cameraOrbit ?? null;
+    const key = cameraOrbitKey(incoming);
+    const tabChanged = orbitAppliedTabRef.current !== tabId;
+    const stateKey = cameraOrbitKey(sharedOrbitRef.current);
+    if (!tabChanged && orbitEchoRef.current === key && stateKey === key) return;
+    orbitAppliedTabRef.current = tabId;
+    orbitEchoRef.current = key;
+    sharedOrbitRef.current = incoming;
+    if (incoming?.offset) {
+      preserveOrbitRef.current = true;
+      setSharedOrbit({
+        offset: { ...incoming.offset },
+        ...(incoming.lookOffset ? { lookOffset: { ...incoming.lookOffset } } : {}),
+      });
+      return;
+    }
+    if (tabChanged || stateKey) setSharedOrbit(null);
+  }, [project.cameraOrbit, activeTab?.id]);
 
   // Keep split size-guide plates on the black dimension style for both panes.
   useEffect(() => {
@@ -1762,6 +2292,36 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       return merged;
     });
   }, [setProject]);
+
+  const writeCameraOrbit = useCallback((orbit: { offset: Vec3; lookOffset?: Vec3 } | null) => {
+    // A null write from a missed canvas publish must not erase a real angle.
+    if (!orbit?.offset) return;
+    const key = cameraOrbitKey(orbit);
+    orbitEchoRef.current = key;
+    sharedOrbitRef.current = orbit;
+    setProject((current) => (
+      cameraOrbitKey(current.cameraOrbit) === key ? current : { ...current, cameraOrbit: orbit }
+    ));
+  }, [setProject]);
+
+  const rememberCameraOrbit = useCallback((orbit: { offset: Vec3; lookOffset?: Vec3 } | null) => {
+    if (!orbit?.offset) return;
+    sharedOrbitRef.current = orbit;
+    setSharedOrbit(orbit);
+    if (orbitSaveTimerRef.current != null) window.clearTimeout(orbitSaveTimerRef.current);
+    orbitSaveTimerRef.current = window.setTimeout(() => {
+      orbitSaveTimerRef.current = null;
+      writeCameraOrbit(orbit);
+    }, 320);
+  }, [writeCameraOrbit]);
+
+  const selectCameraView = useCallback((cameraView: CameraView) => {
+    if (orbitSaveTimerRef.current != null) window.clearTimeout(orbitSaveTimerRef.current);
+    orbitEchoRef.current = '';
+    sharedOrbitRef.current = null;
+    setSharedOrbit(null);
+    updateProject({ cameraView, cameraOrbit: null });
+  }, [updateProject]);
 
   const openShapeMenu = (kind: 'flat' | 'solid' | 'stage', button: HTMLButtonElement | null) => {
     if (shapeMenu === kind) {
@@ -1947,8 +2507,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     const next = direction === 'right'
       ? order[(index + 1) % order.length]
       : order[(index + order.length - 1) % order.length];
-    setSharedOrbit(null);
-    updateProject({ cameraView: next });
+    selectCameraView(next);
   };
 
   const onViewLongPress = (point: { clientX: number; clientY: number }) => {
@@ -2052,25 +2611,49 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       setWorkspace((ws) => ({ ...ws, activeId: id }));
     }
     setDeviceMenu(null);
+    renameCancelRef.current = false;
+    renamingTabIdRef.current = id;
     setRenamingTabId(id);
     setRenameDraft(currentName);
   };
 
   const commitRenameTab = () => {
-    if (!renamingTabId) return;
-    const nextName = renameDraft.trim() || 'Untitled composition';
-    setWorkspace((ws) => ({
-      ...ws,
-      tabs: ws.tabs.map((tab) => (
-        tab.id === renamingTabId
-          ? { ...tab, project: { ...tab.project, name: nextName.slice(0, 100) } }
-          : tab
-      )),
-    }));
+    if (renameCancelRef.current) {
+      renameCancelRef.current = false;
+      return;
+    }
+    const tabId = renamingTabIdRef.current;
+    if (!tabId) return;
+    renamingTabIdRef.current = null;
     setRenamingTabId(null);
+    const tab = workspaceRef.current.tabs.find((item) => item.id === tabId);
+    if (!tab) return;
+    const nextName = normalizeProjectName(renameDraftRef.current);
+    if (!nextName) {
+      notifyRef.current('Enter a project name.');
+      return;
+    }
+    if (nextName === tab.project.name.trim()) return;
+    const docId = tab.documentId?.trim();
+    if (!docId) {
+      setWorkspace((ws) => ({
+        ...ws,
+        tabs: ws.tabs.map((item) => (
+          item.id === tabId
+            ? { ...item, project: { ...item.project, name: nextName } }
+            : item
+        )),
+      }));
+      return;
+    }
+    void renameTrackedProject(docId, nextName).then((result) => {
+      if (!result.ok) notifyRef.current(result.error);
+    });
   };
 
   const cancelRenameTab = () => {
+    renameCancelRef.current = true;
+    renamingTabIdRef.current = null;
     setRenamingTabId(null);
   };
 
@@ -2095,7 +2678,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
   const closeTab = (id: string) => {
     const closing = workspace.tabs.find((tab) => tab.id === id);
-    if (closing) trackRecent(closing.project);
+    if (closing) trackRecent(closing.project, closing.documentId);
 
     setWorkspace((ws) => {
       const index = ws.tabs.findIndex((tab) => tab.id === id);
@@ -2118,7 +2701,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const goToRecentProjects = () => {
-    for (const tab of workspaceRef.current.tabs) trackRecent(tab.project);
+    for (const tab of workspaceRef.current.tabs) trackRecent(tab.project, tab.documentId);
     changeLogsRef.current.clear();
     setChangeLogVersion((version) => version + 1);
     setWorkspace({ tabs: [], activeId: null });
@@ -2130,15 +2713,22 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     setLeftWorkspaceTab('scenes');
   };
 
-  const openProjectInTab = (nextProject: MockupProject, notice?: string, syncPath?: string | null) => {
-    trackRecent(nextProject);
+  const openProjectInTab = (
+    nextProject: MockupProject,
+    notice?: string,
+    syncPath?: string | null,
+    documentId?: string | null,
+    announceCloud = false,
+    skipCloudPush = false,
+  ) => {
+    const docId = documentId?.trim() || createDocumentId();
+    trackRecent(nextProject, docId, announceCloud, !skipCloudPush);
     const canonical = canonicalProjectJson(nextProject);
     const ws = workspaceRef.current;
     let openedId = '';
     let nextWs: Workspace;
     if (!ws.tabs.length) {
-      const tab = createProjectTab(nextProject);
-      tab.syncPath = syncPath ?? null;
+      const tab = createProjectTab(nextProject, { documentId: docId, syncPath: syncPath ?? null });
       openedId = tab.id;
       nextWs = { tabs: [tab], activeId: tab.id };
     } else if (ws.tabs.length >= MAX_PROJECT_TABS) {
@@ -2148,14 +2738,20 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       nextWs = {
         tabs: ws.tabs.map((item) => (
           item.id === activeId
-            ? { ...item, project: nextProject, animTime: 0, animPlaying: false, syncPath: syncPath ?? null }
+            ? {
+              ...item,
+              project: nextProject,
+              animTime: 0,
+              animPlaying: false,
+              documentId: docId,
+              syncPath: syncPath ?? null,
+            }
             : item
         )),
         activeId,
       };
     } else {
-      const tab = createProjectTab(nextProject);
-      tab.syncPath = syncPath ?? null;
+      const tab = createProjectTab(nextProject, { documentId: docId, syncPath: syncPath ?? null });
       openedId = tab.id;
       nextWs = { tabs: [...ws.tabs, tab], activeId: tab.id };
     }
@@ -2176,8 +2772,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     return openedId;
   };
 
-  const openRecentProject = (entry: RecentProjectEntry) => {
-    const match = cloudRef.current?.configured
+  const openRecentProject = (
+    entry: RecentProjectEntry,
+    options?: { alreadySynced?: boolean },
+  ) => {
+    // Account rows are the library. Folder sync is desktop-only and retired.
+    const match = !options?.alreadySynced && cloudRef.current?.configured
       ? cloudProjects.find((item) => item.name.trim().toLowerCase() === entry.name.trim().toLowerCase())
       : undefined;
     if (match) {
@@ -2187,6 +2787,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     openProjectInTab(
       { ...entry.project, name: uniqueProjectName(entry.project.name || entry.name) },
       `Opened “${entry.name}”`,
+      null,
+      entry.id,
+      false,
+      Boolean(options?.alreadySynced),
     );
   };
 
@@ -2262,21 +2866,27 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       sceneLights: [],
       // Blank means blank: no stage under the device until one is picked from the Stage tool.
       showGroundBase: false,
-    }, `Opened blank file “${name}”`);
+    }, `Opened blank file “${name}”`, null, null, true);
   };
 
   const applyTemplateCameraOrbit = (template: CompositionTemplate) => {
-    const orbit = template.cameraOrbit;
-    if (orbit?.offset) {
+    const source = template.cameraOrbit;
+    const orbit = source?.offset
+      ? {
+        offset: { ...source.offset },
+        ...(source.lookOffset ? { lookOffset: { ...source.lookOffset } } : {}),
+      }
+      : null;
+    sharedOrbitRef.current = orbit;
+    orbitEchoRef.current = cameraOrbitKey(orbit);
+    if (orbit) {
       preserveOrbitRef.current = true;
-      setSharedOrbit({
-        offset: { ...orbit.offset },
-        ...(orbit.lookOffset ? { lookOffset: { ...orbit.lookOffset } } : {}),
-      });
-      return;
+      setSharedOrbit(orbit);
+      return orbit;
     }
     preserveOrbitRef.current = false;
     setSharedOrbit(null);
+    return null;
   };
 
   const startFromTemplate = (template: CompositionTemplate) => {
@@ -2290,19 +2900,24 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     }
     applyCustomFrame();
     const finalName = uniqueProjectName(template.label);
-    const nextProject = projectFromTemplate(template, { name: finalName });
+    const templateOrbit = applyTemplateCameraOrbit(template);
+    const nextProject = {
+      ...projectFromTemplate(template, { name: finalName }),
+      cameraOrbit: templateOrbit,
+    };
     const motion = template.motion ? getAnimationPreset(template.motion) : undefined;
     const playMotion = Boolean(motion && motion.loop && motion.id !== 'clear');
     const canAddTab = workspace.tabs.length < MAX_PROJECT_TABS;
     const editingShipped = isDeveloperToolset && isDevEditableTemplateId(template.id);
     setDeviceMenu(null);
     setTemplatePickerOpen(false);
-    applyTemplateCameraOrbit(template);
-    trackRecent(nextProject);
+    const docId = createDocumentId();
+    trackRecent(nextProject, docId);
 
     const canonical = canonicalProjectJson(nextProject);
     if (canAddTab) {
       const tab = createProjectTab(nextProject, {
+        documentId: docId,
         shippedTemplateId: isDevEditableTemplateId(template.id) ? template.id : null,
       });
       tab.syncPath = null;
@@ -2341,6 +2956,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               animTime: 0,
               animPlaying: playMotion,
               timelineOpen: false,
+              documentId: docId,
               syncPath: null,
               shippedTemplateId: isDevEditableTemplateId(template.id) ? template.id : tab.shippedTemplateId,
             }
@@ -2404,10 +3020,11 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           ...next,
           publishTarget: getDevice(patch.deviceId).platform,
           cameraView: switchingModel ? 'front' : next.cameraView,
+          cameraOrbit: switchingModel ? null : next.cameraOrbit,
         };
       }
       if (switchingModel) {
-        return { ...next, cameraView: 'front' };
+        return { ...next, cameraView: 'front', cameraOrbit: null };
       }
       return next;
     });
@@ -2526,7 +3143,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     {
       id: 'canvas',
       title: 'Canvas',
-      body: 'Orbit beside the model, drag the device to spin it, Shift-drag to move, and Space-drag to pan.',
+      body: 'Drag to orbit the camera, Shift-drag a device to move it, Alt-drag to tumble it, and Space-drag to pan.',
       target: '[data-tour="canvas"]',
       placement: 'left',
       prepare: prepareTourCanvas,
@@ -2583,84 +3200,78 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     return () => window.clearTimeout(timer);
   }, [hasOpenProject, prepareStudioTourChrome]);
 
-  persistCloudRef.current = async (tabId, snapshot, knownPath, options) => {
-    const api = window.mockupDesktop;
-    if (!api?.cloudWrite || !cloudRef.current?.configured) return null;
-    const canonical = canonicalProjectJson(snapshot);
-    const path = knownPath || syncPathByTabRef.current.get(tabId) || null;
-    if (!options?.force && path && savedJsonRef.current.get(path) === canonical) return path;
-    if (!options?.force && !path && baselineRef.current.get(tabId) === canonical) return null;
-    try {
-      const result = await api.cloudWrite({
-        filePath: path,
-        contents: JSON.stringify(snapshot, null, 2),
-        name: snapshot.name,
-      });
-      if (path && path !== result.path) savedJsonRef.current.delete(path);
-      savedJsonRef.current.set(result.path, canonical);
-      syncPathByTabRef.current.set(tabId, result.path);
-      setWorkspace((ws) => ({
-        ...ws,
-        tabs: ws.tabs.map((tab) => (
-          tab.id === tabId && tab.syncPath !== result.path ? { ...tab, syncPath: result.path } : tab
-        )),
-      }));
-      if (!options?.quiet) {
-        const where = cloudRef.current?.label || 'your drive';
-        notifyRef.current(result.unchanged ? `Already saved to ${where}` : `Saved to ${where}`);
+  persistCloudRef.current = async (
+    _tabId,
+    _snapshot,
+    _knownPath,
+    _options,
+  ) => {
+    // Account cloud sync is the only source of truth — do not dual-write to iCloud/Drive folders.
+    return null;
+  };
+
+  renameDraftRef.current = renameDraft;
+  persistTabSnapshotRef.current = async (tab) => {
+    const docId = tab.documentId?.trim();
+    if (!docId) return;
+    const isActive = tab.id === activeIdRef.current;
+    const liveCamera = isActive ? sharedOrbitRef.current : null;
+    // The scene snapshot is what the other device opens. Copy the canvas the
+    // user is looking at — camera, device angle, position, and lights — into
+    // that snapshot before the file is written.
+    const projectToSave = commitActiveScene({
+      ...tab.project,
+      cameraOrbit: liveCamera?.offset ? liveCamera : (tab.project.cameraOrbit ?? null),
+    });
+    if (nameOnlySaveRef.current.has(docId)) {
+      const baseline = baselineRef.current.get(tab.id);
+      let nameOnly = false;
+      if (baseline) {
+        try {
+          const parsed = JSON.parse(baseline) as MockupProject;
+          nameOnly = canonicalProjectJson({ ...parsed, name: projectToSave.name })
+            === canonicalProjectJson(projectToSave);
+        } catch {
+          nameOnly = false;
+        }
       }
-      return result.path;
-    } catch (error) {
-      notifyRef.current(error instanceof Error ? error.message : 'Could not sync this project');
-      return null;
+      if (nameOnly) {
+        nameOnlySaveRef.current.delete(docId);
+        const stored = await getProjectDocument(docId);
+        if (stored) {
+          if (stored.scene.name !== projectToSave.name) {
+            await sealProjectDocument({
+              ...stored,
+              updatedAt: Math.max(stored.updatedAt, Date.now()) + 1,
+              scene: { ...stored.scene, name: projectToSave.name },
+            });
+          }
+          baselineRef.current.set(tab.id, canonicalProjectJson(projectToSave));
+          return;
+        }
+      }
+      nameOnlySaveRef.current.delete(docId);
+    }
+    const savedJson = canonicalProjectJson(projectToSave);
+    await putProjectDocument(projectToSave, { id: docId, enqueueOutbox: true });
+    const live = workspaceRef.current.tabs.find((item) => item.id === tab.id);
+    const liveCameraNow = live && isActive ? sharedOrbitRef.current : null;
+    const liveProject = live
+      ? commitActiveScene({
+        ...live.project,
+        cameraOrbit: liveCameraNow?.offset ? liveCameraNow : (live.project.cameraOrbit ?? null),
+      })
+      : null;
+    if (liveProject && canonicalProjectJson(liveProject) === savedJson) {
+      baselineRef.current.set(tab.id, savedJson);
     }
   };
 
-  pushTemplatesRef.current = async (templates) => {
-    const api = window.mockupDesktop;
-    if (!api?.cloudTemplatesWrite || !cloudRef.current?.configured || cloudRef.current.missing) return;
-    const list = templates ?? loadSavedCompositions();
-    const canonical = canonicalTemplatesJson(list);
-    if (savedTemplatesJsonRef.current === canonical) return;
-    try {
-      const contents = serializeTemplatesLibrary(list);
-      const result = await api.cloudTemplatesWrite(contents);
-      savedTemplatesJsonRef.current = canonical;
-      if (!result.unchanged) {
-        /* Quiet — templates sync in the background with the project folder. */
-      }
-    } catch (error) {
-      notifyRef.current(error instanceof Error ? error.message : 'Could not sync templates');
-    }
+  pushTemplatesRef.current = async () => {
+    // Folder template sync retired — account sync owns the library.
   };
 
-  pullTemplatesRef.current = async (opts) => {
-    const api = window.mockupDesktop;
-    if (!api?.cloudTemplatesRead || !cloudRef.current?.configured || cloudRef.current.missing) return null;
-    try {
-      const file = await api.cloudTemplatesRead();
-      const local = loadSavedCompositions();
-      if (file.missing || !file.contents) {
-        if (local.length) await pushTemplatesRef.current(local);
-        return local;
-      }
-      const remote = parseTemplatesLibrary(file.contents);
-      const remoteCanonical = canonicalTemplatesJson(remote);
-      if (savedTemplatesJsonRef.current === remoteCanonical) return local;
-      const next = opts?.mergeLocal
-        ? mergeSavedCompositions(local, remote)
-        : remote;
-      const stored = replaceSavedCompositions(next);
-      setSavedCompositions(stored);
-      savedTemplatesJsonRef.current = canonicalTemplatesJson(stored);
-      if (opts?.mergeLocal || canonicalTemplatesJson(remote) !== canonicalTemplatesJson(stored)) {
-        await pushTemplatesRef.current(stored);
-      }
-      return stored;
-    } catch {
-      return null;
-    }
-  };
+  pullTemplatesRef.current = async () => null;
 
   const refreshCloudProjects = useCallback(async () => {
     const api = window.mockupDesktop;
@@ -2668,6 +3279,24 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     try {
       const rows = await api.cloudList();
       setCloudProjects(rows.map(projectFromCloudRow));
+      // Fold folder-synced projects into the account library so web sees them too.
+      let bridged = false;
+      for (const row of rows) {
+        if (!row.slim) continue;
+        try {
+          const { document, project } = parseMockupJson(row.slim);
+          const existing = await getProjectDocument(document.id);
+          if (existing) continue;
+          rememberRecentProject(project, { id: document.id });
+          bridged = true;
+        } catch {
+          /* Skip unreadable folder rows. */
+        }
+      }
+      if (bridged) {
+        setRecentProjects(loadRecentProjects());
+        scheduleCloudSyncRef.current(600);
+      }
     } catch (error) {
       notifyRef.current(error instanceof Error ? error.message : 'Could not read the sync folder');
     }
@@ -2681,7 +3310,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       if (!filePath) continue;
       try {
         const file = await api.cloudRead(filePath);
-        const parsed = validateProject(JSON.parse(file.contents) as unknown);
+        const parsed = projectFromStoredJson(JSON.parse(file.contents) as unknown);
         const diskJson = canonicalProjectJson(parsed);
         const localJson = canonicalProjectJson(tab.project);
         if (diskJson === localJson) {
@@ -2717,8 +3346,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     try {
       const file = await window.mockupDesktop?.cloudRead?.(filePath);
       if (!file) return;
-      const parsed = validateProject(JSON.parse(file.contents) as unknown);
-      openProjectInTab(parsed, `Opened “${parsed.name}”`, file.path);
+      const { document, project: parsed } = parseMockupJson(file.contents);
+      openProjectInTab(parsed, `Opened “${parsed.name}”`, file.path, document.id);
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Could not open that project');
     }
@@ -2734,7 +3363,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       if (!key || names.has(key)) continue;
       try {
         await api.cloudWrite({
-          contents: JSON.stringify(entry.project, null, 2),
+          contents: encodeProjectJson(entry.project, { documentId: entry.id }),
           name: entry.project.name || entry.name,
         });
         names.add(key);
@@ -2752,58 +3381,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         tab.syncPath ?? match?.path ?? null,
         { quiet: true, force: true },
       );
-    }
-  };
-
-  const enableCloud = async (target: CloudTarget) => {
-    const api = window.mockupDesktop;
-    if (!api?.cloudUse || !api.cloudPick) {
-      notify('Sync to iCloud or Google Drive is available in the Mac app.');
-      return;
-    }
-    setCloudBusy(true);
-    try {
-      const result = target === 'pick' ? await api.cloudPick() : await api.cloudUse(target);
-      setCloud(result.status);
-      if (!result.canceled && result.status.configured) {
-        await publishExistingWork();
-        await pullTemplatesRef.current({ mergeLocal: true });
-        await refreshCloudProjects();
-        const where = result.status.label || 'your drive';
-        notify(`Projects and templates now save to ${where} and sync from there.`);
-        setSyncMenuOpen(false);
-      }
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'Could not set up sync');
-    } finally {
-      setCloudBusy(false);
-    }
-  };
-
-  const stopCloud = async () => {
-    try {
-      const status = await window.mockupDesktop?.cloudClear?.();
-      if (status) setCloud(status);
-      setCloudProjects([]);
-      setSyncMenuOpen(false);
-      notify('Stopped syncing. Your files stay in the folder you chose.');
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'Could not stop syncing');
-    }
-  };
-
-  const removeCloudProject = async (filePath: string) => {
-    const entry = cloudProjects.find((item) => item.path === filePath);
-    const name = entry?.name || 'this project';
-    const where = cloud?.label || 'the sync folder';
-    if (!window.confirm(`Remove “${name}” from ${where}? This deletes the file from the sync folder.`)) return;
-    try {
-      await window.mockupDesktop?.cloudRemove?.(filePath);
-      setCloudProjects((current) => current.filter((item) => item.path !== filePath));
-      const recent = recentProjects.find((item) => item.name.trim().toLowerCase() === name.trim().toLowerCase());
-      if (recent) setRecentProjects(removeRecentProject(recent.id));
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'Could not remove that project');
     }
   };
 
@@ -2826,6 +3403,19 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     const api = window.mockupDesktop;
     if (!api?.cloudStatus) return undefined;
     refreshCloudStatus();
+    // One-time retirement of iCloud/Drive folder sync so desktop has a single sync source.
+    void api.cloudStatus().then(async (status) => {
+      if (!status?.configured || folderSyncRetiredRef.current) return;
+      folderSyncRetiredRef.current = true;
+      try {
+        const next = await api.cloudClear?.();
+        if (next) setCloud(next);
+        setCloudProjects([]);
+        notifyRef.current('Cloud sync now uses your account only (not iCloud or Drive folders).');
+      } catch {
+        /* keep going — account sync still works */
+      }
+    }).catch(() => undefined);
     const stop = api.onCloudChanged?.(() => {
       void pullRemoteRef.current();
     });
@@ -3358,10 +3948,28 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     });
   }, [setProject]);
 
-  const onCameraCommit = useCallback((position: Vec3) => {
+  const flushActiveFile = () => {
+    const tab = workspaceRef.current.tabs.find((item) => item.id === activeIdRef.current);
+    if (!tab?.documentId) return;
+    void persistTabSnapshotRef.current(tab);
+  };
+
+  const onCameraCommit = useCallback((
+    position: Vec3,
+    orbit?: { offset: Vec3; lookOffset?: Vec3 } | null,
+  ) => {
+    if (orbitSaveTimerRef.current != null) {
+      window.clearTimeout(orbitSaveTimerRef.current);
+      orbitSaveTimerRef.current = null;
+    }
+    // Prefer the pose the canvas just read. Falling back to the ref was how a
+    // gated publish no-op left mouse-orbit unsaved while typed Rotate X/Y/Z worked.
+    const sealed = orbit?.offset ? orbit : sharedOrbitRef.current;
+    if (sealed?.offset) writeCameraOrbit(sealed);
+    flushActiveFile();
     if (!timelineOpenRef.current) return;
     keyCameraPosition(position, animTimeRef.current);
-  }, [keyCameraPosition]);
+  }, [keyCameraPosition, writeCameraOrbit]);
 
   const onOrbitStart = useCallback(() => {
     setAnimPlaying(false);
@@ -3411,6 +4019,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     const targets = project.compositionMode === 'split' ? project.devices : selected;
     const next = applyAnimationPreset(animation, targets, preset);
     updateProject({ animation: next });
+    flushActiveFile();
     setAppliedMotionPresetId(preset.id === 'clear' ? null : preset.id);
     setAnimTime(0);
     setAnimPlaying(preset.id !== 'clear');
@@ -3434,6 +4043,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       setStudioAiStatus(status);
     }).then((result) => {
       updateProject({ animation: result.clip });
+      flushActiveFile();
       setAnimTime(0);
       setAnimPlaying(result.label !== 'Clear');
       setTimelineOpen(true);
@@ -3673,24 +4283,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   }, [meshOffer, meshExtracting]);
 
   const writeProjectFile = async (snapshot: MockupProject, opts?: { forceDialog?: boolean }) => {
-    const contents = JSON.stringify(snapshot, null, 2);
+    const contents = encodeProjectJson(snapshot, { documentId: activeTab?.documentId });
     const fileName = safeFilename(snapshot.name);
-    if (!opts?.forceDialog && window.mockupDesktop?.cloudWrite && cloudRef.current?.configured) {
-      const tabId = activeTab?.id;
-      if (!tabId) return false;
-      const savedPath = await persistCloudRef.current(
-        tabId,
-        snapshot,
-        activeTab?.syncPath ?? null,
-        { quiet: false, force: true },
-      );
-      if (savedPath) trackRecent(snapshot);
-      return Boolean(savedPath);
-    }
     if (window.mockupDesktop) {
       const result = await window.mockupDesktop.saveProject(contents, fileName);
       if (result.canceled) return false;
-      trackRecent(snapshot);
+      trackRecent(snapshot, activeTab?.documentId);
       if (result.path && cloudRef.current?.path && isPathInsideLibrary(result.path, cloudRef.current.path) && activeTab) {
         savedJsonRef.current.set(result.path, canonicalProjectJson(snapshot));
         syncPathByTabRef.current.set(activeTab.id, result.path);
@@ -3706,7 +4304,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     }
     const bytes = await encodeMockupFile(contents);
     downloadBlob(new Blob([bytes as BlobPart], { type: MOCKUP_MIME }), mockupDownloadName(fileName));
-    trackRecent(snapshot);
+    trackRecent(snapshot, activeTab?.documentId);
     notify(opts?.forceDialog ? 'Project downloaded as new file' : 'Project downloaded');
     return true;
   };
@@ -3737,14 +4335,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         ...clone,
         name: uniqueProjectName(`${clone.name || 'Untitled'} copy`),
       };
-      openProjectInTab(named, `Duplicated “${project.name}”`, null);
+      openProjectInTab(named, `Duplicated “${project.name}”`, null, createDocumentId());
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Unable to duplicate project');
     }
   };
 
   const applyProject = (data: string, filePath?: string) => {
-    const parsed = validateProject(JSON.parse(data) as unknown);
+    const { document, project: parsed } = parseMockupJson(data);
     const named = { ...parsed, name: uniqueProjectName(parsed.name || 'Opened project') };
     const libraryPath = cloudRef.current?.path;
     const inside = Boolean(filePath && libraryPath && isPathInsideLibrary(filePath, libraryPath));
@@ -3756,7 +4354,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         return;
       }
     }
-    openProjectInTab(named, `Opened “${named.name}”`, inside ? filePath : null);
+    openProjectInTab(named, `Opened “${named.name}”`, inside ? filePath : null, document.id);
   };
   const applyProjectRef = useRef(applyProject);
   applyProjectRef.current = applyProject;
@@ -4349,6 +4947,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         compositionMode: 'split',
         devices,
         cameraView: 'front',
+        cameraOrbit: null,
         linkSplitTransform: current.linkSplitTransform !== false,
       }, target);
     });
@@ -4440,6 +5039,19 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     }));
   }, []);
 
+  // Key-light gimbal only fires this on pointer-up (live drag stays in Three.js).
+  const commitLightPosition = useCallback((position: Vec3) => {
+    updateProject({ lightPosition: position });
+    flushActiveFile();
+  }, [updateProject]);
+
+  const onGizmoDraggingChange = useCallback((dragging: boolean) => {
+    setGizmoDragging(dragging);
+    // Device / prop / scene-light gizmo and free-drag update the project live;
+    // seal the file when the pointer comes up so a quick reload cannot miss them.
+    if (!dragging) flushActiveFile();
+  }, []);
+
   const onRotateDevice = (id: string, rotation: Vec3, opts?: { recordKeys?: boolean }) => {
     const recordKeys = opts?.recordKeys !== false;
     const nextRotation = {
@@ -4477,6 +5089,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       }
       return next;
     });
+    if (recordKeys) flushActiveFile();
   };
 
   const onMoveDevice = (id: string, position: Vec3, opts?: { recordKeys?: boolean }) => {
@@ -4509,6 +5122,9 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       }
       return next;
     });
+    // Same seal as gizmo rotate — mid-drag skips flush; pointer-up must not rely
+    // only on the debounced workspace autosave.
+    if (recordKeys) flushActiveFile();
   };
 
   const onMoveProp = (id: string, position: Vec3) => {
@@ -5461,7 +6077,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           : device
       ));
       const nextSelected = devices.find((d) => d.id === selected.id) ?? devices[0];
-      return syncProjectFromSelected({ ...current, devices, cameraView: 'front' }, nextSelected);
+      return syncProjectFromSelected({ ...current, devices, cameraView: 'front', cameraOrbit: null }, nextSelected);
     });
     setCameraRecenterToken((n) => n + 1);
     applyCustomFrame();
@@ -5635,7 +6251,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         className="project-tab-rename-input"
                         aria-label="Rename project"
                         value={renameDraft}
-                        maxLength={100}
+                        maxLength={PROJECT_NAME_MAX}
                         onChange={(e) => setRenameDraft(e.target.value)}
                         onBlur={commitRenameTab}
                         onKeyDown={(e) => {
@@ -5698,23 +6314,24 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         <div className="sync-menu-wrap" ref={syncMenuRef}>
           <button
             type="button"
-            className={`sync-status ${cloud?.configured && !cloud.missing ? 'is-on' : ''}`}
+            className={`sync-status ${cloudSignedInEmail ? 'is-on' : ''}`}
             aria-expanded={syncMenuOpen}
             aria-haspopup="dialog"
-            title={cloud?.configured
-              ? `Saving to ${cloud.folderLabel || cloud.label}`
-              : 'Save to iCloud Drive or Google Drive'}
+            title={cloudSignedInEmail
+              ? `Signed in as ${cloudSignedInEmail}.${lastSyncedAt ? ` Last synced ${formatSyncedClock(lastSyncedAt)}.` : ''}`
+              : 'Sign in to sync projects across web and Mac'}
             onClick={() => setSyncMenuOpen((open) => !open)}
           >
-            {syncButtonLabel(cloud)}
+            {lastSyncedStatus(Boolean(cloudSignedInEmail), lastSyncedAt)}
           </button>
           {syncMenuOpen && (
-            <CloudSyncPanel
-              cloud={cloud}
-              busy={cloudBusy}
+            <CloudAccountPanel
               variant="menu"
-              onUse={(target) => { void enableCloud(target); }}
-              onStop={() => { void stopCloud(); }}
+              recentProjects={recentProjects}
+              onMergeCloudProjects={mergeCloudProjects}
+              onApplyCloudDeletes={applyCloudDeletes}
+              onConflicts={handleSyncConflicts}
+              onSignedInChange={setCloudSignedInEmail}
             />
           )}
         </div>
@@ -5728,16 +6345,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           devices={allDevices}
           license={license}
           licensingDisabled={LICENSING_DISABLED}
-          cloud={cloud}
-          cloudBusy={cloudBusy}
-          cloudProjects={cloudProjects}
-          onCloudUse={(target) => { void enableCloud(target); }}
-          onCloudStop={() => { void stopCloud(); }}
-          onOpenCloudProject={(filePath) => { void openCloudProject(filePath); }}
-          onRemoveCloudProject={(filePath) => { void removeCloudProject(filePath); }}
           onOpenProject={openRecentProject}
           onRemoveProject={removeTrackedProject}
+          onRenameProject={renameTrackedProject}
           onMergeCloudProjects={mergeCloudProjects}
+          onApplyCloudDeletes={applyCloudDeletes}
+          onSyncConflicts={handleSyncConflicts}
+          onCloudSignedInChange={setCloudSignedInEmail}
+          cloudSignedInEmail={cloudSignedInEmail}
           onNewProject={() => setTemplatePickerOpen(true)}
           onBlankFile={startBlankFile}
           onOpenFile={() => void onOpen()}
@@ -6211,7 +6826,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 </div>
               ) : canvasHintVisible && !studioTourOpen ? (
                 <p className="canvas-usage-hint" role="status">
-                  Drag beside the model to orbit the camera · Drag the model to spin it · <kbd>Shift</kbd>+drag to move · <kbd>Space</kbd>+drag to pan
+                  Drag to orbit · <kbd>Shift</kbd>+drag to move · <kbd>Alt</kbd>+drag to tumble · <kbd>Space</kbd>+drag to pan
                   <button
                     type="button"
                     className="canvas-usage-hint-close"
@@ -6254,12 +6869,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         cameraPosition={animatedCamera}
                         gizmoActive={activePublishTarget === 'ios'}
                         sharedOrbit={sharedOrbit}
-                        onSharedOrbitChange={setSharedOrbit}
+                        onSharedOrbitChange={rememberCameraOrbit}
                         onCameraCommit={onCameraCommit}
                         onOrbitStart={onOrbitStart}
                         recenterToken={cameraRecenterToken}
                         lightGizmoActive={lightGizmoActive && activePublishTarget === 'ios'}
-                        onLightPositionChange={(position) => updateProject({ lightPosition: position })}
+                        onLightPositionChange={commitLightPosition}
                         selectedSceneLightId={
                           activePublishTarget === 'ios' && layerSelection.kind === 'scene-light'
                             ? layerSelection.id
@@ -6283,7 +6898,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         onClearSelection={() => { setDeviceMenu(null); setPickedMaterial(null); }}
                         onRotateDevice={onRotateDevice}
                         onMoveDevice={onMoveDevice}
-                        onGizmoDraggingChange={setGizmoDragging}
+                        onGizmoDraggingChange={onGizmoDraggingChange}
                         gizmoDragging={gizmoDragging}
                         screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
                         onSpacePanDrag={noteSpacePan}
@@ -6320,12 +6935,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         cameraPosition={animatedCamera}
                         gizmoActive={activePublishTarget === 'android'}
                         sharedOrbit={sharedOrbit}
-                        onSharedOrbitChange={setSharedOrbit}
+                        onSharedOrbitChange={rememberCameraOrbit}
                         onCameraCommit={onCameraCommit}
                         onOrbitStart={onOrbitStart}
                         recenterToken={cameraRecenterToken}
                         lightGizmoActive={lightGizmoActive && activePublishTarget === 'android'}
-                        onLightPositionChange={(position) => updateProject({ lightPosition: position })}
+                        onLightPositionChange={commitLightPosition}
                         selectedSceneLightId={
                           activePublishTarget === 'android' && layerSelection.kind === 'scene-light'
                             ? layerSelection.id
@@ -6349,7 +6964,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         onClearSelection={() => { setDeviceMenu(null); setPickedMaterial(null); }}
                         onRotateDevice={onRotateDevice}
                         onMoveDevice={onMoveDevice}
-                        onGizmoDraggingChange={setGizmoDragging}
+                        onGizmoDraggingChange={onGizmoDraggingChange}
                         gizmoDragging={gizmoDragging}
                         screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
                         onSpacePanDrag={noteSpacePan}
@@ -6378,12 +6993,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   liveStreamDeviceId={liveStreamDeviceId}
                   cameraPosition={animatedCamera}
                   sharedOrbit={sharedOrbit}
-                  onSharedOrbitChange={setSharedOrbit}
+                  onSharedOrbitChange={rememberCameraOrbit}
                   onCameraCommit={onCameraCommit}
                   onOrbitStart={onOrbitStart}
                   recenterToken={cameraRecenterToken}
                   lightGizmoActive={lightGizmoActive}
-                  onLightPositionChange={(position) => updateProject({ lightPosition: position })}
+                  onLightPositionChange={commitLightPosition}
                   selectedSceneLightId={layerSelection.kind === 'scene-light' ? layerSelection.id : null}
                   onSceneLightPositionChange={patchSceneLightPosition}
                   onSelectSceneLight={focusSceneLight}
@@ -6403,7 +7018,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   onClearSelection={() => { setDeviceMenu(null); setPickedMaterial(null); }}
                   onRotateDevice={onRotateDevice}
                   onMoveDevice={onMoveDevice}
-                  onGizmoDraggingChange={setGizmoDragging}
+                  onGizmoDraggingChange={onGizmoDraggingChange}
                   gizmoDragging={gizmoDragging}
                   screenDropDeviceId={dragOver ? getPublishEnvDevice(project).id : null}
                   onSpacePanDrag={noteSpacePan}
@@ -6575,10 +7190,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 y: animatedCamera.y - (displaySelected.position?.y ?? 0),
                 z: animatedCamera.z - (displaySelected.position?.z ?? 0),
               } : sharedOrbit?.offset ?? null}
-              onSelectView={(cameraView) => {
-                setSharedOrbit(null);
-                updateProject({ cameraView });
-              }}
+              onSelectView={selectCameraView}
             />
           </div>
           {previewAspect && !isDualCanvas && (
@@ -7126,7 +7738,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                       title={`${view.label} · ${view.hint}`}
                       aria-label={view.label}
                       aria-pressed={active}
-                      onClick={() => updateProject({ cameraView: view.id })}
+                      onClick={() => selectCameraView(view.id)}
                     >
                       <Icon size={16} strokeWidth={1.9} aria-hidden />
                       <span>{view.label}</span>
@@ -9088,7 +9700,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           chromeHidden={sidePanelsHidden}
           onToggle={toggleTimeline}
           clip={animation}
-          onChange={(next) => updateProject({ animation: next })}
+          onChange={(next) => {
+            updateProject({ animation: next });
+            // Timeline drags fire often; debounce the file seal like camera orbit.
+            if (animSaveTimerRef.current != null) window.clearTimeout(animSaveTimerRef.current);
+            animSaveTimerRef.current = window.setTimeout(() => {
+              animSaveTimerRef.current = null;
+              flushActiveFile();
+            }, 280);
+          }}
           currentTime={animTime}
           onSeek={setAnimTime}
           playing={animPlaying}
@@ -9453,10 +10073,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               <AccentThemePicker />
             </div>
             <div className="help-rows">
-              <div><MousePointer2 size={17} /><span>Drag empty canvas to orbit the camera. Tap empty sky to set the surround colour in Look. Drag a device to spin it freely; Shift+drag slides it. Right-drag or Space+drag pans the view. Scroll zooms. Rings and arrows still work for precise moves.</span></div>
+              <div><MousePointer2 size={17} /><span>Drag anywhere to orbit the camera — including over a device. Tap empty sky to set the surround colour in Look. Shift+drag slides a device; Alt+drag tumbles it. Right-drag or Space+drag pans the view. Scroll zooms. Rings and arrows still work for precise moves.</span></div>
               <div><ImagePlus size={17} /><span>Drop a screenshot onto the preview, or drop an FBX, DAE, OBJ, glTF, Blend, or C4D file to extract it as a device. Blend uses your local Blender install.</span></div>
               <div><MonitorSmartphone size={17} /><span>Plug in an iPhone or Android over USB and use Phone Mirror — it auto-detects the device. Snapshot freezes the live screen onto the mockup.</span></div>
-              <div><SlidersHorizontal size={17} /><span>Rings rotate on one axis; coloured arrows slide on X / Y / Z. Drag the device body to tumble freely, Shift+drag to reposition. Add more devices from Device → Add device, then Save as template (⇧⌘S) under Templates → Yours.</span></div>
+              <div><SlidersHorizontal size={17} /><span>Rings rotate on one axis; coloured arrows slide on X / Y / Z. Alt+drag tumbles freely, Shift+drag repositions. Add more devices from Device → Add device, then Save as template (⇧⌘S) under Templates → Yours.</span></div>
               <div><Gauge size={17} /><span>Space play/pause · long-press & drag to multi-select keys · set Ease on selection · Delete removes selected.</span></div>
               <div><Command size={17} /><span>⌘N Blank file · ⌘S Save · File menu → Save as / Duplicate / Export as · ⇧⌘S Save as template · ⌘Z Undo · ⌘D Add device · ⌘O Open · ⌘E Export · ⌘T New from template · ⌘W Close tab · . hide panels.</span></div>
             </div>
@@ -9567,6 +10187,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           </div>
         </div>
       )}
+      {syncConflicts.length > 0 && (
+        <CloudConflictModal
+          conflicts={syncConflicts}
+          busy={syncConflictBusy}
+          onResolve={(conflict, choice) => { void resolveConflictChoice(conflict, choice); }}
+          onDismiss={() => setSyncConflicts([])}
+        />
+      )}
+
       <FeedbackModal
         open={feedbackOpen}
         onClose={() => setFeedbackOpen(false)}

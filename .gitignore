@@ -24,3 +24,5 @@ public/models/*.bin
 .env.local
 .env.*.local
 supabase/.temp/
+
+.google-oauth.local

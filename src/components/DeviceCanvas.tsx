@@ -1,6 +1,6 @@
 import {
-  Suspense, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState,
-  type MutableRefObject, type ReactNode,
+  Component, Suspense, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  type ErrorInfo, type MutableRefObject, type ReactNode,
 } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, TransformControls, useGLTF } from '@react-three/drei';
@@ -129,8 +129,16 @@ interface Props {
    */
   sharedOrbit?: { offset: Vec3; lookOffset?: Vec3 } | null;
   onSharedOrbitChange?: (orbit: { offset: Vec3; lookOffset?: Vec3 }) => void;
-  /** User finished orbiting or dollying. World-space camera position. */
-  onCameraCommit?: (position: Vec3) => void;
+  /**
+   * User finished orbiting or dollying. World-space camera position plus the
+   * device-relative orbit that must be sealed into the project (typed rotation
+   * writes the project directly; mouse orbit must pass the pose here so it
+   * cannot be dropped by publishOrbit gates).
+   */
+  onCameraCommit?: (
+    position: Vec3,
+    orbit: { offset: Vec3; lookOffset?: Vec3 },
+  ) => void;
   /** Orbit / dolly gesture started — pause playback so the playhead stays put. */
   onOrbitStart?: () => void;
   /** Device center to frame — camera always looks here. */
@@ -951,6 +959,35 @@ function poseOpenAnimation(root: THREE.Object3D, animations: THREE.AnimationClip
   root.updateMatrixWorld(true);
 }
 
+/** Keeps a single bad GLB from tearing down the whole R3F canvas (black UI). */
+class GltfLoadBoundary extends Component<
+  { url: string; children: ReactNode },
+  { failedUrl: string | null }
+> {
+  state: { failedUrl: string | null } = { failedUrl: null };
+
+  static getDerivedStateFromError(): { failedUrl: string | null } {
+    return { failedUrl: '' };
+  }
+
+  componentDidCatch(error: Error, _info: ErrorInfo) {
+    console.warn('[device-model]', this.props.url, error.message);
+    this.setState({ failedUrl: this.props.url });
+  }
+
+  componentDidUpdate(prev: { url: string }) {
+    if (prev.url !== this.props.url && this.state.failedUrl != null) {
+      this.setState({ failedUrl: null });
+    }
+  }
+
+  render() {
+    if (this.state.failedUrl != null && this.state.failedUrl === this.props.url) return null;
+    if (this.state.failedUrl === '') return null;
+    return this.props.children;
+  }
+}
+
 function GltfDeviceContent({
   url,
   deviceId,
@@ -1346,23 +1383,18 @@ function pickGrabTarget(
     }
   }
   if (gizmoDistance === Number.POSITIVE_INFINITY) return { object, gizmoWins: false };
-  // Empty canvas / floor beside the model: leave OrbitControls alone for rotate
-  // rings — fat tori sit closer than the orbit floor near the phone, so a
-  // naive distance test freezes the camera on nearby empty drags. Translate
-  // arrows intentionally stick past the silhouette into floor/backdrop space;
-  // if we suppress those too, the coloured handles only work when zoomed in
-  // enough that the ray also hits the body. A lone gizmo hit into void (no
-  // floor/backdrop along the ray) still means the pointer is on a handle.
+  // Empty canvas / floor beside the model: always leave OrbitControls alone.
+  // Fat translate pickers cover a lot of ground around the device at default
+  // framing and were freezing camera orbit. Arrows still win when the ray
+  // hits them into true void, or when the body is also under the pointer
+  // (slack below) — that is the zoomed-in / on-silhouette path.
   if (!object) {
-    if (
-      translateGizmoDistance < Number.POSITIVE_INFINITY
-      && translateGizmoDistance <= solidDistance + 0.05
-    ) {
-      return { object: null, gizmoWins: true };
+    if (solidDistance < Number.POSITIVE_INFINITY) {
+      return { object: null, gizmoWins: false };
     }
     return {
       object: null,
-      gizmoWins: solidDistance === Number.POSITIVE_INFINITY,
+      gizmoWins: gizmoDistance < Number.POSITIVE_INFINITY,
     };
   }
   // Axis arrows sit on / just behind the body silhouette. If we only let the
@@ -1766,10 +1798,62 @@ function DeviceGrabController({
       const group = (target.kind === 'device' ? registry : propRegistry).current.get(target.id);
       if (!group) return;
 
-      // Mouse on a device or shape: free-rotate by default, Shift-drag to slide it.
-      // Touch/pen keeps the older slide-to-reposition gesture.
       const rotatePivot = group.userData.rotationPivot as THREE.Object3D | undefined;
-      const wantTranslate = touchLike || event.shiftKey || !rotatePivot;
+      // Rotato-style: plain left-drag orbits even over the device. Shift slides,
+      // Alt/Option tumbles. Touch/pen keeps slide-to-reposition.
+      const wantOrbitOverBody = !touchLike && !event.shiftKey && !event.altKey;
+      const wantFreeRotate = !touchLike && event.altKey && Boolean(rotatePivot);
+      const wantTranslate = !wantOrbitOverBody && !wantFreeRotate;
+
+      // Plain mouse drag over the body → camera orbit. Still select on a clean click.
+      if (wantOrbitOverBody) {
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const pointerId = event.pointerId;
+        let moved = false;
+        let pendingMaterial: MaterialPickPayload | null = null;
+        if (materialEditRef.current && target.kind === 'device') {
+          const solidHit = hits.find((hit) => (
+            classifyPointerHit(hit.object) === 'solid' && deviceGrabId(hit.object) === target.id
+          )) ?? hits.find((hit) => classifyPointerHit(hit.object) === 'solid' && Boolean(deviceGrabId(hit.object)));
+          const resolved = solidHit ? materialFromHit(solidHit) : null;
+          if (resolved) {
+            const standard = resolved.material as THREE.MeshStandardMaterial;
+            const hex = standard?.color?.getHexString?.();
+            pendingMaterial = {
+              deviceInstanceId: target.id,
+              materialName: resolved.name,
+              meshName: resolved.meshName,
+              colorHex: hex ? `#${hex}` : undefined,
+            };
+          }
+        }
+        const onMoveBody = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointerId) return;
+          if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 6) moved = true;
+        };
+        const onUpBody = (ev: PointerEvent) => {
+          if (ev.pointerId !== pointerId) return;
+          window.removeEventListener('pointermove', onMoveBody, true);
+          window.removeEventListener('pointerup', onUpBody, true);
+          window.removeEventListener('pointercancel', onUpBody, true);
+          if (moved || gizmoDraggingRef.current || draggingRef.current) return;
+          if (target.kind === 'prop') onSelectPropRef.current?.(target.id);
+          else {
+            onSelectRef.current?.({
+              id: target.id,
+              clientX: startX,
+              clientY: startY,
+              openMenu: false,
+            });
+            if (pendingMaterial) onPickMaterialRef.current?.(pendingMaterial);
+          }
+        };
+        window.addEventListener('pointermove', onMoveBody, true);
+        window.addEventListener('pointerup', onUpBody, true);
+        window.addEventListener('pointercancel', onUpBody, true);
+        return;
+      }
 
       event.stopImmediatePropagation();
       if (touchLike) event.preventDefault();
@@ -1891,7 +1975,7 @@ function DeviceGrabController({
         if (!moved) {
           if (dx * dx + dy * dy < slop * slop) return;
           moved = true;
-          mode = (touchLike || ev.shiftKey || !rotatePivot) ? 'translate' : 'rotate';
+          mode = (wantFreeRotate && rotatePivot && !ev.shiftKey) ? 'rotate' : 'translate';
           if (mode === 'translate' && !translateReady) {
             const point = pointerNdc(ev, element);
             raycaster.setFromCamera(point, camera);
@@ -2093,24 +2177,26 @@ function DeviceModelView({
               lidOpen={instance.lidOpen ?? 1}
             />
           ) : modelUrl.url ? (
-            <GltfDeviceContent
-              key={`${modelUrl.url}|${device.screenMat}|${device.rot.join(',')}|${device.uv.mirrorX ? 1 : 0}|${device.uv.flipY ? 1 : 0}|${device.uv.planar ? 1 : 0}|${device.uv.rot ?? 0}|${device.screenSize.width}x${device.screenSize.height}|${device.lid ? 'lid' : 'nolid'}|${device.lockMaterials ? 'lock' : 'tint'}|${device.hasScreen === false ? 'noscreen' : 'screen'}`}
-              url={modelUrl.url}
-              deviceId={device.id}
-              screenshot={screenshot}
-              liveStream={liveStream}
-              glassReflection={instance.glassReflection ?? 0.55}
-              reflectionStyle={instance.reflectionStyle ?? 'glossy'}
-              deviceColor={deviceColor}
-              clayMode={clayMode}
-              mediaPlaying={mediaPlaying}
-              lidOpen={instance.lidOpen ?? 1}
-              dropHighlight={dropHighlight}
-              materialTweaks={instance.materialTweaks}
-              hiddenMeshes={instance.hiddenMeshes}
-              preserveBrandMarks={preserveBrandMarks}
-              selectedMaterialName={selectedMaterialName}
-            />
+            <GltfLoadBoundary url={modelUrl.url}>
+              <GltfDeviceContent
+                key={`${modelUrl.url}|${device.screenMat}|${device.rot.join(',')}|${device.uv.mirrorX ? 1 : 0}|${device.uv.flipY ? 1 : 0}|${device.uv.planar ? 1 : 0}|${device.uv.rot ?? 0}|${device.screenSize.width}x${device.screenSize.height}|${device.lid ? 'lid' : 'nolid'}|${device.lockMaterials ? 'lock' : 'tint'}|${device.hasScreen === false ? 'noscreen' : 'screen'}`}
+                url={modelUrl.url}
+                deviceId={device.id}
+                screenshot={screenshot}
+                liveStream={liveStream}
+                glassReflection={instance.glassReflection ?? 0.55}
+                reflectionStyle={instance.reflectionStyle ?? 'glossy'}
+                deviceColor={deviceColor}
+                clayMode={clayMode}
+                mediaPlaying={mediaPlaying}
+                lidOpen={instance.lidOpen ?? 1}
+                dropHighlight={dropHighlight}
+                materialTweaks={instance.materialTweaks}
+                hiddenMeshes={instance.hiddenMeshes}
+                preserveBrandMarks={preserveBrandMarks}
+                selectedMaterialName={selectedMaterialName}
+              />
+            </GltfLoadBoundary>
           ) : null}
           </ReflectionDriveContext.Provider>
           <ScreenLayerExplosion
@@ -2636,7 +2722,10 @@ function CameraRig({
   animatedPosition?: Vec3 | null;
   sharedOrbit?: { offset: Vec3; lookOffset?: Vec3 } | null;
   onSharedOrbitChange?: (orbit: { offset: Vec3; lookOffset?: Vec3 }) => void;
-  onCameraCommit?: (position: Vec3) => void;
+  onCameraCommit?: (
+    position: Vec3,
+    orbit: { offset: Vec3; lookOffset?: Vec3 },
+  ) => void;
   onOrbitStart?: () => void;
   focusPoint?: Vec3 | null;
   recenterToken?: number;
@@ -2682,6 +2771,8 @@ function CameraRig({
   const gesturePanRef = useRef(false);
   /** True while a wheel / middle-button / zoom-gesture dolly is active. */
   const gestureZoomRef = useRef(false);
+  /** Last orbit pointer button — right-drag is always pan (Rotato-style). */
+  const orbitPointerButtonRef = useRef(0);
   const userOrbitingRef = useRef(false);
   const settlingRef = useRef(false);
   const orbitStartPos = useRef(new THREE.Vector3());
@@ -2918,16 +3009,35 @@ function CameraRig({
     const commitOrbitDrag = () => {
       if (orbitDragCommittedRef.current) return;
       orbitDragCommittedRef.current = true;
-      // Rotate pivots around the device — snap look-at only once this is a real drag.
-      // Doing it in onStart made empty-canvas taps jump whenever the view was panned.
+      // Rotate pivots around the device when the view is centered. If the user
+      // already panned (common when zoomed into a detail), keep that look-at so
+      // orbiting doesn't yank the framing back to the device center.
       const zooming = gestureZoomRef.current || dragZoomRef.current;
-      if (!dragPanRef.current && !zooming && controls.current && userOrbitingRef.current) {
-        const f = focusRef.current;
-        controls.current.target.set(f.x, f.y, f.z);
+      const panning = dragPanRef.current || gesturePanRef.current;
+      if (!panning && !zooming && controls.current && userOrbitingRef.current) {
+        const look = sharedLookOffsetRef.current;
+        const hasLook = Boolean(
+          look
+          && (Math.abs(look.x) + Math.abs(look.y) + Math.abs(look.z)) > 1e-4,
+        );
+        if (!hasLook) {
+          const f = focusRef.current;
+          controls.current.target.set(f.x, f.y, f.z);
+        }
       }
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      orbitPointerButtonRef.current = event.button;
+      // Right-drag is always pan; Space / pan-mode remap LEFT. Clear on plain
+      // left-drag so a leftover pan flag can't swallow the next orbit.
+      if (event.button === 2 || (event.button === 0 && dragPanRef.current)) {
+        gesturePanRef.current = true;
+      } else if (event.button === 0) {
+        gesturePanRef.current = false;
+      }
+      orbitStartPos.current.copy(camera.position);
+      if (controls.current) orbitStartTarget.current.copy(controls.current.target);
       // Wheel / middle / right are intentional camera moves — never treat as taps.
       if (event.pointerType === 'mouse' && event.button !== 0) {
         orbitDragCommittedRef.current = true;
@@ -2938,8 +3048,6 @@ function CameraRig({
       startY = event.clientY;
       pointerType = event.pointerType;
       orbitDragCommittedRef.current = false;
-      orbitStartPos.current.copy(camera.position);
-      if (controls.current) orbitStartTarget.current.copy(controls.current.target);
     };
     const onPointerMove = (event: PointerEvent) => {
       if (!tracking || orbitDragCommittedRef.current) return;
@@ -2995,9 +3103,14 @@ function CameraRig({
   const publishOrbit = () => {
     if (!onSharedOrbitChangeRef.current || applyingSharedRef.current) return;
     if (animatedPosition && !userOrbitingRef.current) return;
+    // OrbitControls reports its starting pose on load. That is not a user
+    // rotate — saving it is what put the default angle back after a reload.
+    const userGesture = userOrbitingRef.current || settlingRef.current
+      || gestureZoomRef.current || dragZoomRef.current;
+    if (!userGesture) return;
     // Don't write orbit state for an uncommitted tap — that is what made the
     // background "jump" when clicking empty canvas.
-    if (userOrbitingRef.current && !orbitDragCommittedRef.current) return;
+    if (userOrbitingRef.current && !orbitDragCommittedRef.current && !gestureZoomRef.current && !dragZoomRef.current) return;
     if (freezeFramingRef.current) return;
     const f = focusRef.current;
     const panning = userOrbitingRef.current ? gesturePanRef.current : dragPanRef.current;
@@ -3028,15 +3141,53 @@ function CameraRig({
       });
       return;
     }
-    // Rotate stays aimed at the device. Do not touch target here during the
-    // gesture — onStart already recenters for rotate.
+    // Rotate usually aims at the device. If the user panned first (zoomed-in
+    // detail), keep that look-at so the framing survives the orbit.
+    const target = controls.current?.target;
+    const look = target
+      ? {
+        x: Number((target.x - f.x).toFixed(4)),
+        y: Number((target.y - f.y).toFixed(4)),
+        z: Number((target.z - f.z).toFixed(4)),
+      }
+      : sharedLookOffsetRef.current;
+    const hasLook = Boolean(
+      look
+      && (Math.abs(look.x) + Math.abs(look.y) + Math.abs(look.z)) > 1e-4,
+    );
     onSharedOrbitChangeRef.current({
       offset: {
         x: Number((camera.position.x - f.x).toFixed(4)),
         y: Number((camera.position.y - f.y).toFixed(4)),
         z: Number((camera.position.z - f.z).toFixed(4)),
       },
+      ...(hasLook && look ? { lookOffset: look } : {}),
     });
+  };
+
+  const readLiveOrbit = () => {
+    const f = focusRef.current;
+    const target = controls.current?.target;
+    const offset = {
+      x: Number((camera.position.x - f.x).toFixed(4)),
+      y: Number((camera.position.y - f.y).toFixed(4)),
+      z: Number((camera.position.z - f.z).toFixed(4)),
+    };
+    const look = target
+      ? {
+        x: Number((target.x - f.x).toFixed(4)),
+        y: Number((target.y - f.y).toFixed(4)),
+        z: Number((target.z - f.z).toFixed(4)),
+      }
+      : sharedLookOffsetRef.current;
+    const hasLook = Boolean(
+      look
+      && (Math.abs(look.x) + Math.abs(look.y) + Math.abs(look.z)) > 1e-4,
+    );
+    return {
+      offset,
+      ...(hasLook && look ? { lookOffset: look } : {}),
+    };
   };
 
   const finishOrbit = () => {
@@ -3047,37 +3198,29 @@ function CameraRig({
       restoreCameraPose(camera, controls.current, orbitStartPos.current, orbitStartTarget.current);
       userOrbitingRef.current = false;
       settlingRef.current = false;
+      gesturePanRef.current = false;
       shadowBusyRef.current?.setBusy(false);
       return;
     }
     const moved = camera.position.distanceToSquared(orbitStartPos.current) > 1e-6;
-    if (gesturePanRef.current && controls.current && onSharedOrbitChangeRef.current && !applyingSharedRef.current) {
-      const f = focusRef.current;
-      const target = controls.current.target;
-      onSharedOrbitChangeRef.current({
-        offset: {
-          x: Number((camera.position.x - f.x).toFixed(4)),
-          y: Number((camera.position.y - f.y).toFixed(4)),
-          z: Number((camera.position.z - f.z).toFixed(4)),
-        },
-        lookOffset: {
-          x: Number((target.x - f.x).toFixed(4)),
-          y: Number((target.y - f.y).toFixed(4)),
-          z: Number((target.z - f.z).toFixed(4)),
-        },
-      });
-    } else {
-      publishOrbit();
-    }
+    // Always read the live camera. publishOrbit is gated for mid-drag UI sync and
+    // can no-op on pan/apply races — that is what dropped mouse-orbit saves while
+    // typed Rotate X/Y/Z (direct setProject) kept working.
+    const orbit = readLiveOrbit();
+    onSharedOrbitChangeRef.current?.(orbit);
     userOrbitingRef.current = false;
     settlingRef.current = false;
+    gesturePanRef.current = false;
     shadowBusyRef.current?.setBusy(false);
     if (!moved) return;
-    onCameraCommitRef.current?.({
-      x: camera.position.x,
-      y: camera.position.y,
-      z: camera.position.z,
-    });
+    onCameraCommitRef.current?.(
+      {
+        x: camera.position.x,
+        y: camera.position.y,
+        z: camera.position.z,
+      },
+      orbit,
+    );
   };
 
   const armSettle = () => {
@@ -3119,7 +3262,9 @@ function CameraRig({
           return;
         }
         userOrbitingRef.current = true;
-        gesturePanRef.current = dragPanRef.current;
+        // Keep right-drag pan (button 2) even when LEFT is still rotate mode.
+        // Without this, zoomed-in right-pan lost lookOffset and snapped back.
+        gesturePanRef.current = dragPanRef.current || orbitPointerButtonRef.current === 2 || gesturePanRef.current;
         if (dragZoomRef.current) gestureZoomRef.current = true;
         settlingRef.current = false;
         shadowBusyRef.current?.setBusy(true);
@@ -3139,6 +3284,7 @@ function CameraRig({
         settlingRef.current = true;
         armSettle();
         // Clear after settle arms — publishOrbit may still run on damping frames.
+        // Keep gesturePanRef until finishOrbit reads it (damping can outlast 120ms).
         window.setTimeout(() => {
           gestureZoomRef.current = false;
         }, 120);
@@ -3959,8 +4105,11 @@ export default function DeviceCanvas(props: Props) {
     onSharedOrbitChange: (orbit: NonNullable<Props['sharedOrbit']>) => {
       propsRef.current.onSharedOrbitChange?.(orbit);
     },
-    onCameraCommit: (position: Vec3) => {
-      propsRef.current.onCameraCommit?.(position);
+    onCameraCommit: (
+      position: Vec3,
+      orbit: { offset: Vec3; lookOffset?: Vec3 },
+    ) => {
+      propsRef.current.onCameraCommit?.(position, orbit);
     },
     onOrbitStart: () => {
       propsRef.current.onOrbitStart?.();

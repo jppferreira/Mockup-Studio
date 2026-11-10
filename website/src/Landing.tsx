@@ -4,6 +4,7 @@ import { AppScreenshot } from './components/AppScreenshot';
 import { ContactModal, type ContactIntent } from './components/ContactModal';
 import { Logo } from './components/Logo';
 import { Reveal } from './components/Reveal';
+import { SiteNav } from './components/SiteNav';
 import { PLANS, PRICING_TAGLINE, UPDATE_PASS } from '@shared/pricing';
 import { CheckoutButton } from './components/CheckoutButton';
 import { BetaSignupForm } from './components/BetaSignupForm';
@@ -43,28 +44,7 @@ export function Landing() {
         <div className="orb orb-c" style={parallax.layer(0.06, 14)} />
       </div>
 
-      <div className="nav-shell">
-        <header className="nav">
-          <Logo size={28} className="nav-brand" />
-          <nav className="nav-links" aria-label="Primary">
-            <Link to="/features">Features</Link>
-            <Link to="/workflow">Workflow</Link>
-            <Link to="/pricing">Pricing</Link>
-            <Link to="/releases">Releases</Link>
-            <Link to="/privacy">Privacy</Link>
-            <Link to="/terms">Terms</Link>
-            <button type="button" className="nav-text-btn" onClick={() => openContact('feedback')}>
-              Feedback
-            </button>
-            <button type="button" className="nav-text-btn" onClick={() => openContact('contact')}>
-              Contact
-            </button>
-          </nav>
-          <button type="button" className="nav-cta" onClick={() => openBeta('nav')}>
-            Sign up to beta
-          </button>
-        </header>
-      </div>
+      <SiteNav onBeta={() => openBeta('nav')} onContact={openContact} />
 
       <div className="layout-tester-stack" aria-label="Design testers">
         <div className="layout-tester" role="group" aria-label="Illustration style tester">

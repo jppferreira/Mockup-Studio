@@ -118,6 +118,12 @@ export const MAX_COMPOSITION_SCENES = 8;
  * Objects and studio setup that belong to one scene.
  * Inactive scenes keep their own copy, so edits do not leak across scenes.
  */
+/** Free-orbit camera pose, as an offset from the framed device. */
+export interface CameraOrbitPose {
+  offset: Vec3;
+  lookOffset?: Vec3;
+}
+
 export interface SceneStage {
   devices: DeviceInstance[];
   selectedDeviceId: string;
@@ -127,6 +133,8 @@ export interface SceneStage {
   animation: AnimationClip;
   cameraView: CameraView;
   cameraLens: CameraLens;
+  /** Absent on older saves — the preset view is used. */
+  cameraOrbit?: CameraOrbitPose | null;
   compositionMode: CompositionMode;
   linkSplitTransform: boolean;
   publishTarget: PublishTarget;
@@ -618,6 +626,8 @@ export interface MockupProject {
   cameraView: CameraView;
   /** Perspective lens / FOV preset for the scene camera */
   cameraLens: CameraLens;
+  /** Free-orbit pose. Null uses the camera-view preset. */
+  cameraOrbit?: CameraOrbitPose | null;
   compositionMode: CompositionMode;
   devices: DeviceInstance[];
   selectedDeviceId: string;
@@ -1012,6 +1022,14 @@ function cloneAnimation(clip: AnimationClip, mapTarget?: (targetId: string) => s
   };
 }
 
+function cloneCameraOrbit(orbit: CameraOrbitPose | null | undefined): CameraOrbitPose | null {
+  if (!orbit?.offset) return null;
+  return {
+    offset: { ...orbit.offset },
+    ...(orbit.lookOffset ? { lookOffset: { ...orbit.lookOffset } } : {}),
+  };
+}
+
 function cloneSceneLight(light: SceneLight): SceneLight {
   return {
     ...light,
@@ -1032,6 +1050,7 @@ function cloneSceneStage(stage: SceneStage): SceneStage {
     sceneLights: (stage.sceneLights ?? []).map((light) => cloneSceneLight(light)),
     environmentIntensity: stage.environmentIntensity ?? null,
     toneMappingExposure: stage.toneMappingExposure ?? null,
+    cameraOrbit: cloneCameraOrbit(stage.cameraOrbit),
   };
 }
 
@@ -1066,6 +1085,7 @@ function duplicateSceneStage(stage: SceneStage): SceneStage {
     sceneLights: (stage.sceneLights ?? []).map((light) => cloneSceneLight(light)),
     environmentIntensity: stage.environmentIntensity ?? null,
     toneMappingExposure: stage.toneMappingExposure ?? null,
+    cameraOrbit: cloneCameraOrbit(stage.cameraOrbit),
   };
 }
 
@@ -1134,6 +1154,7 @@ export function captureSceneStage(project: MockupProject): SceneStage {
     animation: cloneAnimation(project.animation ?? createDefaultAnimation(selected.id)),
     cameraView: project.cameraView,
     cameraLens: project.cameraLens,
+    cameraOrbit: cloneCameraOrbit(project.cameraOrbit),
     compositionMode: project.compositionMode,
     linkSplitTransform: project.linkSplitTransform,
     publishTarget: project.publishTarget,
@@ -1211,6 +1232,7 @@ export function applySceneStage(project: MockupProject, scene: CompositionScene)
     animation: cloneAnimation(stage.animation),
     cameraView: stage.cameraView,
     cameraLens: stage.cameraLens,
+    cameraOrbit: cloneCameraOrbit(stage.cameraOrbit),
     compositionMode: stage.compositionMode,
     linkSplitTransform: stage.linkSplitTransform,
     publishTarget: stage.publishTarget,

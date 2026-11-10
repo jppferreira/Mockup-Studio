@@ -106,6 +106,7 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
         <h2 id="license-title">License & plans</h2>
         <p>
           Same prices as the website. You are on <strong>{planLabel(license.tier)}</strong>
+          {license.source === 'account' ? ' · linked to your cloud account' : ''}
           {license.updatesUntil
             ? ` · updates until ${new Date(license.updatesUntil).toLocaleDateString()}`
             : ''}.

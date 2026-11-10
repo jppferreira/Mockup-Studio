@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { deviceAssetUrl } from './devices';
-import { isFreeDevice } from './license';
 import { remoteModelsConfigured, resolveDeviceModelUrl } from './modelCache';
 
 type State = {
@@ -11,8 +10,9 @@ type State = {
 
 /**
  * Resolve a GLB URL for a catalog device.
- * When Supabase delivery is configured, Pro downloads on demand into an encrypted cache.
- * Otherwise falls back to the local/public path (dev without remote config).
+ * When Supabase delivery is configured, models download on demand into an encrypted cache.
+ * Local public/models paths are only used when remote delivery is not configured — those
+ * GLBs are gitignored, so falling back to them after a remote failure blacks out the canvas.
  */
 export function useDeviceModelUrl(
   deviceId: string | undefined,
@@ -47,11 +47,9 @@ export function useDeviceModelUrl(
       .catch((err: unknown) => {
         if (cancelled) return;
         const message = err instanceof Error ? err.message : 'Failed to load device model';
-        // Paid catalog models must use the Pro signed-URL path — never a leftover local GLB.
-        const fallback = isFreeDevice(deviceId)
-          ? (deviceAssetUrl(fallbackUrl) ?? null)
-          : null;
-        setState({ url: fallback, loading: false, error: fallback ? null : message });
+        // Never fall back to missing public/models GLBs — Vite serves index.html for those
+        // 404s, useGLTF throws, and the whole canvas goes black.
+        setState({ url: null, loading: false, error: message });
       });
 
     return () => {

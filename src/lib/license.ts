@@ -32,8 +32,8 @@ const STORAGE_KEY = 'mockup-studio.license.v1';
  */
 export const LICENSING_DISABLED = false;
 
-/** How the current entitlement was unlocked. `mas` reserved for a future App Store build. */
-export type LicenseSource = 'none' | 'key' | 'mas';
+/** How the current entitlement was unlocked. `account` = Supabase-bound; `mas` reserved for App Store. */
+export type LicenseSource = 'none' | 'key' | 'mas' | 'account';
 
 export interface LicenseState {
   tier: LicenseTier;
@@ -177,7 +177,7 @@ export function loadLicense(): LicenseState {
     const parsed = JSON.parse(raw) as Partial<LicenseState>;
     const tier = parsed.tier === 'pro' || parsed.tier === 'pro_max' ? parsed.tier : 'free';
     const source: LicenseSource =
-      parsed.source === 'key' || parsed.source === 'mas'
+      parsed.source === 'key' || parsed.source === 'mas' || parsed.source === 'account'
         ? parsed.source
         : tier === 'free'
           ? 'none'
@@ -224,14 +224,14 @@ export async function activateLicenseKey(
       // Keep the Pro / Pro Max key — device downloads still need MS-PRO / MS-PROMAX.
       updatesUntil: monthsFrom(current.updatesUntil, 12),
       activatedAt: nowIso,
-      source: 'key',
+      source: current.source === 'account' ? 'account' : 'key',
     };
     saveLicense(state);
     return { ok: true, state };
   }
 
   const months = ENTITLEMENTS[parsed.product].updateMonths;
-  const state: LicenseState = {
+  let state: LicenseState = {
     tier: parsed.product,
     key: parsed.key,
     updatesUntil: months > 0 ? monthsFrom(null, months) : null,
@@ -239,6 +239,24 @@ export async function activateLicenseKey(
     source: 'key',
   };
   saveLicense(state);
+
+  // When signed in, bind the grandfathered key to the account (server-validated).
+  try {
+    const { bindLicenseKeyToAccount } = await import('./entitlements');
+    const bound = await bindLicenseKeyToAccount(parsed.key);
+    if (bound.ok) {
+      state = {
+        ...state,
+        source: 'account',
+        updatesUntil: bound.updatesUntil ?? state.updatesUntil,
+        activatedAt: bound.activatedAt ?? state.activatedAt,
+      };
+      saveLicense(state);
+    }
+  } catch {
+    /* Offline / unsigned — local key still works. */
+  }
+
   return { ok: true, state };
 }
 

@@ -4,7 +4,9 @@ export type AccentTheme = 'green' | 'purple' | 'coral' | 'custom';
 
 export const ACCENT_THEME_KEY = 'mockup-studio-accent';
 export const ACCENT_COLOR_KEY = 'mockup-studio-accent-color';
-export const DEFAULT_CUSTOM_ACCENT = '#3b82f6';
+/** Lilac — same as the purple preset; used when no custom color is stored. */
+export const DEFAULT_CUSTOM_ACCENT = '#b794ff';
+export const DEFAULT_ACCENT_THEME: AccentTheme = 'purple';
 
 export type AccentPair = { accent: string; soft: string };
 
@@ -30,16 +32,24 @@ export function normalizeHex(input: string | null | undefined): string {
 export function readAccentTheme(): AccentTheme {
   try {
     const value = localStorage.getItem(ACCENT_THEME_KEY);
+    // Migrate the old implicit default (custom + blue) to lilac.
+    if (value === 'custom') {
+      const color = localStorage.getItem(ACCENT_COLOR_KEY);
+      if (!color || normalizeHex(color) === '#3b82f6') return DEFAULT_ACCENT_THEME;
+    }
     if (value === 'green' || value === 'purple' || value === 'coral' || value === 'custom') return value;
   } catch {
     /* private mode */
   }
-  return 'custom';
+  return DEFAULT_ACCENT_THEME;
 }
 
 export function readAccentColor(): string {
   try {
-    return normalizeHex(localStorage.getItem(ACCENT_COLOR_KEY));
+    const stored = localStorage.getItem(ACCENT_COLOR_KEY);
+    if (!stored) return DEFAULT_CUSTOM_ACCENT;
+    const hex = normalizeHex(stored);
+    return hex === '#3b82f6' ? DEFAULT_CUSTOM_ACCENT : hex;
   } catch {
     return DEFAULT_CUSTOM_ACCENT;
   }

@@ -97,6 +97,7 @@ export async function saveSessionWorkspace(
     animTime: tab.animTime,
     animPlaying: false,
     timelineOpen: tab.timelineOpen,
+    documentId: tab.documentId ?? null,
     syncPath: tab.syncPath ?? null,
     shippedTemplateId: tab.shippedTemplateId ?? null,
   }));
@@ -125,6 +126,9 @@ export async function loadSessionWorkspace(): Promise<SessionWorkspace | null> {
         animTime: typeof row.animTime === 'number' && Number.isFinite(row.animTime) ? row.animTime : 0,
         animPlaying: false,
         timelineOpen: row.timelineOpen === true,
+        documentId: typeof row.documentId === 'string' && row.documentId.trim()
+          ? row.documentId.trim()
+          : null,
         syncPath: typeof row.syncPath === 'string' ? row.syncPath : null,
         shippedTemplateId: typeof row.shippedTemplateId === 'string' && row.shippedTemplateId.trim()
           ? row.shippedTemplateId.trim()

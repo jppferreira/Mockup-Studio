@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { DesktopSignIn, shouldShowDesktopSignIn } from './components/DesktopSignIn';
 import OnboardingFlow from './components/OnboardingFlow';
 import { isSiteUnlocked, SiteGate } from './components/SiteGate';
 import { applyAccentTheme, readAccentColor, readAccentTheme } from './lib/accentTheme';
 import { installNumberScrub } from './lib/numberScrub';
 import { clearOnboardingComplete, isOnboardingComplete } from './lib/onboarding';
 import { clearStudioTourComplete } from './lib/studioTour';
+import { getAuthSnapshot } from './lib/supabaseClient';
 import './styles.css';
 
 installNumberScrub();
@@ -66,14 +68,29 @@ function dismissSplash(immediate = false) {
 
 function Root() {
   const [locked, setLocked] = useState(() => !isSiteUnlocked());
+  const [desktopAuth, setDesktopAuth] = useState<'checking' | 'needed' | 'done'>(() => (
+    shouldShowDesktopSignIn() ? 'checking' : 'done'
+  ));
   const [needsOnboarding, setNeedsOnboarding] = useState(() => {
     if (shouldForceGuideReplay()) return true;
     return !isOnboardingComplete();
   });
 
   useEffect(() => {
-    dismissSplash(locked);
-  }, [locked]);
+    dismissSplash(locked || desktopAuth !== 'done');
+  }, [locked, desktopAuth]);
+
+  useEffect(() => {
+    if (desktopAuth !== 'checking') return undefined;
+    let cancelled = false;
+    void getAuthSnapshot().then((snap) => {
+      if (cancelled) return;
+      setDesktopAuth(snap.user ? 'done' : 'needed');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopAuth]);
 
   const showOnboarding = () => {
     clearOnboardingComplete();
@@ -82,6 +99,10 @@ function Root() {
   };
 
   if (locked) return <SiteGate onUnlock={() => setLocked(false)} />;
+  if (desktopAuth === 'checking') return null;
+  if (desktopAuth === 'needed') {
+    return <DesktopSignIn onComplete={() => setDesktopAuth('done')} />;
+  }
   if (needsOnboarding) {
     return <OnboardingFlow onComplete={() => setNeedsOnboarding(false)} />;
   }
