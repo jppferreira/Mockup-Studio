@@ -2674,7 +2674,9 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       }
     }
     await pullTemplatesRef.current();
-    if (!workspaceRef.current.activeId) await refreshCloudProjects();
+    // Always refresh the library list so files created on web/other devices appear
+    // even while a project tab is open (Figma-style file browser stays current).
+    await refreshCloudProjects();
   };
 
   const openCloudProject = async (filePath: string) => {
@@ -2892,6 +2894,17 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     if (hasOpenProject || !cloud?.configured || cloud.missing) return;
     void refreshCloudProjects();
   }, [hasOpenProject, cloud?.configured, cloud?.missing, cloud?.path, refreshCloudProjects]);
+
+  // iCloud/Drive watchers are flaky — poll the sync folder so web-created files show up.
+  useEffect(() => {
+    if (!cloud?.configured || cloud.missing) return undefined;
+    void refreshCloudProjects();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      void refreshCloudProjects();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [cloud?.configured, cloud?.missing, cloud?.path, refreshCloudProjects]);
 
   useEffect(() => {
     if (!syncMenuOpen) return undefined;

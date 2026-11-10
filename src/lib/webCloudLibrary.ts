@@ -172,9 +172,16 @@ async function pickDirectory(startIn?: DirHandle): Promise<DirHandle | null> {
   }
 }
 
-async function resolveLibraryHandle(picked: DirHandle, nestMokstudio: boolean): Promise<DirHandle> {
-  if (!nestMokstudio || picked.name === LIBRARY_FOLDER_NAME) return picked;
-  return picked.getDirectoryHandle(LIBRARY_FOLDER_NAME, { create: true });
+async function resolveLibraryHandle(picked: DirHandle, nest: 'create' | 'prefer' | 'none'): Promise<DirHandle> {
+  if (picked.name === LIBRARY_FOLDER_NAME || nest === 'none') return picked;
+  if (nest === 'create') {
+    return picked.getDirectoryHandle(LIBRARY_FOLDER_NAME, { create: true });
+  }
+  try {
+    return await picked.getDirectoryHandle(LIBRARY_FOLDER_NAME);
+  } catch {
+    return picked;
+  }
 }
 
 export async function webCloudUse(
@@ -185,7 +192,7 @@ export async function webCloudUse(
   if (!picked) return { canceled: true, status: await webCloudStatus() };
   const permitted = await ensurePermission(picked, 'readwrite');
   if (!permitted) throw new Error('Allow folder access to keep projects in sync.');
-  const library = await resolveLibraryHandle(picked, true);
+  const library = await resolveLibraryHandle(picked, 'create');
   await persist(library, provider);
   return { canceled: false, status: await webCloudStatus() };
 }
@@ -197,7 +204,9 @@ export async function webCloudPick(): Promise<{ canceled: boolean; status: Cloud
   if (!picked) return { canceled: true, status: await webCloudStatus() };
   const permitted = await ensurePermission(picked, 'readwrite');
   if (!permitted) throw new Error('Allow folder access to keep projects in sync.');
-  await persist(picked, 'folder');
+  // Prefer an existing mokstudio child so picking iCloud/Drive root matches the Mac app.
+  const library = await resolveLibraryHandle(picked, 'prefer');
+  await persist(library, stored?.config.provider ?? 'folder');
   return { canceled: false, status: await webCloudStatus() };
 }
 
