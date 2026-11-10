@@ -6,6 +6,7 @@ import {
   webCloudPick,
   webCloudRead,
   webCloudRemove,
+  webCloudResume,
   webCloudStatus,
   webCloudTemplatesRead,
   webCloudTemplatesWrite,
@@ -19,6 +20,8 @@ export interface CloudApi {
   cloudUse: (provider: 'icloud' | 'google-drive') => Promise<{ canceled: boolean; status: CloudLibraryStatus }>;
   cloudPick: () => Promise<{ canceled: boolean; status: CloudLibraryStatus }>;
   cloudClear: () => Promise<CloudLibraryStatus>;
+  /** Re-enable a remembered folder after reload (web). No-op on desktop. */
+  cloudResume?: () => Promise<CloudLibraryStatus>;
   cloudList: () => Promise<CloudListRow[]>;
   cloudRead: (filePath: string) => Promise<{ path: string; contents: string; updatedAt: number }>;
   cloudWrite: (payload: { filePath?: string | null; contents: string; name: string }) => Promise<{
@@ -46,6 +49,7 @@ const webApi: CloudApi = {
   cloudUse: webCloudUse,
   cloudPick: webCloudPick,
   cloudClear: webCloudClear,
+  cloudResume: webCloudResume,
   cloudList: webCloudList,
   cloudRead: webCloudRead,
   cloudWrite: webCloudWrite,

@@ -30,26 +30,25 @@ export default function CloudSyncPanel({
         <>
           <strong>Sync needs Chrome, Edge, or the Mac app</strong>
           <p>
-            Pick a folder in iCloud Drive or Google Drive so the browser and desktop app keep the same projects in place.
+            Choose a folder in iCloud Drive or Google Drive once. After that, every edit saves there automatically — web and Mac stay aligned.
           </p>
         </>
       ) : configured && cloud?.missing ? (
         <>
-          <strong>Sync folder unavailable</strong>
+          <strong>Reconnect to keep syncing</strong>
           <p>
-            {label} is not available right now. Turn it back on and mokstudio will keep saving to {cloud.folderLabel}.
+            Allow access to {cloud.folderLabel || label} again. Edits will keep saving automatically, like Figma.
           </p>
           <div className="sync-actions">
-            <button type="button" disabled={busy} onClick={() => onUse('pick')}>Choose a folder</button>
+            <button type="button" disabled={busy} onClick={() => onUse('pick')}>Reconnect folder</button>
             <button type="button" className="sync-stop" disabled={busy} onClick={onStop}>Stop syncing</button>
           </div>
         </>
       ) : configured && cloud ? (
         <>
-          <strong>Syncing to {label}</strong>
+          <strong>Always syncing to {label}</strong>
           <p>
-            Saved in {cloud.folderLabel}. Edits save automatically, and {label} syncs that folder to your other devices
-            {desktop ? '' : ' — including the Mac app'}.
+            Every edit saves to {cloud.folderLabel} automatically. {label} keeps the Mac app and browser on the same files — nothing is uploaded to mokstudio.
           </p>
           <div className="sync-actions">
             <button type="button" disabled={busy} onClick={() => onUse('pick')}>Choose a different folder</button>
@@ -58,11 +57,11 @@ export default function CloudSyncPanel({
         </>
       ) : (
         <>
-          <strong>Save to iCloud or Google Drive</strong>
+          <strong>Turn on always-sync</strong>
           <p>
             {desktop
-              ? 'Pick a folder those apps already sync. mokstudio saves your projects and templates there automatically. Nothing is uploaded to mokstudio.'
-              : 'Choose the same mokstudio folder the Mac app uses in iCloud Drive or Google Drive. Projects stay in that folder — nothing is uploaded to mokstudio.'}
+              ? 'Pick a folder iCloud or Google Drive already syncs. From then on every project file saves there automatically — no manual save or export between devices.'
+              : 'Choose the same mokstudio folder the Mac app uses. From then on every edit saves there automatically so web and desktop always share the same files.'}
           </p>
           <div className="sync-actions">
             <button

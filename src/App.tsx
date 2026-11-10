@@ -167,7 +167,7 @@ import {
 } from './lib/license';
 import {
   canonicalProjectJson, isPathInsideLibrary, projectFromCloudRow, syncButtonLabel,
-  type CloudLibraryStatus, type CloudProjectEntry,
+  type CloudLibraryStatus, type CloudProjectEntry, type SyncActivity,
 } from './lib/cloudLibrary';
 import { getCloudApi } from './lib/cloudApi';
 import { downloadBlob, safeFilename, validateProject } from './lib/project';
@@ -1119,7 +1119,9 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [cloud, setCloud] = useState<CloudLibraryStatus | null>(null);
   const [cloudProjects, setCloudProjects] = useState<CloudProjectEntry[]>([]);
   const [cloudBusy, setCloudBusy] = useState(false);
+  const [syncActivity, setSyncActivity] = useState<SyncActivity>('idle');
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
+  const syncActivityTimerRef = useRef<number | null>(null);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const [canvasTool, setCanvasTool] = useState<CanvasTool>('composition');
   const [shapeMenu, setShapeMenu] = useState<'flat' | 'solid' | 'stage' | null>(null);
@@ -2540,11 +2542,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
   persistCloudRef.current = async (tabId, snapshot, knownPath, options) => {
     const api = getCloudApi();
-    if (!api?.cloudWrite || !cloudRef.current?.configured) return null;
+    if (!api?.cloudWrite || !cloudRef.current?.configured || cloudRef.current.missing) return null;
     const canonical = canonicalProjectJson(snapshot);
     const path = knownPath || syncPathByTabRef.current.get(tabId) || null;
     if (!options?.force && path && savedJsonRef.current.get(path) === canonical) return path;
     if (!options?.force && !path && baselineRef.current.get(tabId) === canonical) return null;
+    setSyncActivity('saving');
     try {
       const result = await api.cloudWrite({
         filePath: path,
@@ -2553,19 +2556,30 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       });
       if (path && path !== result.path) savedJsonRef.current.delete(path);
       savedJsonRef.current.set(result.path, canonical);
+      baselineRef.current.set(tabId, canonical);
       syncPathByTabRef.current.set(tabId, result.path);
-      setWorkspace((ws) => ({
-        ...ws,
-        tabs: ws.tabs.map((tab) => (
-          tab.id === tabId && tab.syncPath !== result.path ? { ...tab, syncPath: result.path } : tab
-        )),
-      }));
+      setWorkspace((ws) => {
+        const current = ws.tabs.find((tab) => tab.id === tabId);
+        if (!current || current.syncPath === result.path) return ws;
+        return {
+          ...ws,
+          tabs: ws.tabs.map((tab) => (
+            tab.id === tabId ? { ...tab, syncPath: result.path } : tab
+          )),
+        };
+      });
+      setSyncActivity('synced');
+      if (syncActivityTimerRef.current) window.clearTimeout(syncActivityTimerRef.current);
+      syncActivityTimerRef.current = window.setTimeout(() => setSyncActivity('idle'), 2400);
       if (!options?.quiet) {
         const where = cloudRef.current?.label || 'your drive';
         notifyRef.current(result.unchanged ? `Already saved to ${where}` : `Saved to ${where}`);
       }
       return result.path;
     } catch (error) {
+      setSyncActivity('error');
+      if (syncActivityTimerRef.current) window.clearTimeout(syncActivityTimerRef.current);
+      syncActivityTimerRef.current = window.setTimeout(() => setSyncActivity('idle'), 3200);
       notifyRef.current(error instanceof Error ? error.message : 'Could not sync this project');
       return null;
     }
@@ -2725,7 +2739,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         await pullTemplatesRef.current({ mergeLocal: true });
         await refreshCloudProjects();
         const where = result.status.label || 'your drive';
-        notify(`Projects and templates now save to ${where} and sync from there.`);
+        setSyncActivity('synced');
+        notify(`Always syncing to ${where}. Edits save automatically on web and Mac.`);
         setSyncMenuOpen(false);
       }
     } catch (error) {
@@ -2796,8 +2811,22 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
   useEffect(() => {
     if (!syncMenuOpen) return;
+    const api = getCloudApi();
+    // Figma-like: re-grant folder access on interaction so sync resumes without re-picking.
+    if (cloud?.configured && cloud.missing && api?.cloudResume) {
+      void api.cloudResume().then((status) => {
+        setCloud(status);
+        if (status.configured && !status.missing) {
+          void pullRemoteRef.current();
+          void refreshCloudProjects();
+        }
+      }).catch(() => {
+        refreshCloudStatus();
+      });
+      return;
+    }
     refreshCloudStatus();
-  }, [syncMenuOpen, refreshCloudStatus]);
+  }, [syncMenuOpen, refreshCloudStatus, cloud?.configured, cloud?.missing, refreshCloudProjects]);
 
   useEffect(() => {
     if (!activeTab) return;
@@ -2805,21 +2834,59 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     baselineRef.current.set(activeTab.id, canonicalProjectJson(activeTab.project));
   }, [activeTab?.id]);
 
+  const flushAllCloudTabs = useCallback(async (opts?: { force?: boolean }) => {
+    if (!cloudRef.current?.configured || cloudRef.current.missing) return;
+    for (const tab of workspaceRef.current.tabs) {
+      const knownPath = tab.syncPath ?? syncPathByTabRef.current.get(tab.id) ?? null;
+      await persistCloudRef.current(tab.id, tab.project, knownPath, {
+        quiet: true,
+        force: opts?.force,
+      });
+    }
+  }, []);
+
+  // Always-on autosave (Figma-style): every edit flushes to the sync folder quickly.
   useEffect(() => {
-    if (!activeTab || !cloud?.configured) return undefined;
+    if (!activeTab || !cloud?.configured || cloud.missing) return undefined;
     const tabId = activeTab.id;
     const snapshot = project;
     const knownPath = activeTab.syncPath ?? syncPathByTabRef.current.get(tabId) ?? null;
     const timer = window.setTimeout(() => {
       void persistCloudRef.current(tabId, snapshot, knownPath, { quiet: true });
-    }, 1400);
+    }, 650);
     return () => {
       window.clearTimeout(timer);
       if (activeIdRef.current !== tabId) {
         void persistCloudRef.current(tabId, snapshot, knownPath, { quiet: true });
       }
     };
-  }, [project, activeTab?.id, activeTab?.syncPath, cloud?.configured, cloud?.path]);
+  }, [project, activeTab?.id, activeTab?.syncPath, cloud?.configured, cloud?.missing, cloud?.path]);
+
+  useEffect(() => {
+    if (!cloud?.configured || cloud.missing) return undefined;
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        void flushAllCloudTabs({ force: false });
+      } else {
+        void pullRemoteRef.current();
+        void refreshCloudProjects();
+      }
+    };
+    const onPageHide = () => {
+      void flushAllCloudTabs({ force: false });
+    };
+    const onFocus = () => {
+      void pullRemoteRef.current();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [cloud?.configured, cloud?.missing, flushAllCloudTabs, refreshCloudProjects]);
 
   useEffect(() => {
     if (hasOpenProject || !cloud?.configured || cloud.missing) return;
@@ -5581,15 +5648,17 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         <div className="sync-menu-wrap" ref={syncMenuRef}>
           <button
             type="button"
-            className={`sync-status ${cloud?.configured && !cloud.missing ? 'is-on' : ''}`}
+            className={`sync-status ${cloud?.configured && !cloud.missing ? 'is-on' : ''} ${syncActivity === 'saving' ? 'is-saving' : ''} ${syncActivity === 'synced' ? 'is-synced' : ''}`}
             aria-expanded={syncMenuOpen}
             aria-haspopup="dialog"
             title={cloud?.configured
-              ? `Saving to ${cloud.folderLabel || cloud.label}`
-              : 'Save to iCloud Drive or Google Drive'}
+              ? (cloud.missing
+                ? 'Reconnect to keep files always syncing'
+                : `Always syncing to ${cloud.folderLabel || cloud.label}`)
+              : 'Turn on always-sync to iCloud Drive or Google Drive'}
             onClick={() => setSyncMenuOpen((open) => !open)}
           >
-            {syncButtonLabel(cloud)}
+            {syncButtonLabel(cloud, syncActivity)}
           </button>
           {syncMenuOpen && (
             <CloudSyncPanel
@@ -5614,6 +5683,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           cloud={cloud}
           cloudBusy={cloudBusy}
           cloudProjects={cloudProjects}
+          syncActivity={syncActivity}
           onCloudUse={(target) => { void enableCloud(target); }}
           onCloudStop={() => { void stopCloud(); }}
           onOpenCloudProject={(filePath) => { void openCloudProject(filePath); }}

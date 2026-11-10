@@ -14,7 +14,8 @@ const MAX_BYTES = 45_000_000;
 const MAX_TEMPLATES_BYTES = 8_000_000;
 const PREVIEW_LIMIT = 280_000;
 const SLIM_MEDIA_LIMIT = 180_000;
-const POLL_MS = 2500;
+const POLL_MS_VISIBLE = 900;
+const POLL_MS_HIDDEN = 4000;
 
 type DirHandle = FileSystemDirectoryHandle;
 type FileHandle = FileSystemFileHandle;
@@ -203,6 +204,17 @@ export async function webCloudPick(): Promise<{ canceled: boolean; status: Cloud
 export async function webCloudClear(): Promise<CloudLibraryStatus> {
   await clearStored();
   return webCloudStatus();
+}
+
+/** Re-grant folder access after a reload so sync keeps running without re-picking. */
+export async function webCloudResume(): Promise<CloudLibraryStatus> {
+  const stored = await loadStored();
+  if (!stored) return webCloudStatus();
+  const permitted = await ensurePermission(stored.handle, 'readwrite').catch(() => false);
+  if (!permitted) return baseStatus(true, stored.config.provider, stored.config.folderName, true);
+  lastFingerprint = '';
+  restartPoll();
+  return baseStatus(true, stored.config.provider, stored.config.folderName, false);
 }
 
 async function requireLibrary(): Promise<{ handle: DirHandle; config: StoredConfig }> {
@@ -510,27 +522,48 @@ async function pollOnce() {
   }
 }
 
+function pollDelay() {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+    ? POLL_MS_HIDDEN
+    : POLL_MS_VISIBLE;
+}
+
 function restartPoll() {
   stopPoll();
   if (changeListeners.size === 0) return;
   void pollOnce();
-  pollTimer = window.setInterval(() => {
+  const tick = () => {
     void pollOnce();
-  }, POLL_MS);
+    pollTimer = window.setTimeout(tick, pollDelay());
+  };
+  pollTimer = window.setTimeout(tick, pollDelay());
 }
 
 function stopPoll() {
   if (pollTimer) {
-    window.clearInterval(pollTimer);
+    window.clearTimeout(pollTimer);
     pollTimer = null;
   }
 }
 
+function onVisibilityForPoll() {
+  if (changeListeners.size > 0) restartPoll();
+}
+
 export function webOnCloudChanged(handler: () => void) {
+  const wasEmpty = changeListeners.size === 0;
   changeListeners.add(handler);
   restartPoll();
+  if (wasEmpty && typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisibilityForPoll);
+  }
   return () => {
     changeListeners.delete(handler);
-    if (changeListeners.size === 0) stopPoll();
+    if (changeListeners.size === 0) {
+      stopPoll();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityForPoll);
+      }
+    }
   };
 }

@@ -33,7 +33,7 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
 };
 import AccentThemePicker from './AccentThemePicker';
 import CloudSyncPanel, { type CloudTarget } from './CloudSyncPanel';
-import type { CloudLibraryStatus, CloudProjectEntry } from '../lib/cloudLibrary';
+import type { CloudLibraryStatus, CloudProjectEntry, SyncActivity } from '../lib/cloudLibrary';
 import { syncButtonLabel } from '../lib/cloudLibrary';
 import { isDesktopApp } from '../lib/phoneMirror';
 import type { RecentProjectEntry } from '../lib/recentProjects';
@@ -118,6 +118,7 @@ export default function ProjectsDashboard({
   cloud,
   cloudBusy,
   cloudProjects,
+  syncActivity = 'idle',
   onCloudUse,
   onCloudStop,
   onOpenCloudProject,
@@ -152,6 +153,7 @@ export default function ProjectsDashboard({
   cloud: CloudLibraryStatus | null;
   cloudBusy: boolean;
   cloudProjects: CloudProjectEntry[];
+  syncActivity?: SyncActivity;
   onCloudUse: (target: CloudTarget) => void;
   onCloudStop: () => void;
   onOpenCloudProject: (filePath: string) => void;
@@ -314,15 +316,17 @@ export default function ProjectsDashboard({
           <div className="sync-menu-wrap dash-sync-menu" ref={syncMenuRef}>
             <button
               type="button"
-              className={`sync-status ${cloud?.configured && !cloud.missing ? 'is-on' : ''}`}
+              className={`sync-status ${cloud?.configured && !cloud.missing ? 'is-on' : ''} ${syncActivity === 'saving' ? 'is-saving' : ''} ${syncActivity === 'synced' ? 'is-synced' : ''}`}
               aria-expanded={syncMenuOpen}
               aria-haspopup="dialog"
               title={cloud?.configured
-                ? `Saving to ${cloud.folderLabel || cloud.label}`
-                : 'Save to iCloud Drive or Google Drive'}
+                ? (cloud.missing
+                  ? 'Reconnect to keep files always syncing'
+                  : `Always syncing to ${cloud.folderLabel || cloud.label}`)
+                : 'Turn on always-sync to iCloud Drive or Google Drive'}
               onClick={() => setSyncMenuOpen((open) => !open)}
             >
-              {syncButtonLabel(cloud)}
+              {syncButtonLabel(cloud, syncActivity)}
             </button>
             {syncMenuOpen && (
               <CloudSyncPanel
@@ -846,8 +850,8 @@ export default function ProjectsDashboard({
 
           <p className="dash-footer">
             {cloud?.configured && !cloud.missing
-              ? `Saving to ${cloud.folderLabel} automatically`
-              : 'All changes saved automatically'}
+              ? `Always syncing to ${cloud.folderLabel}`
+              : 'Turn on Sync so web and Mac always share the same files'}
           </p>
         </main>
       </div>
