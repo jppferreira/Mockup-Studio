@@ -218,7 +218,7 @@ function styleGizmo(controls: ControlsHandle | null | undefined, kind: Tool) {
 
     // Stock helper AXIS lines are 1e6 units long — with depthTest off they read
     // as red/blue streaks shooting off the device ("gizmo left the center").
-    if (child.tag === 'helper' || child.name === 'AXIS') {
+    if ((child as THREE.Object3D & { tag?: string }).tag === 'helper' || child.name === 'AXIS') {
       child.visible = false;
       return;
     }
