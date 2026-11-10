@@ -169,6 +169,7 @@ import {
   canonicalProjectJson, isPathInsideLibrary, projectFromCloudRow, syncButtonLabel,
   type CloudLibraryStatus, type CloudProjectEntry,
 } from './lib/cloudLibrary';
+import { getCloudApi } from './lib/cloudApi';
 import { downloadBlob, safeFilename, validateProject } from './lib/project';
 import {
   encodeMockupFile, isProjectFileName, mockupDownloadName, MOCKUP_MIME, readProjectFileContents,
@@ -2538,7 +2539,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   }, [hasOpenProject, prepareStudioTourChrome]);
 
   persistCloudRef.current = async (tabId, snapshot, knownPath, options) => {
-    const api = window.mockupDesktop;
+    const api = getCloudApi();
     if (!api?.cloudWrite || !cloudRef.current?.configured) return null;
     const canonical = canonicalProjectJson(snapshot);
     const path = knownPath || syncPathByTabRef.current.get(tabId) || null;
@@ -2571,7 +2572,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   pushTemplatesRef.current = async (templates) => {
-    const api = window.mockupDesktop;
+    const api = getCloudApi();
     if (!api?.cloudTemplatesWrite || !cloudRef.current?.configured || cloudRef.current.missing) return;
     const list = templates ?? loadSavedCompositions();
     const canonical = canonicalTemplatesJson(list);
@@ -2589,7 +2590,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   pullTemplatesRef.current = async (opts) => {
-    const api = window.mockupDesktop;
+    const api = getCloudApi();
     if (!api?.cloudTemplatesRead || !cloudRef.current?.configured || cloudRef.current.missing) return null;
     try {
       const file = await api.cloudTemplatesRead();
@@ -2617,7 +2618,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const refreshCloudProjects = useCallback(async () => {
-    const api = window.mockupDesktop;
+    const api = getCloudApi();
     if (!api?.cloudList) return;
     try {
       const rows = await api.cloudList();
@@ -2628,7 +2629,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   }, []);
 
   pullRemoteRef.current = async () => {
-    const api = window.mockupDesktop;
+    const api = getCloudApi();
     if (!api?.cloudRead || !cloudRef.current?.configured) return;
     for (const tab of workspaceRef.current.tabs) {
       const filePath = tab.syncPath || syncPathByTabRef.current.get(tab.id);
@@ -2669,7 +2670,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       return;
     }
     try {
-      const file = await window.mockupDesktop?.cloudRead?.(filePath);
+      const file = await getCloudApi()?.cloudRead(filePath);
       if (!file) return;
       const parsed = validateProject(JSON.parse(file.contents) as unknown);
       openProjectInTab(parsed, `Opened “${parsed.name}”`, file.path);
@@ -2679,7 +2680,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const publishExistingWork = async () => {
-    const api = window.mockupDesktop;
+    const api = getCloudApi();
     if (!api?.cloudList || !api.cloudWrite) return;
     const rows = await api.cloudList();
     const names = new Set(rows.map((row) => row.name.trim().toLowerCase()));
@@ -2710,9 +2711,9 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const enableCloud = async (target: CloudTarget) => {
-    const api = window.mockupDesktop;
+    const api = getCloudApi();
     if (!api?.cloudUse || !api.cloudPick) {
-      notify('Sync to iCloud or Google Drive is available in the Mac app.');
+      notify('Sync needs Chrome, Edge, or the Mac app so both can use the same folder.');
       return;
     }
     setCloudBusy(true);
@@ -2736,7 +2737,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
   const stopCloud = async () => {
     try {
-      const status = await window.mockupDesktop?.cloudClear?.();
+      const status = await getCloudApi()?.cloudClear();
       if (status) setCloud(status);
       setCloudProjects([]);
       setSyncMenuOpen(false);
@@ -2752,7 +2753,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     const where = cloud?.label || 'the sync folder';
     if (!window.confirm(`Remove “${name}” from ${where}? This deletes the file from the sync folder.`)) return;
     try {
-      await window.mockupDesktop?.cloudRemove?.(filePath);
+      await getCloudApi()?.cloudRemove(filePath);
       setCloudProjects((current) => current.filter((item) => item.path !== filePath));
       const recent = recentProjects.find((item) => item.name.trim().toLowerCase() === name.trim().toLowerCase());
       if (recent) setRecentProjects(removeRecentProject(recent.id));
@@ -2762,7 +2763,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const refreshCloudStatus = useCallback(() => {
-    const api = window.mockupDesktop;
+    const api = getCloudApi();
     if (!api?.cloudStatus) return;
     void api.cloudStatus().then((status) => {
       setCloud(status);
@@ -2777,14 +2778,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   }, []);
 
   useEffect(() => {
-    const api = window.mockupDesktop;
+    const api = getCloudApi();
     if (!api?.cloudStatus) return undefined;
     refreshCloudStatus();
-    const stop = api.onCloudChanged?.(() => {
+    const stop = api.onCloudChanged(() => {
       void pullRemoteRef.current();
     });
     return () => {
-      stop?.();
+      stop();
     };
   }, [refreshCloudStatus]);
 
@@ -3574,7 +3575,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const writeProjectFile = async (snapshot: MockupProject, opts?: { forceDialog?: boolean }) => {
     const contents = JSON.stringify(snapshot, null, 2);
     const fileName = safeFilename(snapshot.name);
-    if (!opts?.forceDialog && window.mockupDesktop?.cloudWrite && cloudRef.current?.configured) {
+    if (!opts?.forceDialog && getCloudApi()?.cloudWrite && cloudRef.current?.configured) {
       const tabId = activeTab?.id;
       if (!tabId) return false;
       const savedPath = await persistCloudRef.current(
