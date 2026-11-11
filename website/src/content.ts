@@ -1,5 +1,5 @@
 /** Flip to true when Mac builds / Releases page should be public again. */
-export const SHOW_RELEASE_DOWNLOADS = false;
+export const SHOW_RELEASE_DOWNLOADS = true;
 
 export const HEADLINE_OPTIONS = [
   {
