@@ -607,14 +607,13 @@ export default function RotationBall({
           // dragToolRef lagged killed real arrow moves mid-gesture.
           if (rig?.dragging) {
             if (dragToolRef.current !== 'translate') beginDrag('translate');
-            onMove(readPosition(positionObject), { recordKeys: false });
+            // Live pose stays in Three.js; React commits on pointer-up only.
             return;
           }
           if (dragToolRef.current !== 'translate') {
             abortControlsDrag(translateRef.current);
             return;
           }
-          onMove(readPosition(positionObject), { recordKeys: false });
         }}
       />
       <TransformControls
@@ -633,7 +632,7 @@ export default function RotationBall({
           const rig = rotateRef.current as (ControlsHandle & { dragging?: boolean }) | null;
           if (rig?.dragging) {
             if (dragToolRef.current !== 'rotate') beginDrag('rotate');
-            onRotate(readRotation(rotationObject), { recordKeys: false });
+            // Live pose stays in Three.js; React commits on pointer-up only.
             return;
           }
           // Spurious dual-control / fat-picker drags move the pivot without
@@ -642,7 +641,6 @@ export default function RotationBall({
             abortControlsDrag(rotateRef.current);
             return;
           }
-          onRotate(readRotation(rotationObject), { recordKeys: false });
         }}
       />
     </>

@@ -14,3 +14,10 @@ export const MODEL_LICENSING_NOTICE =
 
 export const APP_ABOUT_SUMMARY =
   'mokstudio helps you compose professional 3D device mockups. Device names identify represented hardware; manufacturer logos are hidden in the studio and exports where geometry or materials allow.';
+
+/** Figma personal-access-token handling (Assets → Figma API). */
+export const FIGMA_TOKEN_PRIVACY_NOTICE =
+  'Your Figma personal access token is stored only on this device, encrypted for your signed-in mokstudio account. '
+  + 'It is sent solely to Figma’s API (api.figma.com) to load the files you choose. '
+  + 'mokstudio does not upload the token or Figma layer data to our servers or any other third party. '
+  + 'Disconnect deletes the token for this account on this device.';

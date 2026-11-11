@@ -65,13 +65,24 @@ import {
 import { physicalFromAuthored, stripSceneHelpers } from '../lib/materialFidelity';
 import {
   DEVICE_COLORS, DEFAULT_PROJECT, EYE_CAMERA_DISTANCE, EYE_PERSPECTIVE_FOV, EYE_SPLIT_CAMERA_DISTANCE, cameraLensFov,
-  type BackgroundPreset, type CameraLens, type CameraView, type DeviceColor, type DeviceInstance,
+  type AnimationClip, type BackgroundPreset, type CameraLens, type CameraView, type DeviceColor, type DeviceInstance,
   type GradientColors, type MockupProject, type ShadowQuality, type Vec3,
 } from '../types';
 import { STUDIO_FLOOR_Y } from '../lib/studioEnvironment';
+import {
+  evaluateCamera,
+  hasAnimation,
+  hasCameraAnimation,
+  isCameraProperty,
+  sampleTrack,
+} from '../lib/animation';
+import { publishLiveOrbit, subscribeLiveOrbit, type LiveOrbit } from '../lib/liveOrbit';
 
-/** Live preview DPR — Retina 2× is expensive with shadows + grade; thumbs still pass pixelRatio. */
-const LIVE_CANVAS_DPR: [number, number] = [1, 1.5];
+/**
+ * Live preview DPR — locked to 1×.
+ * Retina 1.5–2× doubled fill-rate across shadows + grade; exports use sized renders.
+ */
+const LIVE_CANVAS_DPR: [number, number] = [1, 1];
 
 
 export type CaptureApi = {
@@ -118,6 +129,11 @@ interface Props {
   liveStreamDeviceId?: string | null;
   /** Evaluated camera position when camera tracks are active */
   cameraPosition?: Vec3 | null;
+  /**
+   * Live playhead ref — when set with an active clip, device poses are applied
+   * inside the canvas so App does not re-render at 60fps during playback.
+   */
+  playheadRef?: MutableRefObject<number>;
   /** Unique id per WebGL canvas — keeps ContactShadows / R3F state from colliding in dual mode. */
   canvasId?: string;
   /** When false, hide TransformControls (inactive dual-pane) so linked poses aren’t fought. */
@@ -965,6 +981,148 @@ function DemandKeepAlive({ active }: { active: boolean }) {
   return null;
 }
 
+const DEG = Math.PI / 180;
+
+/**
+ * Apply animation tracks directly to Three.js grabs so playback does not need
+ * React to rebuild device props every frame.
+ */
+function applyDevicePoseAtTime(
+  device: DeviceInstance,
+  animation: AnimationClip,
+  time: number,
+  group: THREE.Object3D,
+) {
+  let px = device.position?.x ?? 0;
+  let py = device.position?.y ?? 0;
+  let pz = device.position?.z ?? 0;
+  let rx = device.rotation?.x ?? 0;
+  let ry = device.rotation?.y ?? 0;
+  let rz = device.rotation?.z ?? 0;
+  let scale = device.scale ?? 1;
+  let lid = device.lidOpen ?? 1;
+  for (const track of animation.tracks) {
+    if (track.targetId !== device.id || isCameraProperty(track.property)) continue;
+    const value = sampleTrack(track, time);
+    if (value == null) continue;
+    switch (track.property) {
+      case 'position.x': px = value; break;
+      case 'position.y': py = value; break;
+      case 'position.z': pz = value; break;
+      case 'rotation.x': rx = value; break;
+      case 'rotation.y': ry = value; break;
+      case 'rotation.z': rz = value; break;
+      case 'scale': scale = value; break;
+      case 'lidOpen': lid = value; break;
+      default: break;
+    }
+  }
+  group.position.set(px, py, pz);
+  const rotPivot = group.userData.rotationPivot as THREE.Object3D | undefined | null;
+  if (rotPivot) rotPivot.rotation.set(rx * DEG, ry * DEG, rz * DEG);
+  const scalePivot = rotPivot?.children?.[0];
+  if (scalePivot) scalePivot.scale.setScalar(scale);
+  const lidRig = group.userData.lidRig as LidRig | null | undefined;
+  if (lidRig) applyLidOpen(lidRig, lid);
+  group.userData.animLidOpen = lid;
+}
+
+function AnimationPoseDriver({
+  clip,
+  devices,
+  playheadRef,
+  active,
+  /** True while playback advances — keeps demand frameloop alive. Scrub relies on React commits. */
+  continuous = false,
+  registry,
+  gizmoDraggingRef,
+  cameraView,
+  split,
+  focusPoint,
+  cameraPositionOut,
+  poseApplyRef,
+}: {
+  clip: AnimationClip | null | undefined;
+  devices: DeviceInstance[];
+  playheadRef?: MutableRefObject<number>;
+  active: boolean;
+  continuous?: boolean;
+  registry: MutableRefObject<Map<string, THREE.Object3D>>;
+  gizmoDraggingRef: MutableRefObject<boolean>;
+  cameraView: CameraView;
+  split: boolean;
+  focusPoint: Vec3;
+  /** When camera tracks are live, write the evaluated eye here for CameraRig. */
+  cameraPositionOut: MutableRefObject<Vec3 | null>;
+  /** CaptureBridge calls this before readback so export frames are posed. */
+  poseApplyRef?: MutableRefObject<(() => void) | null>;
+}) {
+  const { camera, controls, invalidate } = useThree();
+  const clipRef = useRef(clip);
+  clipRef.current = clip;
+  const devicesRef = useRef(devices);
+  devicesRef.current = devices;
+  const focusRef = useRef(focusPoint);
+  focusRef.current = focusPoint;
+  const cameraViewRef = useRef(cameraView);
+  cameraViewRef.current = cameraView;
+  const splitRef = useRef(split);
+  splitRef.current = split;
+  const continuousRef = useRef(continuous);
+  continuousRef.current = continuous;
+
+  useFrame(() => {
+    const applyNow = () => {
+      if (!playheadRef || gizmoDraggingRef.current) {
+        cameraPositionOut.current = null;
+        return;
+      }
+      const animation = clipRef.current;
+      if (!animation || !hasAnimation(animation)) {
+        cameraPositionOut.current = null;
+        return;
+      }
+      const time = playheadRef.current;
+      for (const device of devicesRef.current) {
+        const group = registry.current.get(device.id);
+        if (!group) continue;
+        applyDevicePoseAtTime(device, animation, time, group);
+      }
+      if (hasCameraAnimation(animation)) {
+        const eye = evaluateCamera(animation, time, cameraViewRef.current, splitRef.current);
+        cameraPositionOut.current = eye;
+        const f = focusRef.current;
+        camera.position.set(eye.x, eye.y, eye.z);
+        const orbit = controls as OrbitControlsLike | null;
+        if (orbit?.target) {
+          orbit.target.set(f.x, f.y, f.z);
+          orbit.update?.();
+        } else {
+          camera.lookAt(f.x, f.y, f.z);
+        }
+      } else {
+        cameraPositionOut.current = null;
+      }
+    };
+
+    if (poseApplyRef) poseApplyRef.current = applyNow;
+    if (!active || !playheadRef || gizmoDraggingRef.current) {
+      cameraPositionOut.current = null;
+      // Drop live lid overrides so procedural/React props own the fold again.
+      for (const group of registry.current.values()) {
+        if ('animLidOpen' in group.userData) delete group.userData.animLidOpen;
+      }
+      return;
+    }
+    applyNow();
+    // Playback must keep demand mode ticking. A paused timeline must not spin the GPU —
+    // scrubbing still gets a frame from the React playhead commit.
+    if (continuousRef.current) invalidate();
+  });
+
+  return null;
+}
+
 function poseOpenAnimation(root: THREE.Object3D, animations: THREE.AnimationClip[]) {
   if (!animations.length) return;
   const clip = animations.find((a) => /open/i.test(a.name)) ?? animations[0];
@@ -1114,6 +1272,19 @@ function GltfDeviceContent({
     if (!lidRigRef.current) return;
     applyLidOpen(lidRigRef.current, lidOpen);
   }, [lidOpen, root]);
+
+  // Publish the lid rig onto the grab group so AnimationPoseDriver can fold
+  // laptops during canvas-driven preview / export without waiting on React.
+  useLayoutEffect(() => {
+    const rig = lidRigRef.current;
+    let grab: THREE.Object3D | null = root.parent;
+    while (grab && !grab.userData.deviceGrabId) grab = grab.parent;
+    if (!grab) return undefined;
+    grab.userData.lidRig = rig;
+    return () => {
+      if (grab.userData.lidRig === rig) grab.userData.lidRig = null;
+    };
+  }, [root]);
 
   const [screen, setScreen] = useState<{
     material: THREE.MeshPhysicalMaterial;
@@ -1987,11 +2158,6 @@ function DeviceGrabController({
         onDraggingChangeRef.current?.(false);
       };
 
-      const publishMove = (next: Vec3) => {
-        if (target.kind === 'prop') onMovePropRef.current?.(target.id, next);
-        else onMoveRef.current?.(target.id, next, { recordKeys: false });
-      };
-
       const move = (ev: PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
         const dx = ev.clientX - startX;
@@ -2025,9 +2191,7 @@ function DeviceGrabController({
           lastX = ev.clientX;
           lastY = ev.clientY;
           applyTrackballDelta(rotatePivot, camera, stepX, stepY);
-          const next = readObjectRotation(rotatePivot);
-          if (target.kind === 'prop') onRotatePropRef.current?.(target.id, next);
-          else onRotateRef.current?.(target.id, next, { recordKeys: false });
+          // Live rotate stays in Three.js; React commits on pointer-up.
           return;
         }
 
@@ -2038,7 +2202,7 @@ function DeviceGrabController({
         group.parent?.worldToLocal(hitPoint);
         clampDevicePosition(hitPoint);
         group.position.copy(hitPoint);
-        publishMove({ x: hitPoint.x, y: hitPoint.y, z: hitPoint.z });
+        // Live translate stays in Three.js; React commits on pointer-up.
       };
 
       window.addEventListener('pointermove', move);
@@ -2075,6 +2239,7 @@ function DeviceModelView({
   onSelectOverlay,
   selectedMaterialName = null,
   preserveBrandMarks = false,
+  skipPoseSync = false,
 }: {
   instance: DeviceInstance;
   screenshot: string | null;
@@ -2095,6 +2260,8 @@ function DeviceModelView({
   onSelectOverlay?: (id: string) => void;
   selectedMaterialName?: string | null;
   preserveBrandMarks?: boolean;
+  /** AnimationPoseDriver owns transforms — don't fight it from React props. */
+  skipPoseSync?: boolean;
 }) {
   const device = getDevice(instance.deviceId);
   const modelUrl = useDeviceModelUrl(device.id, device.url);
@@ -2105,6 +2272,7 @@ function DeviceModelView({
   const pointer = useRef({ x: 0, y: 0, moved: false });
   const screenLayers = instance.screenLayers ?? [];
   const layerExplosion = instance.layerExplosion ?? 0;
+  const layerExtrusion = instance.layerExtrusion ?? 0;
 
   const radians = (d: number) => (d * Math.PI) / 180;
 
@@ -2120,18 +2288,18 @@ function DeviceModelView({
     if (!positionGroup || !rotationGroup) return;
     // Scale lives on an inner pivot so TransformControls stay centered on the
     // unscaled position/rotation origins (Spline-style gimbal).
-    if (scaleGroup) scaleGroup.scale.setScalar(instance.scale ?? 1);
+    if (scaleGroup && !skipPoseSync) scaleGroup.scale.setScalar(instance.scale ?? 1);
     // Rotate pivot must stay at the translate origin — any residual local
     // offset separates the rings/arrows from the device body.
     rotationGroup.position.set(0, 0, 0);
     rotationGroup.scale.setScalar(1);
     // While the gizmo is dragging, TransformControls owns the pose — don't fight it.
-    if (gizmoDraggingRef.current) return;
+    if (gizmoDraggingRef.current || skipPoseSync) return;
     const rot = instance.rotation ?? { x: 0, y: 0, z: 0 };
     const pos = instance.position ?? { x: 0, y: 0, z: 0 };
     positionGroup.position.set(pos.x, pos.y, pos.z);
     rotationGroup.rotation.set(radians(rot.x), radians(rot.y), radians(rot.z));
-  }, [instance.rotation.x, instance.rotation.y, instance.rotation.z, instance.position?.x, instance.position?.y, instance.position?.z, instance.scale, gizmoDraggingRef]);
+  }, [instance.rotation.x, instance.rotation.y, instance.rotation.z, instance.position?.x, instance.position?.y, instance.position?.z, instance.scale, gizmoDraggingRef, skipPoseSync]);
 
   useLayoutEffect(() => {
     const group = positionRef.current;
@@ -2227,6 +2395,7 @@ function DeviceModelView({
             host={explosionHost}
             layers={screenLayers}
             amount={layerExplosion}
+            extrusion={layerExtrusion}
           />
           <ModelAnnotationLayer
             deviceId={instance.id}
@@ -2581,18 +2750,17 @@ function KeyLightRig({
 
   // Adaptive ortho frustum — tight around casters so 2048/4096 texels aren't wasted.
   // Also re-assert intensity each frame so a failed shadow bake can never leave the key at 0.
-  useFrame(() => {
+  useFrame((state) => {
     const light = lightRef.current;
     if (!light) return;
     if (Math.abs(light.intensity - intensity) > 1e-6) light.intensity = intensity;
     if (!castShadow) return;
     fitFrame.current += 1;
-    // While interacting, refit often so rotation never loses the shadow.
-    // When idle, refit every few frames to avoid thrashing projection matrices.
-    const interval = mode === 'interactive' ? 1 : 4;
+    // Bound collection is expensive — don't do it every orbit frame.
+    const interval = mode === 'interactive' ? 3 : 6;
     if (fitFrame.current % interval !== 0) return;
 
-    collectCasterBounds(scene, boundsRef.current);
+    collectCasterBounds(scene, boundsRef.current, state.gl.info.render.frame);
     if (boundsRef.current.isEmpty()) return;
     const fitted = fitDirectionalShadowCamera(
       position,
@@ -3124,8 +3292,34 @@ function CameraRig({
     };
   }, [gl, camera]);
 
+  const spacePanRef = useRef(spacePan);
+  spacePanRef.current = spacePan;
+
+  const applyLinkedOrbit = (orbit: LiveOrbit) => {
+    if (userOrbitingRef.current || applyingSharedRef.current || freezeFramingRef.current) return;
+    if (spacePanRef.current) return;
+    const f = focusRef.current;
+    const nextPos = {
+      x: f.x + orbit.offset.x,
+      y: f.y + orbit.offset.y,
+      z: f.z + orbit.offset.z,
+    };
+    const look = orbit.lookOffset
+      ? { x: f.x + orbit.lookOffset.x, y: f.y + orbit.lookOffset.y, z: f.z + orbit.lookOffset.z }
+      : f;
+    applyingSharedRef.current = true;
+    snapCameraPose(camera, controls.current, nextPos, look);
+    requestAnimationFrame(() => { applyingSharedRef.current = false; });
+  };
+
+  useEffect(() => subscribeLiveOrbit((orbit) => {
+    // Peer pane — apply without a sharedOrbit React prop change.
+    if (userOrbitingRef.current || settlingRef.current) return;
+    applyLinkedOrbit(orbit);
+  }), [camera]);
+
   const publishOrbit = () => {
-    if (!onSharedOrbitChangeRef.current || applyingSharedRef.current) return;
+    if (applyingSharedRef.current) return;
     if (animatedPosition && !userOrbitingRef.current) return;
     // OrbitControls reports its starting pose on load. That is not a user
     // rotate — saving it is what put the default angle back after a reload.
@@ -3141,32 +3335,7 @@ function CameraRig({
     // Screen-space pan moves the look-at. Resetting it here pins the device
     // to the center and makes Space-drag look like it did nothing.
     if (panning) return;
-    // Zoom must keep the current look-at. Forcing target back to the device
-    // mid-dolly redirects the camera and feels like a jump to a random place.
-    const zooming = gestureZoomRef.current || dragZoomRef.current;
-    if (zooming) {
-      const target = controls.current?.target;
-      const look = target
-        ? {
-          x: Number((target.x - f.x).toFixed(4)),
-          y: Number((target.y - f.y).toFixed(4)),
-          z: Number((target.z - f.z).toFixed(4)),
-        }
-        : sharedLookOffsetRef.current;
-      const hasLook = look
-        && (Math.abs(look.x) + Math.abs(look.y) + Math.abs(look.z)) > 1e-4;
-      onSharedOrbitChangeRef.current({
-        offset: {
-          x: Number((camera.position.x - f.x).toFixed(4)),
-          y: Number((camera.position.y - f.y).toFixed(4)),
-          z: Number((camera.position.z - f.z).toFixed(4)),
-        },
-        ...(hasLook && look ? { lookOffset: look } : {}),
-      });
-      return;
-    }
-    // Rotate usually aims at the device. If the user panned first (zoomed-in
-    // detail), keep that look-at so the framing survives the orbit.
+    // Zoom / rotate share the same publish path; look-at is preserved when present.
     const target = controls.current?.target;
     const look = target
       ? {
@@ -3179,14 +3348,17 @@ function CameraRig({
       look
       && (Math.abs(look.x) + Math.abs(look.y) + Math.abs(look.z)) > 1e-4,
     );
-    onSharedOrbitChangeRef.current({
+    const orbit: LiveOrbit = {
       offset: {
         x: Number((camera.position.x - f.x).toFixed(4)),
         y: Number((camera.position.y - f.y).toFixed(4)),
         z: Number((camera.position.z - f.z).toFixed(4)),
       },
       ...(hasLook && look ? { lookOffset: look } : {}),
-    });
+    };
+    // Dual-pane sync without React re-renders; App still gets settle writes.
+    publishLiveOrbit(orbit);
+    onSharedOrbitChangeRef.current?.(orbit);
   };
 
   const readLiveOrbit = () => {
@@ -3373,16 +3545,20 @@ function CaptureBridge({
   edgeBlurTop,
   edgeBlurBottom,
   edgeBlurAmount,
+  poseApplyRef,
 }: {
   captureRef: MutableRefObject<CaptureApi | null>;
   edgeBlurTop: boolean;
   edgeBlurBottom: boolean;
   edgeBlurAmount: number;
+  poseApplyRef?: MutableRefObject<(() => void) | null>;
 }) {
   const { gl, scene, camera } = useThree();
   const shadowInteraction = useStudioShadowInteraction();
   const shadowApiRef = useRef(shadowInteraction);
   shadowApiRef.current = shadowInteraction;
+  const poseApplyLocalRef = useRef(poseApplyRef);
+  poseApplyLocalRef.current = poseApplyRef;
   const edgeBlurActive = (edgeBlurTop || edgeBlurBottom) && edgeBlurAmount > 0;
   useEffect(() => {
     const blitWithBlur = (width: number, height: number) => {
@@ -3415,6 +3591,9 @@ function CaptureBridge({
       if (width > gl.capabilities.maxTextureSize || height > gl.capabilities.maxTextureSize) {
         throw new Error('Export size exceeds this computer’s GPU limit');
       }
+      // Pose devices from playhead before the capture render — useFrame may not
+      // have run yet when export seeks via flushSync + drawFrame.
+      poseApplyLocalRef.current?.current?.();
       const originalSize = gl.getSize(new THREE.Vector2());
       const originalDpr = gl.getPixelRatio();
       const originalAspect = camera.aspect;
@@ -3627,6 +3806,11 @@ function SceneDevices({
   selectedMaterialName = null,
   selectedMaterialDeviceId = null,
   onPickMaterial,
+  playheadRef,
+  driveAnimation = false,
+  focusPoint,
+  cameraPositionOut,
+  poseApplyRef,
 }: {
   project: MockupProject;
   gizmoMode: GizmoMode;
@@ -3660,6 +3844,11 @@ function SceneDevices({
   selectedMaterialName?: string | null;
   selectedMaterialDeviceId?: string | null;
   onPickMaterial?: (payload: MaterialPickPayload) => void;
+  playheadRef?: MutableRefObject<number>;
+  driveAnimation?: boolean;
+  focusPoint: Vec3;
+  cameraPositionOut: MutableRefObject<Vec3 | null>;
+  poseApplyRef?: MutableRefObject<(() => void) | null>;
 }) {
   const [deviceGizmoTargets, setDeviceGizmoTargets] = useState<GizmoTargets | null>(null);
   const localGizmoDraggingRef = useRef(false);
@@ -3686,6 +3875,20 @@ function SceneDevices({
 
   return (
     <>
+      <AnimationPoseDriver
+        clip={project.animation}
+        devices={project.devices}
+        playheadRef={playheadRef}
+        active={driveAnimation}
+        continuous={Boolean(mediaPlaying)}
+        registry={grabRegistry}
+        gizmoDraggingRef={gizmoDraggingRef}
+        cameraView={project.cameraView}
+        split={project.compositionMode === 'split'}
+        focusPoint={focusPoint}
+        cameraPositionOut={cameraPositionOut}
+        poseApplyRef={poseApplyRef}
+      />
       {project.devices.map((instance) => {
         const screenshot = instance.screenshot !== undefined ? instance.screenshot : project.screenshot;
         const deviceColor = instance.deviceColor ?? project.deviceColor;
@@ -3721,6 +3924,7 @@ function SceneDevices({
               selectedMaterialDeviceId === instance.id ? selectedMaterialName : null
             }
             preserveBrandMarks={materialEditEnabled}
+            skipPoseSync={driveAnimation}
           />
         );
       })}
@@ -3795,6 +3999,7 @@ function DeviceCanvasImpl({
   liveStream = null,
   liveStreamDeviceId = null,
   cameraPosition = null,
+  playheadRef,
   canvasId = 'main',
   gizmoActive = true,
   sharedOrbit = null,
@@ -3891,7 +4096,12 @@ function DeviceCanvasImpl({
   const keyIntensity = Math.max(0, project.lightIntensity);
   const toneMappingExposure = project.toneMappingExposure ?? studioPreset.toneMappingExposure;
   const movingLight = lightGizmoActive || Boolean(selectedSceneLightId);
+  // Orbit, light/gizmo drag, and playback all need a live ContactShadows plate.
   const shadowBusy = gizmoDragging || movingLight || Boolean(mediaPlaying);
+  // When App supplies a playheadRef, poses are applied in-canvas (no 60fps React).
+  const animDriveActive = Boolean(playheadRef && project.animation && hasAnimation(project.animation));
+  const drivenCameraOut = useRef<Vec3 | null>(null);
+  const poseApplyRef = useRef<(() => void) | null>(null);
   return (
     <Canvas
       key={canvasId}
@@ -3918,7 +4128,7 @@ function DeviceCanvasImpl({
       onPointerMissed={() => onClearSelection?.()}
     >
       <StudioShadowInteractionProvider exportBoost={shadowExportBoost} busyExternal={shadowBusy}>
-        <DemandKeepAlive active={shadowBusy} />
+        <DemandKeepAlive active={shadowBusy || Boolean(mediaPlaying)} />
         <Background
           preset={project.background}
           colors={project.background === 'transparent' ? null : project.gradientColors}
@@ -4075,6 +4285,11 @@ function DeviceCanvasImpl({
               selectedMaterialName={selectedMaterialName}
               selectedMaterialDeviceId={selectedMaterialDeviceId}
               onPickMaterial={onPickMaterial}
+              playheadRef={playheadRef}
+              driveAnimation={animDriveActive}
+              focusPoint={resolvedFocus}
+              cameraPositionOut={drivenCameraOut}
+              poseApplyRef={poseApplyRef}
             />
             <SceneReady onReady={onSceneReady} />
           </Suspense>
@@ -4083,7 +4298,7 @@ function DeviceCanvasImpl({
           view={project.cameraView}
           lens={project.cameraLens ?? 'standard'}
           split={project.compositionMode === 'split'}
-          animatedPosition={cameraPosition}
+          animatedPosition={animDriveActive ? null : cameraPosition}
           sharedOrbit={sharedOrbit}
           onSharedOrbitChange={onSharedOrbitChange}
           onCameraCommit={onCameraCommit}
@@ -4102,6 +4317,7 @@ function DeviceCanvasImpl({
           edgeBlurTop={project.edgeBlurTop ?? false}
           edgeBlurBottom={project.edgeBlurBottom ?? false}
           edgeBlurAmount={project.edgeBlurAmount ?? 24}
+          poseApplyRef={poseApplyRef}
         />
       </StudioShadowInteractionProvider>
     </Canvas>

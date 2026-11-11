@@ -7,10 +7,10 @@ export type EdgeBlurLayer = {
   weight: number;
 };
 
+/** Two bands — each backdrop-filter over a live WebGL canvas is expensive. */
 export const EDGE_BLUR_LAYERS: EdgeBlurLayer[] = [
-  { frac: 0.3, weight: 0.22 },
-  { frac: 0.2, weight: 0.5 },
-  { frac: 0.12, weight: 1 },
+  { frac: 0.28, weight: 0.35 },
+  { frac: 0.14, weight: 1 },
 ];
 
 /** CSS mask stops for a progressive fade (opaque at edge → transparent inward). */

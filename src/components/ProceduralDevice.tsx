@@ -625,6 +625,42 @@ export default function ProceduralDevice({
     }
   }, [device.id, style]);
 
+  // When the canvas owns animation, AnimationPoseDriver writes animLidOpen on
+  // the grab group — apply it to named procedural hinges without a React rebuild.
+  const lidPartsRef = useRef<{
+    grab: THREE.Object3D | null;
+    lid: THREE.Object3D | null;
+    wingL: THREE.Object3D | null;
+    wingR: THREE.Object3D | null;
+  } | null>(null);
+  useFrame(() => {
+    const root = group.current;
+    if (!root) return;
+    let parts = lidPartsRef.current;
+    if (!parts || parts.grab?.parent == null) {
+      let grab: THREE.Object3D | null = root.parent;
+      while (grab && !grab.userData.deviceGrabId) grab = grab.parent;
+      parts = {
+        grab,
+        lid: root.getObjectByName('GenericLid') ?? null,
+        wingL: root.getObjectByName('DuoWingL') ?? null,
+        wingR: root.getObjectByName('DuoWingR') ?? null,
+      };
+      lidPartsRef.current = parts;
+    }
+    const { grab, lid, wingL, wingR } = parts;
+    if (!grab || typeof grab.userData.animLidOpen !== 'number') return;
+    const open = Math.min(1, Math.max(0, grab.userData.animLidOpen as number));
+    if (lid) {
+      lid.rotation.x = -((1 - open) * Math.PI * (110 / 180) + open * Math.PI * (100 / 180));
+    }
+    if (wingL && wingR) {
+      const wingAngle = ((1 - open) * Math.PI) / 2;
+      wingL.rotation.y = wingAngle;
+      wingR.rotation.y = -wingAngle;
+    }
+  });
+
   const common = {
     device,
     screenshot,

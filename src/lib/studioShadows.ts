@@ -50,10 +50,33 @@ export function isShadowCasterMesh(mesh: THREE.Mesh): boolean {
   return mesh.castShadow === true && !mesh.userData?.skipShadowFit;
 }
 
-/** Expand world AABB of every relevant caster (devices + shadow-casting props). */
-export function collectCasterBounds(scene: THREE.Object3D, target: THREE.Box3): THREE.Box3 {
+/** Same-frame reuse when key-light fit and floor-plate extent both ask. */
+let casterBoundsFrame = -1;
+let casterBoundsScene: THREE.Object3D | null = null;
+const casterBoundsCache = new THREE.Box3();
+
+/**
+ * Expand world AABB of every relevant caster (devices + shadow-casting props).
+ * Pass `frame` from R3F's clock/frame counter so multiple callers in one tick share work.
+ */
+export function collectCasterBounds(
+  scene: THREE.Object3D,
+  target: THREE.Box3,
+  frame = -1,
+): THREE.Box3 {
+  if (
+    frame >= 0
+    && frame === casterBoundsFrame
+    && casterBoundsScene === scene
+    && !casterBoundsCache.isEmpty()
+  ) {
+    target.copy(casterBoundsCache);
+    return target;
+  }
+
   target.makeEmpty();
-  scene.updateMatrixWorld(true);
+  // Dirty-only update — force=true rewalked the whole tree every shadow fit.
+  scene.updateMatrixWorld();
   scene.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh || !isShadowCasterMesh(mesh)) return;
@@ -63,6 +86,12 @@ export function collectCasterBounds(scene: THREE.Object3D, target: THREE.Box3): 
     _box.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
     target.union(_box);
   });
+
+  if (frame >= 0) {
+    casterBoundsFrame = frame;
+    casterBoundsScene = scene;
+    casterBoundsCache.copy(target);
+  }
   return target;
 }
 

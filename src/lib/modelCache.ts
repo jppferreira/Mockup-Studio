@@ -88,6 +88,13 @@ async function getCryptoKey(): Promise<CryptoKey> {
   return cryptoKeyPromise;
 }
 
+/** Kick IndexedDB + crypto key so the first model resolve is not cold. */
+export function prepareModelCache(): void {
+  if (!remoteModelsConfigured()) return;
+  void openDb().catch(() => undefined);
+  void getCryptoKey().catch(() => undefined);
+}
+
 async function idbGet(key: string): Promise<CacheRecord | null> {
   const db = await openDb();
   return new Promise((resolve, reject) => {
@@ -183,31 +190,51 @@ function toBlobUrl(bytes: ArrayBuffer): string {
   return URL.createObjectURL(blob);
 }
 
+async function readCachedBlobUrl(deviceId: string): Promise<string | null> {
+  const key = cacheKey(deviceId);
+  const cached = await idbGet(key);
+  if (!cached) return null;
+  try {
+    const plain = await decryptBytes(cached.iv, cached.cipher);
+    const blobUrl = toBlobUrl(plain);
+    liveUrls.set(deviceId, blobUrl);
+    return blobUrl;
+  } catch {
+    // Machine-key drift or a truncated write — drop the bad row and re-fetch.
+    await idbDelete(key).catch(() => undefined);
+    return null;
+  }
+}
+
+function persistEncrypted(deviceId: string, plain: ArrayBuffer): void {
+  void (async () => {
+    try {
+      const encrypted = await encryptBytes(plain);
+      await idbPut({
+        key: cacheKey(deviceId),
+        iv: encrypted.iv,
+        cipher: encrypted.cipher,
+        updatedAt: Date.now(),
+      });
+    } catch {
+      /* Cache miss next launch is fine — model already rendered. */
+    }
+  })();
+}
+
+/** Instant session hit — avoids a loading flash when the blob is already warm. */
+export function peekDeviceModelUrl(deviceId: string | undefined): string | null {
+  if (!deviceId) return null;
+  return liveUrls.get(deviceId) ?? null;
+}
+
 /**
  * Resolve a loadable blob: URL for a catalog device GLB.
  * Pro / Pro Max download any catalog model into the encrypted app cache on first use.
  * Free tier may only fetch the starter devices.
  */
 export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
-  const license = loadLicense();
-  if (isDeviceBlockedOnWeb(deviceId)) {
-    throw new Error(
-      'This device model is not cleared for browser use yet — open it in the Mac app, or wait for licence review.',
-    );
-  }
-  if (!isDeviceUnlocked(license.tier, deviceId)) {
-    throw new Error('This device requires Pro — upgrade to unlock the full library');
-  }
-
-  const accessKey = modelAccessLicenseKey(license);
-  const sessionToken = await modelAccessSessionToken();
-  const accountUnlocks = Boolean(sessionToken) && license.source === 'account' && license.tier !== 'free';
-  if (!isFreeDevice(deviceId) && !accessKey && !accountUnlocks) {
-    throw new Error(
-      'Activate your Pro license key (or sign in with a linked account) to download this device',
-    );
-  }
-
+  // Fastest path: already decrypted in this session.
   const existing = liveUrls.get(deviceId);
   if (existing) return existing;
 
@@ -215,31 +242,43 @@ export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
   if (pending) return pending;
 
   const task = (async () => {
-    const key = cacheKey(deviceId);
-    const cached = await idbGet(key);
-    if (cached) {
-      try {
-        const plain = await decryptBytes(cached.iv, cached.cipher);
-        const blobUrl = toBlobUrl(plain);
-        liveUrls.set(deviceId, blobUrl);
-        return blobUrl;
-      } catch {
-        // Machine-key drift or a truncated write — drop the bad row and re-fetch.
-        await idbDelete(key).catch(() => undefined);
+    if (isDeviceBlockedOnWeb(deviceId)) {
+      throw new Error(
+        'This device model is not cleared for browser use yet — open it in the Mac app, or wait for licence review.',
+      );
+    }
+
+    const license = loadLicense();
+    if (!isDeviceUnlocked(license.tier, deviceId)) {
+      throw new Error('This device requires Pro — upgrade to unlock the full library');
+    }
+
+    // Local cache must not wait on auth refresh — that was the open-up stall.
+    const cached = await readCachedBlobUrl(deviceId);
+    if (cached) return cached;
+
+    const accessKey = modelAccessLicenseKey(license);
+    if (!isFreeDevice(deviceId) && !accessKey) {
+      // Only pay for session refresh when we actually need a signed CDN URL.
+      const sessionToken = await modelAccessSessionToken();
+      const accountUnlocks = Boolean(sessionToken) && license.source === 'account' && license.tier !== 'free';
+      if (!accountUnlocks) {
+        throw new Error(
+          'Activate your Pro license key (or sign in with a linked account) to download this device',
+        );
       }
     }
 
+    // Race: another caller may have filled liveUrls while we awaited.
+    const raced = liveUrls.get(deviceId);
+    if (raced) return raced;
+
     const signedUrl = await requestSignedUrl(deviceId, accessKey);
     const plain = await downloadModel(signedUrl);
-    const encrypted = await encryptBytes(plain);
-    await idbPut({
-      key,
-      iv: encrypted.iv,
-      cipher: encrypted.cipher,
-      updatedAt: Date.now(),
-    });
     const blobUrl = toBlobUrl(plain);
     liveUrls.set(deviceId, blobUrl);
+    // Return immediately — encrypt/IndexedDB can finish after first paint.
+    persistEncrypted(deviceId, plain);
     return blobUrl;
   })();
 
@@ -248,6 +287,19 @@ export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
     return await task;
   } finally {
     inflight.delete(deviceId);
+  }
+}
+
+/**
+ * Decrypt / download project devices in the background and let the GLTF loader
+ * parse them before the canvas Suspense tree asks.
+ */
+export function warmDeviceModels(deviceIds: string[]): void {
+  if (!remoteModelsConfigured()) return;
+  prepareModelCache();
+  const unique = [...new Set(deviceIds.filter(Boolean))];
+  for (const deviceId of unique) {
+    void resolveDeviceModelUrl(deviceId).catch(() => undefined);
   }
 }
 

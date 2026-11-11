@@ -226,6 +226,8 @@ export default function AnimationTimeline({
 }: Props) {
   const [accentTheme, , accentColor] = useAccentTheme();
   const keyframeActive = accentPair(accentTheme, accentColor).accent;
+  /** Local clock while playing — parent skips React updates during playback. */
+  const [displayTime, setDisplayTime] = useState(currentTime);
   const scrubRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -430,7 +432,7 @@ export default function AnimationTimeline({
   const zoomBy = (delta: number) => applyZoom(zoom + delta);
 
   const currentTimeRef = useRef(currentTime);
-  currentTimeRef.current = currentTime;
+  currentTimeRef.current = playing ? displayTime : currentTime;
   const clipRef = useRef(clip);
   clipRef.current = clip;
   const onChangeRef = useRef(onChange);
@@ -441,6 +443,10 @@ export default function AnimationTimeline({
   onPlayingChangeRef.current = onPlayingChange;
   const visibleTracksRef = useRef(visibleTracks);
   visibleTracksRef.current = visibleTracks;
+
+  useEffect(() => {
+    if (!playing) setDisplayTime(currentTime);
+  }, [currentTime, playing]);
 
   useEffect(() => {
     if (!playing || scrubbing || draggingKeys || marquee) return undefined;
@@ -458,12 +464,16 @@ export default function AnimationTimeline({
           onPlayingChangeRef.current(false);
         }
       }
+      currentTimeRef.current = next;
+      setDisplayTime(next);
       onSeekRef.current(next);
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
   }, [playing, scrubbing, draggingKeys, marquee]);
+
+  const clockTime = playing || scrubbing ? displayTime : currentTime;
 
   const updateTrack = (trackId: string, updater: (track: AnimTrack) => AnimTrack) => {
     const exists = clip.tracks.some((t) => t.id === trackId);
@@ -558,7 +568,11 @@ export default function AnimationTimeline({
       marqueeModeRef.current = false;
       setMarquee(null);
       setScrubbing(true);
-      onSeek(xToTime(event.clientX));
+      {
+        const next = xToTime(event.clientX);
+        setDisplayTime(next);
+        onSeek(next);
+      }
       (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
       return;
     }
@@ -593,7 +607,11 @@ export default function AnimationTimeline({
     }
 
     if (!scrubbing || draggingKeys) return;
-    onSeek(xToTime(event.clientX));
+    {
+      const next = xToTime(event.clientX);
+      setDisplayTime(next);
+      onSeek(next);
+    }
   };
 
   const endScrub = (event: ReactPointerEvent) => {
@@ -1077,7 +1095,7 @@ export default function AnimationTimeline({
     runPrompt(prompt);
   };
 
-  const playheadPct = clip.duration <= 0 ? 0 : (currentTime / clip.duration) * 100;
+  const playheadPct = clip.duration <= 0 ? 0 : (clockTime / clip.duration) * 100;
 
   const marqueeStyle = (() => {
     if (!marquee || !scrubRef.current) return null;
@@ -1203,7 +1221,7 @@ export default function AnimationTimeline({
                 Loop
               </button>
               <span className="timeline-timecode" title={`${deviceLabel(selectedDevice.id)} playhead`}>
-                {clockLabel(currentTime)}
+                {clockLabel(clockTime)}
                 <span> / {clockLabel(clip.duration)}</span>
               </span>
             </div>
@@ -1844,7 +1862,7 @@ export default function AnimationTimeline({
           >
             <button type="button" className="timeline-playhead-handle" aria-label="Drag playhead" tabIndex={-1}>
               <span className="timeline-playhead-chip">
-                {`${Math.floor(Math.max(0, currentTime) / 60)}:${String(Math.floor(Math.max(0, currentTime) % 60)).padStart(2, '0')}`}
+                {`${Math.floor(Math.max(0, clockTime) / 60)}:${String(Math.floor(Math.max(0, clockTime) % 60)).padStart(2, '0')}`}
               </span>
             </button>
             <i className="timeline-playhead-line" />

@@ -153,6 +153,10 @@ function normalizeDevices(input: Partial<MockupProject>): DeviceInstance[] {
         layerExplosion: typeof item.layerExplosion === 'number'
           ? number(item.layerExplosion, 0, 0, 1)
           : undefined,
+        layerExtrusion: typeof item.layerExtrusion === 'number'
+          ? number(item.layerExtrusion, 0, 0, 1)
+          : undefined,
+        figmaSource: item.figmaSource,
         deviceColor: normalizeDeviceColor(item.deviceColor, projectColor),
         clayMode: typeof item.clayMode === 'boolean' ? item.clayMode : projectClay,
         lidOpen: number(item.lidOpen, 1, 0, 1),

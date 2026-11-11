@@ -81,9 +81,22 @@ function addSoftbox(
   rgb[2] += peak * weight;
 }
 
-/** Float equirectangular map. v = 0 is down, matching three's equirectUv. */
-export function createNeutralStudioHdri(width = 1024): THREE.DataTexture {
-  const height = Math.max(2, Math.round(width / 2));
+/** CPU-side HDRI pixels — rebuilt only when resolution changes. */
+type HdriDataCache = { width: number; height: number; data: Float32Array };
+let hdriDataCache: HdriDataCache | null = null;
+
+/**
+ * PMREM targets are GPU-context local. Retain across StudioHdri remounts of the
+ * same renderer (Strict Mode / intensity-only updates used to rebuild every time).
+ */
+type StudioEnvCache = {
+  texture: THREE.Texture;
+  retainers: number;
+  disposeTarget: () => void;
+};
+const studioEnvByGl = new WeakMap<THREE.WebGLRenderer, StudioEnvCache>();
+
+function buildNeutralStudioHdriData(width: number, height: number): Float32Array {
   const data = new Float32Array(width * height * 4);
   for (let y = 0; y < height; y += 1) {
     const v = height === 1 ? 0.5 : y / (height - 1);
@@ -106,7 +119,27 @@ export function createNeutralStudioHdri(width = 1024): THREE.DataTexture {
       data[index + 3] = 1;
     }
   }
-  const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+  return data;
+}
+
+/** Float equirectangular map. v = 0 is down, matching three's equirectUv. */
+export function createNeutralStudioHdri(width = 1024): THREE.DataTexture {
+  const height = Math.max(2, Math.round(width / 2));
+  let data: Float32Array;
+  if (hdriDataCache && hdriDataCache.width === width && hdriDataCache.height === height) {
+    data = hdriDataCache.data;
+  } else {
+    data = buildNeutralStudioHdriData(width, height);
+    hdriDataCache = { width, height, data };
+  }
+  // Cached Float32Array may widen to ArrayBufferLike under newer TS lib DOM typings.
+  const texture = new THREE.DataTexture(
+    data as Float32Array<ArrayBuffer>,
+    width,
+    height,
+    THREE.RGBAFormat,
+    THREE.FloatType,
+  );
   texture.mapping = THREE.EquirectangularReflectionMapping;
   texture.colorSpace = THREE.LinearSRGBColorSpace;
   texture.magFilter = THREE.LinearFilter;
@@ -119,16 +152,39 @@ export function createNeutralStudioHdri(width = 1024): THREE.DataTexture {
 }
 
 export function createNeutralStudioEnvironment(gl: THREE.WebGLRenderer) {
+  const hit = studioEnvByGl.get(gl);
+  if (hit) {
+    hit.retainers += 1;
+    return {
+      texture: hit.texture,
+      dispose() {
+        hit.retainers -= 1;
+        if (hit.retainers > 0) return;
+        hit.disposeTarget();
+        studioEnvByGl.delete(gl);
+      },
+    };
+  }
+
   const source = createNeutralStudioHdri();
   const pmrem = new THREE.PMREMGenerator(gl);
   pmrem.compileEquirectangularShader();
   const target = pmrem.fromEquirectangular(source);
   source.dispose();
   pmrem.dispose();
-  return {
+  const entry: StudioEnvCache = {
     texture: target.texture,
+    retainers: 1,
+    disposeTarget: () => target.dispose(),
+  };
+  studioEnvByGl.set(gl, entry);
+  return {
+    texture: entry.texture,
     dispose() {
-      target.dispose();
+      entry.retainers -= 1;
+      if (entry.retainers > 0) return;
+      entry.disposeTarget();
+      studioEnvByGl.delete(gl);
     },
   };
 }
@@ -330,6 +386,18 @@ type DofState = { amount: number; focus: THREE.Vector3 };
 
 const dofStates = new WeakMap<THREE.WebGLRenderer, DofState>();
 const aoStates = new WeakMap<THREE.WebGLRenderer, number>();
+/** Orbit / gizmo: skip the offscreen grade buffer and render straight to the canvas. */
+const liveFastStates = new WeakMap<THREE.WebGLRenderer, boolean>();
+
+/** Live interaction path — idle + export keep the full grade / DoF / AO stack. */
+export function setLivePreviewFast(gl: THREE.WebGLRenderer, fast: boolean) {
+  if (liveFastStates.get(gl) === fast) return;
+  liveFastStates.set(gl, fast);
+}
+
+function readLiveFast(gl: THREE.WebGLRenderer): boolean {
+  return liveFastStates.get(gl) === true;
+}
 
 /** `amount` is 0–1. Zero skips the pass. `focus` is the world-space point that stays sharp. */
 export function setDepthOfField(
@@ -342,16 +410,28 @@ export function setDepthOfField(
     dofStates.set(gl, state);
   }
   const amount = settings.amount;
-  state.amount = typeof amount === 'number' && Number.isFinite(amount) ? Math.min(1, Math.max(0, amount)) : 0;
+  const nextAmount = typeof amount === 'number' && Number.isFinite(amount)
+    ? Math.min(1, Math.max(0, amount))
+    : 0;
   const focus = settings.focus;
-  if (
+  const hasFocus = Boolean(
     focus
     && Number.isFinite(focus.x)
     && Number.isFinite(focus.y)
-    && Number.isFinite(focus.z)
+    && Number.isFinite(focus.z),
+  );
+  if (
+    state.amount === nextAmount
+    && (!hasFocus || (
+      state.focus.x === focus.x
+      && state.focus.y === focus.y
+      && state.focus.z === focus.z
+    ))
   ) {
-    state.focus.set(focus.x, focus.y, focus.z);
+    return;
   }
+  state.amount = nextAmount;
+  if (hasFocus) state.focus.set(focus.x, focus.y, focus.z);
 }
 
 function readDof(gl: THREE.WebGLRenderer): DofState {
@@ -363,6 +443,7 @@ export function setAmbientOcclusion(gl: THREE.WebGLRenderer, amount: number) {
   const next = typeof amount === 'number' && Number.isFinite(amount)
     ? Math.min(1, Math.max(0, amount))
     : 0;
+  if (aoStates.get(gl) === next) return;
   aoStates.set(gl, next);
 }
 
@@ -412,7 +493,8 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
   const buffer = new THREE.WebGLRenderTarget(1, 1, {
     depthBuffer: true,
     stencilBuffer: false,
-    samples: gl.capabilities.isWebGL2 ? 4 : 0,
+    // 2× MSAA is enough for live preview; 4× doubled grade fill-rate cost.
+    samples: gl.capabilities.isWebGL2 ? 2 : 0,
     type: THREE.UnsignedByteType,
     format: THREE.RGBAFormat,
   });
@@ -511,16 +593,21 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
       return;
     }
     const previous = gl.getRenderTarget();
+    const dof = readDof(gl);
+    const aoAmount = readAo(gl);
+    const useDof = dof.amount >= 0.02;
+    const useAo = aoAmount >= 0.02;
+    // Orbit / drag: one scene pass, no MSAA offscreen + grade blit. Export/idle keep the stack.
+    if (readLiveFast(gl) && !useDof && !useAo && previous == null) {
+      original(scene, camera);
+      return;
+    }
     const drawing = previous
       ? size.set(previous.width, previous.height)
       : gl.getDrawingBufferSize(size);
     const width = Math.max(1, Math.floor(drawing.x));
     const height = Math.max(1, Math.floor(drawing.y));
     const autoClear = gl.autoClear;
-    const dof = readDof(gl);
-    const aoAmount = readAo(gl);
-    const useDof = dof.amount >= 0.02;
-    const useAo = aoAmount >= 0.02;
     const needDepth = (useDof || useAo) && Boolean(depthTarget.depthTexture);
 
     try {

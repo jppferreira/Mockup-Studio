@@ -177,6 +177,7 @@ export function readProperty(device: DeviceInstance, property: AnimProperty): nu
     case 'scale': return device.scale;
     case 'lidOpen': return device.lidOpen ?? 1;
     case 'layerExplosion': return device.layerExplosion ?? 0;
+    case 'layerExtrusion': return device.layerExtrusion ?? 0;
     case 'camera.x':
     case 'camera.y':
     case 'camera.z':
@@ -202,9 +203,23 @@ export function writeProperty(device: DeviceInstance, property: AnimProperty, va
     case 'scale': next.scale = value; break;
     case 'lidOpen': next.lidOpen = Math.min(1, Math.max(0, value)); break;
     case 'layerExplosion': next.layerExplosion = Math.min(1, Math.max(0, value)); break;
+    case 'layerExtrusion': next.layerExtrusion = Math.min(1, Math.max(0, value)); break;
     default: break;
   }
   return next;
+}
+
+/** Properties that React still owns while the canvas drives transforms. */
+const CANVAS_OVERLAY_PROPERTIES = new Set<AnimProperty>([
+  'lidOpen',
+  'layerExplosion',
+  'layerExtrusion',
+]);
+
+function animationSampleTime(clip: AnimationClip, time: number): number {
+  return clip.loop
+    ? ((time % clip.duration) + clip.duration) % clip.duration
+    : Math.min(Math.max(time, 0), clip.duration);
 }
 
 /** Evaluate all device tracks onto device instances at a given time */
@@ -213,9 +228,7 @@ export function evaluateAnimation(
   clip: AnimationClip,
   time: number,
 ): DeviceInstance[] {
-  const t = clip.loop
-    ? ((time % clip.duration) + clip.duration) % clip.duration
-    : Math.min(Math.max(time, 0), clip.duration);
+  const t = animationSampleTime(clip, time);
 
   return devices.map((device) => {
     let next = device;
@@ -229,6 +242,30 @@ export function evaluateAnimation(
     return next === device
       ? device
       : { ...next, rotation: { ...next.rotation } as Vec3, position: { ...next.position } as Vec3 };
+  });
+}
+
+/**
+ * Sample only lid / layer-explosion tracks. Used when the canvas owns
+ * position/rotation/scale so React still receives overlay props each frame.
+ */
+export function evaluateAnimationOverlayProps(
+  devices: DeviceInstance[],
+  clip: AnimationClip,
+  time: number,
+): DeviceInstance[] {
+  const t = animationSampleTime(clip, time);
+
+  return devices.map((device) => {
+    let next = device;
+    for (const track of clip.tracks) {
+      if (track.targetId !== device.id) continue;
+      if (!CANVAS_OVERLAY_PROPERTIES.has(track.property)) continue;
+      const value = sampleTrack(track, t);
+      if (value == null) continue;
+      next = writeProperty(next, track.property, value);
+    }
+    return next;
   });
 }
 

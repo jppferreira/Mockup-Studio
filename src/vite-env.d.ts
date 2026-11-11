@@ -114,6 +114,9 @@ interface Window {
     readClipboardImage?: () => Promise<{ ok: boolean; dataUrl?: string; name?: string }>;
     readClipboardHtml?: () => Promise<{ ok: boolean; html?: string }>;
     ensureCameraAccess?: () => Promise<{ granted: boolean; status?: string; reason?: string }>;
+    figmaTokenGet?: (userId: string) => Promise<{ ok: boolean; token?: string | null; error?: string }>;
+    figmaTokenSet?: (userId: string, token: string) => Promise<{ ok: boolean; error?: string }>;
+    figmaTokenClear?: (userId: string) => Promise<{ ok: boolean; error?: string }>;
     figmaRequest?: (apiPath: string, token: string) => Promise<{ status: number; body: string }>;
     figmaFetchImage?: (
       imageUrl: string,

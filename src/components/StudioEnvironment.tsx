@@ -18,6 +18,7 @@ import {
   createNeutralStudioEnvironment,
   setAmbientOcclusion,
   setDepthOfField,
+  setLivePreviewFast,
 } from '../lib/renderRealism';
 import {
   resolveStudioPreset,
@@ -69,6 +70,10 @@ function Softbox({
   target: Vec3;
 }) {
   const lightRef = useRef<THREE.RectAreaLight>(null);
+  const interaction = useStudioShadowInteraction();
+  // RectAreaLight shading is costly — drop softboxes while orbiting; restore when idle.
+  const live = interaction?.mode === 'interactive';
+  const liveIntensity = live ? 0 : intensity;
   useLayoutEffect(() => {
     ensureRectAreaLights();
     const light = lightRef.current;
@@ -80,9 +85,10 @@ function Softbox({
   useFrame(() => {
     const light = lightRef.current;
     if (!light) return;
-    if (Math.abs(light.intensity - intensity) > 1e-6) light.intensity = intensity;
+    if (Math.abs(light.intensity - liveIntensity) > 1e-6) light.intensity = liveIntensity;
   });
 
+  // Keep mounted while orbiting (intensity 0) so mode flips don't remount lights.
   if (intensity <= 0.001) return null;
   return (
     <rectAreaLight
@@ -91,7 +97,7 @@ function Softbox({
       width={size[0]}
       height={size[1]}
       color={color}
-      intensity={intensity}
+      intensity={liveIntensity}
     />
   );
 }
@@ -99,12 +105,12 @@ function Softbox({
 /** Always-on neutral studio HDRI — reflections stay photographic even on transparent BG. */
 export function StudioHdri({ intensity }: { intensity: number }) {
   const { gl, scene } = useThree();
+  // Build PMREM once per WebGL context — intensity is a scene uniform, not a rebuild.
   useEffect(() => {
     const environment = createNeutralStudioEnvironment(gl);
     const previous = scene.environment;
     const previousIntensity = scene.environmentIntensity;
     scene.environment = environment.texture;
-    scene.environmentIntensity = intensity;
     return () => {
       if (scene.environment === environment.texture) {
         scene.environment = previous;
@@ -112,7 +118,10 @@ export function StudioHdri({ intensity }: { intensity: number }) {
       }
       environment.dispose();
     };
-  }, [gl, scene, intensity]);
+  }, [gl, scene]);
+  useEffect(() => {
+    scene.environmentIntensity = intensity;
+  }, [scene, intensity]);
   return null;
 }
 
@@ -128,10 +137,13 @@ export function StudioExposure({ exposure }: { exposure: number }) {
 /** Screen-space AO. Amount 0 skips the pass. */
 export function StudioAmbientOcclusion({ amount }: { amount: number }) {
   const gl = useThree((state) => state.gl);
+  const interaction = useStudioShadowInteraction();
   const amountRef = useRef(amount);
   amountRef.current = amount;
   useFrame(() => {
-    setAmbientOcclusion(gl, amountRef.current);
+    // Drop the AO re-render while orbiting / dragging — biggest live-preview win.
+    const live = interaction?.mode === 'interactive';
+    setAmbientOcclusion(gl, live ? 0 : amountRef.current);
   });
   return null;
 }
@@ -139,13 +151,17 @@ export function StudioAmbientOcclusion({ amount }: { amount: number }) {
 /** Focus stays on the selected device. Amount 0 leaves the frame sharp. */
 export function StudioDepthOfField({ amount, focus }: { amount: number; focus: Vec3 }) {
   const gl = useThree((state) => state.gl);
+  const interaction = useStudioShadowInteraction();
   const amountRef = useRef(amount);
   const focusRef = useRef(focus);
   amountRef.current = amount;
   focusRef.current = focus;
   useFrame(() => {
+    // Skip the heavy depth + 64-tap blur while orbiting / dragging — idle + export keep full DoF.
+    const live = interaction?.mode === 'interactive';
+    setLivePreviewFast(gl, live);
     setDepthOfField(gl, {
-      amount: amountRef.current,
+      amount: live ? 0 : amountRef.current,
       focus: focusRef.current,
     });
   });
@@ -411,29 +427,41 @@ function useAdaptiveShadowExtent(
 ): number {
   const scene = useThree((s) => s.scene);
   const bounds = useRef(new THREE.Box3());
+  const extentRef = useRef(fallback);
   const [extent, setExtent] = useState(fallback);
   const frame = useRef(0);
   const lightKey = `${lightPosition.x.toFixed(2)}:${lightPosition.y.toFixed(2)}:${lightPosition.z.toFixed(2)}:${lightTarget.x.toFixed(2)}:${lightTarget.z.toFixed(2)}`;
+  const lightPosRef = useRef(lightPosition);
+  const lightTargetRef = useRef(lightTarget);
+  lightPosRef.current = lightPosition;
+  lightTargetRef.current = lightTarget;
 
-  useFrame(() => {
+  const commitExtent = (next: number) => {
+    // Wide hysteresis — tiny AABB jitter was remounting ContactShadows every frame
+    // and hitting "Maximum update depth exceeded".
+    if (Math.abs(next - extentRef.current) < 1.25) return;
+    extentRef.current = next;
+    setExtent(next);
+  };
+
+  useFrame((state) => {
     frame.current += 1;
     // Refit a few times a second — enough for rotate/scale without React thrash.
-    if (frame.current % 8 !== 0) return;
-    collectCasterBounds(scene, bounds.current);
+    if (frame.current % 12 !== 0) return;
+    collectCasterBounds(scene, bounds.current, state.gl.info.render.frame);
     if (bounds.current.isEmpty()) {
-      if (Math.abs(extent - fallback) > 0.2) setExtent(fallback);
+      commitExtent(fallback);
       return;
     }
     const fitted = fitDirectionalShadowCamera(
-      lightPosition,
-      lightTarget,
+      lightPosRef.current,
+      lightTargetRef.current,
       bounds.current,
       floorY,
       { padding: 1.45, minExtent: 2.2, maxExtent: 16 },
     );
     if (!fitted) return;
-    const next = THREE.MathUtils.clamp(fitted.halfExtent * 2.15, 3.2, 16);
-    if (Math.abs(next - extent) > 0.4) setExtent(next);
+    commitExtent(THREE.MathUtils.clamp(fitted.halfExtent * 2.15, 3.2, 16));
   });
 
   // Light moves should nudge extent immediately.
@@ -448,8 +476,10 @@ function useAdaptiveShadowExtent(
       { padding: 1.45, minExtent: 2.2, maxExtent: 16 },
     );
     if (!fitted) return;
-    setExtent(THREE.MathUtils.clamp(fitted.halfExtent * 2.15, 3.2, 16));
-  }, [lightKey, floorY, scene, lightPosition, lightTarget]);
+    commitExtent(THREE.MathUtils.clamp(fitted.halfExtent * 2.15, 3.2, 16));
+    // lightKey captures position/target; avoid object-identity deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lightKey, floorY, scene]);
 
   return extent;
 }
@@ -504,8 +534,8 @@ function StudioSoftFloorShadows({
   const strength = opacityToShadowStrength(opacity, 1);
   const resolution = resolveFloorShadowResolution(quality, mode, exportBoost, maxTex);
   const [refreshToken, setRefreshToken] = useState(0);
-  // Live while the viewport is moving (orbit, gizmos, playback) and during export
-  // so stills / video pick up the current pose. Idle studio bakes once.
+  // Live while the viewport is moving (orbit, gizmos) and during export so the
+  // foot tracks motion. Idle studio bakes once and freezes until lighting changes.
   const frames = mode === 'interactive' || exportBoost ? Infinity : 1;
 
   const groupRef = useRef<THREE.Group>(null);
@@ -549,12 +579,13 @@ function StudioSoftFloorShadows({
   }, [interaction, mode, reset, settle]);
 
   useEffect(() => {
+    // Do NOT depend on adaptive `scale` — that remount loop made the app unusable.
     reset();
   }, [
     reset,
     lightPosition.x, lightPosition.y, lightPosition.z,
     lightTarget.x, lightTarget.y, lightTarget.z,
-    softness, opacity, contact, contactEnabled, distance, quality, scale, exportBoost, lightStrength, color, mode,
+    softness, opacity, contact, contactEnabled, distance, quality, exportBoost, lightStrength, color,
   ]);
 
   useLayoutEffect(() => {
@@ -617,21 +648,33 @@ function StudioSoftFloorShadows({
 function StudioLightRecovery() {
   const scene = useThree((s) => s.scene);
   const remembered = useRef(new Map<string, number>());
+  const lightsRef = useRef<THREE.Light[]>([]);
+  const frameRef = useRef(0);
 
   useFrame(() => {
-    scene.traverse((obj) => {
-      const light = obj as THREE.Light & { isLight?: boolean };
-      if (!light.isLight) return;
-      // Ignore helper / bake-only lights under hidden groups.
-      if (light.parent && light.parent.visible === false) return;
+    frameRef.current += 1;
+    // Rescan infrequently — lights are not added every frame. Checking the
+    // cached list is enough to catch a zeroed intensity without a full traverse.
+    if (frameRef.current === 1 || frameRef.current % 45 === 0) {
+      const next: THREE.Light[] = [];
+      scene.traverse((obj) => {
+        const light = obj as THREE.Light & { isLight?: boolean };
+        if (!light.isLight) return;
+        if (light.parent && light.parent.visible === false) return;
+        next.push(light);
+      });
+      lightsRef.current = next;
+    }
+    for (const light of lightsRef.current) {
+      if (light.parent && light.parent.visible === false) continue;
       const id = light.uuid;
       if (light.intensity > 0.0001) {
         remembered.current.set(id, light.intensity);
-        return;
+        continue;
       }
       const prev = remembered.current.get(id);
       if (prev != null && prev > 0.0001) light.intensity = prev;
-    });
+    }
   });
 
   return null;

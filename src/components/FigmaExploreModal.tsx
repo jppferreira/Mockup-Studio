@@ -1,28 +1,52 @@
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import {
   Box, ChevronDown, ChevronRight, Component, Eye, EyeOff, Frame, Layers3,
   LayoutTemplate, Loader2, Search, Square, Type, UnfoldVertical, X,
 } from 'lucide-react';
 import {
-  canApplyFigmaLayer, compositeExplodeStack, explodeCandidates, exportFigmaNodeAsDataUrl,
-  exportFigmaNodesAsDataUrls, fetchFigmaFile, formatFigmaSize, loadFigmaToken, parseFigmaUrl,
-  saveFigmaToken,
+  buildFigmaNodeUrl, canApplyFigmaLayer, compositeExplodeStack, explodeCandidates,
+  explodeSubgroupCandidates,
+  exportFigmaDirectChildPlates, exportFigmaNodeAsDataUrl, exportFigmaNodesAsDataUrls, fetchFigmaFile,
+  formatFigmaSize, hasFigmaToken, isFigmaAuthError, loadFigmaToken, onFigmaTokenChange, parseFigmaUrl,
   type FigmaFileSummary, type FigmaLayerNode, type FigmaNodeType,
 } from '../lib/figma';
+import type { FigmaScreenSource } from '../types';
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  onApply: (dataUrl: string, layerName: string) => void;
+  onApply: (dataUrl: string, layerName: string, source?: FigmaScreenSource) => void;
   /** Place top-level plates as Rotato-style 3D exploded layers on the device. */
   onApplyExplosion?: (
-    plates: { id: string; name: string; dataUrl: string }[],
+    plates: {
+      id: string;
+      name: string;
+      dataUrl: string;
+      layerType?: string;
+      type?: string;
+      extrusionGroup?: string;
+    }[],
     amount: number,
     label: string,
+    extrusion?: number,
+    source?: FigmaScreenSource,
   ) => void;
   onNotify: (message: string) => void;
   /** Prefill the Figma URL field when opening from Assets. */
   initialUrl?: string;
+  /** Called when the user chooses to connect a Figma token. */
+  onNeedToken?: () => void;
+  /** Parent-authoritative connected flag (must also have a live token in memory). */
+  tokenConnected?: boolean;
 }
 
 type ExplodePlate = {
@@ -30,6 +54,7 @@ type ExplodePlate = {
   name: string;
   type: FigmaNodeType;
   dataUrl: string;
+  extrusionGroup?: string;
 };
 
 function LayerIcon({ type }: { type: FigmaNodeType }) {
@@ -192,10 +217,11 @@ function ExplodeStage({
 }
 
 export default function FigmaExploreModal({
-  open, onClose, onApply, onApplyExplosion, onNotify, initialUrl,
+  open, onClose, onApply, onApplyExplosion, onNotify, initialUrl, onNeedToken,
+  tokenConnected: tokenConnectedProp,
 }: Props) {
   const [urlDraft, setUrlDraft] = useState('');
-  const [tokenDraft, setTokenDraft] = useState(() => loadFigmaToken());
+  const [tokenLive, setTokenLive] = useState(() => hasFigmaToken());
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exploding, setExploding] = useState(false);
@@ -208,39 +234,77 @@ export default function FigmaExploreModal({
   const [plates, setPlates] = useState<ExplodePlate[]>([]);
   const [explodeRootId, setExplodeRootId] = useState<string | null>(null);
   const [explodeAmount, setExplodeAmount] = useState(0.65);
+  const [explodeExtrusion, setExplodeExtrusion] = useState(0.35);
+  const [explodePieceCount, setExplodePieceCount] = useState(8);
   const [activePlateId, setActivePlateId] = useState<string | null>(null);
+  const openRef = useRef(open);
+  const applyGenerationRef = useRef(0);
+
+  useEffect(() => {
+    openRef.current = open;
+    if (!open) applyGenerationRef.current += 1;
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
-    setTokenDraft(loadFigmaToken());
     setError(null);
+    setTokenLive(hasFigmaToken());
     if (initialUrl?.trim()) setUrlDraft(initialUrl.trim());
   }, [open, initialUrl]);
+
+  useEffect(() => {
+    if (!open) return;
+    return onFigmaTokenChange((connected) => setTokenLive(connected));
+  }, [open]);
+
+  /** Link field only after a real token is linked. */
+  const hasLinkedToken = Boolean(
+    (tokenConnectedProp !== false)
+    && (tokenConnectedProp === true || tokenLive)
+    && hasFigmaToken()
+    && loadFigmaToken().trim(),
+  );
 
   const selected = useMemo(
     () => (file && selectedId ? findNode(file.layers, selectedId) : null),
     [file, selectedId],
   );
 
+  /** Bottom → top subset controlled by the Pieces slider. */
+  const activePlates = useMemo(() => {
+    const count = Math.min(plates.length, Math.max(2, explodePieceCount));
+    return plates.slice(0, count);
+  }, [plates, explodePieceCount]);
+
+  // Defer heavy explode-stage work so Size/Pieces/Extrude sliders stay responsive.
+  const deferredAmount = useDeferredValue(explodeAmount);
+  const deferredPlates = useDeferredValue(activePlates);
+  const deferredExtrusion = useDeferredValue(explodeExtrusion);
+
   if (!open) return null;
 
   const loadFile = async (event?: FormEvent) => {
     event?.preventDefault();
     setError(null);
+    if (!hasLinkedToken) {
+      onNeedToken?.();
+      setError('Connect to Figma before pasting a frame link.');
+      return;
+    }
     const parsed = parseFigmaUrl(urlDraft);
     if (!parsed) {
       setError('Paste a Figma design URL (figma.com/design/…) or file key.');
       return;
     }
-    const token = tokenDraft.trim();
+    const token = loadFigmaToken().trim();
     if (!token) {
-      setError('Add a Figma personal access token (Account → Settings → Security).');
+      onNeedToken?.();
+      setError('Connect to Figma before pasting a frame link.');
       return;
     }
 
     setLoading(true);
     try {
-      saveFigmaToken(token);
       const summary = await fetchFigmaFile(parsed.fileKey, token);
       setFile(summary);
       setMode('tree');
@@ -262,6 +326,7 @@ export default function FigmaExploreModal({
     } catch (err) {
       setFile(null);
       setSelectedId(null);
+      if (isFigmaAuthError(err)) onNeedToken?.();
       setError(err instanceof Error ? err.message : 'Could not load Figma file');
     } finally {
       setLoading(false);
@@ -277,61 +342,144 @@ export default function FigmaExploreModal({
     });
   };
 
-  const applySelected = async () => {
+  const figmaSourceFor = (
+    nodeId: string,
+    rootName: string,
+    layered: boolean,
+    lastModified?: string,
+  ): FigmaScreenSource => ({
+    url: buildFigmaNodeUrl(file!.fileKey, nodeId),
+    fileKey: file!.fileKey,
+    nodeId,
+    lastModified: lastModified || file?.lastModified || new Date().toISOString(),
+    rootName,
+    layered,
+  });
+
+  /** Default apply: one plate per direct child; nested groups stay inside their parent raster. */
+  const applySelected = async (mode: 'layered' | 'flat' = 'layered') => {
     if (!file || !selected) return;
     if (!canApplyFigmaLayer(selected.type)) {
       setError('Pick a frame, component, instance, or group to use as the phone screen.');
       return;
     }
+    const generation = ++applyGenerationRef.current;
     setExporting(true);
     setError(null);
     try {
-      const { dataUrl } = await exportFigmaNodeAsDataUrl(file.fileKey, selected.id, tokenDraft, 2);
-      onApply(dataUrl, selected.name);
+      if (mode === 'layered' && onApplyExplosion) {
+        const layered = await exportFigmaDirectChildPlates(
+          file.fileKey,
+          selected.id,
+          loadFigmaToken(),
+          1.5,
+          { layers: file.layers, lastModified: file.lastModified },
+        );
+        if (generation !== applyGenerationRef.current || !openRef.current) return;
+        if (layered.plates.length >= 2) {
+          onApplyExplosion(
+            layered.plates,
+            0,
+            layered.rootName || selected.name,
+            0,
+            figmaSourceFor(selected.id, layered.rootName || selected.name, true, layered.lastModified),
+          );
+          onClose();
+          return;
+        }
+      }
+      const { dataUrl } = await exportFigmaNodeAsDataUrl(file.fileKey, selected.id, loadFigmaToken(), 2);
+      if (generation !== applyGenerationRef.current || !openRef.current) return;
+      onApply(
+        dataUrl,
+        selected.name,
+        figmaSourceFor(selected.id, selected.name, false, file.lastModified),
+      );
       onClose();
     } catch (err) {
+      if (generation !== applyGenerationRef.current || !openRef.current) return;
       setError(err instanceof Error ? err.message : 'Could not export layer');
     } finally {
-      setExporting(false);
+      if (generation === applyGenerationRef.current) setExporting(false);
     }
   };
 
   const openExplode = async () => {
     if (!file || !selected) return;
-    const candidates = explodeCandidates(selected);
-    if (!candidates.length) {
-      setError('That layer has no child layers to explode. Pick a frame that contains UI stacks.');
-      return;
-    }
-
+    // Prefer depth-accurate subgroup export so frames expand into child plates.
+    const generation = ++applyGenerationRef.current;
     setExploding(true);
     setError(null);
     try {
-      const ids = candidates.map((child) => child.id);
-      const images = await exportFigmaNodesAsDataUrls(file.fileKey, ids, tokenDraft, 1.5);
-      const nextPlates: ExplodePlate[] = [];
-      for (const child of candidates) {
-        const dataUrl = images.get(child.id);
-        if (!dataUrl) continue;
-        nextPlates.push({
-          id: child.id,
-          name: child.name,
-          type: child.type,
-          dataUrl,
-        });
+      const layered = await exportFigmaDirectChildPlates(
+        file.fileKey,
+        selected.id,
+        loadFigmaToken(),
+        1.5,
+        { layers: file.layers, lastModified: file.lastModified },
+      );
+      if (generation !== applyGenerationRef.current || !openRef.current) return;
+      let nextPlates: ExplodePlate[] = layered.plates.map((plate) => ({
+        id: plate.id,
+        name: plate.name,
+        type: (plate.layerType || 'FRAME') as FigmaNodeType,
+        dataUrl: plate.dataUrl,
+        ...(plate.extrusionGroup ? { extrusionGroup: plate.extrusionGroup } : {}),
+      }));
+
+      // Local tree fallback when the nodes API returns too few plates.
+      if (nextPlates.length < 2) {
+        const local = explodeSubgroupCandidates(selected);
+        if (!local.length) {
+          const direct = explodeCandidates(selected);
+          if (!direct.length) {
+            if (generation !== applyGenerationRef.current || !openRef.current) return;
+            setError('That layer has no child layers to explode. Pick a frame that contains UI stacks.');
+            return;
+          }
+        }
+        const candidates = local.length >= 2 ? local : explodeCandidates(selected).map((node) => ({ node }));
+        const images = await exportFigmaNodesAsDataUrls(
+          file.fileKey,
+          candidates.map((entry) => entry.node.id),
+          loadFigmaToken(),
+          1.5,
+        );
+        if (generation !== applyGenerationRef.current || !openRef.current) return;
+        nextPlates = [];
+        for (const entry of candidates) {
+          const dataUrl = images.get(entry.node.id);
+          if (!dataUrl) continue;
+          const groupName = 'groupName' in entry && typeof entry.groupName === 'string'
+            ? entry.groupName
+            : 'groupId' in entry && typeof entry.groupId === 'string'
+              ? entry.groupId
+              : '';
+          nextPlates.push({
+            id: entry.node.id,
+            name: entry.node.name,
+            type: entry.node.type,
+            dataUrl,
+            ...(groupName ? { extrusionGroup: groupName } : {}),
+          });
+        }
       }
-      if (!nextPlates.length) {
-        throw new Error('Figma could not export the child layers for explode view.');
+
+      if (nextPlates.length < 2) {
+        throw new Error('Need at least two subgroup layers to explode. Pick a frame with nested UI stacks.');
       }
+      if (generation !== applyGenerationRef.current || !openRef.current) return;
       setPlates(nextPlates);
+      setExplodePieceCount(nextPlates.length);
       setExplodeRootId(selected.id);
       setActivePlateId(nextPlates[nextPlates.length - 1]?.id ?? null);
       setMode('explode');
-      onNotify(`Exploded ${nextPlates.length} layers from “${selected.name}”`);
+      onNotify(`Exploded ${nextPlates.length} subgroup layers from “${selected.name}”`);
     } catch (err) {
+      if (generation !== applyGenerationRef.current || !openRef.current) return;
       setError(err instanceof Error ? err.message : 'Could not build explode view');
     } finally {
-      setExploding(false);
+      if (generation === applyGenerationRef.current) setExploding(false);
     }
   };
 
@@ -339,44 +487,65 @@ export default function FigmaExploreModal({
     if (!file || !activePlateId) return;
     const plate = plates.find((item) => item.id === activePlateId);
     if (!plate) return;
+    const generation = ++applyGenerationRef.current;
     setExporting(true);
     setError(null);
     try {
       // Re-export at higher scale for the phone screen
-      const { dataUrl } = await exportFigmaNodeAsDataUrl(file.fileKey, plate.id, tokenDraft, 2);
+      const { dataUrl } = await exportFigmaNodeAsDataUrl(file.fileKey, plate.id, loadFigmaToken(), 2);
+      if (generation !== applyGenerationRef.current || !openRef.current) return;
       onApply(dataUrl, plate.name);
       onClose();
     } catch (err) {
+      if (generation !== applyGenerationRef.current || !openRef.current) return;
       setError(err instanceof Error ? err.message : 'Could not export layer');
     } finally {
-      setExporting(false);
+      if (generation === applyGenerationRef.current) setExporting(false);
     }
   };
 
   const applyExplodedComposite = async () => {
-    if (!plates.length || !selected) return;
+    if (!activePlates.length || !selected) return;
+    const generation = ++applyGenerationRef.current;
     setExporting(true);
     setError(null);
     try {
       if (onApplyExplosion) {
+        if (generation !== applyGenerationRef.current || !openRef.current) return;
         onApplyExplosion(
-          plates.map((plate) => ({ id: plate.id, name: plate.name, dataUrl: plate.dataUrl })),
+          activePlates.map((plate) => ({
+            id: plate.id,
+            name: plate.name,
+            dataUrl: plate.dataUrl,
+            layerType: plate.type,
+            type: plate.type,
+            ...(plate.extrusionGroup ? { extrusionGroup: plate.extrusionGroup } : {}),
+          })),
           explodeAmount,
           selected.name,
+          explodeExtrusion,
+          figmaSourceFor(
+            explodeRootId || selected.id,
+            selected.name,
+            true,
+            file?.lastModified,
+          ),
         );
         onClose();
         return;
       }
       const dataUrl = await compositeExplodeStack(
-        plates.map((plate) => ({ dataUrl: plate.dataUrl, name: plate.name })),
+        activePlates.map((plate) => ({ dataUrl: plate.dataUrl, name: plate.name })),
         explodeAmount,
       );
+      if (generation !== applyGenerationRef.current || !openRef.current) return;
       onApply(dataUrl, `${selected.name} explode`);
       onClose();
     } catch (err) {
+      if (generation !== applyGenerationRef.current || !openRef.current) return;
       setError(err instanceof Error ? err.message : 'Could not composite explode view');
     } finally {
-      setExporting(false);
+      if (generation === applyGenerationRef.current) setExporting(false);
     }
   };
 
@@ -390,6 +559,8 @@ export default function FigmaExploreModal({
       </div>
     );
   } else if (file && mode === 'explode' && plates.length) {
+    const maxPieces = plates.length;
+    const pieceCount = Math.min(maxPieces, Math.max(2, explodePieceCount));
     panelBody = (
       <>
         <div className="figma-explore-toolbar">
@@ -397,7 +568,9 @@ export default function FigmaExploreModal({
             <UnfoldVertical size={14} />
             <div>
               <strong>Explode · {selected?.name ?? 'Frame'}</strong>
-              <span>{plates.length} layers pulled apart</span>
+              <span>
+                {pieceCount} of {maxPieces} layer{maxPieces === 1 ? '' : 's'} in the explosion
+              </span>
             </div>
           </div>
           <button type="button" className="button subtle-button" onClick={() => setMode('tree')}>
@@ -405,14 +578,14 @@ export default function FigmaExploreModal({
           </button>
         </div>
         <ExplodeStage
-          plates={plates}
-          amount={explodeAmount}
+          plates={deferredPlates}
+          amount={deferredAmount}
           activeId={activePlateId}
           onSelect={setActivePlateId}
         />
         <div className="figma-explode-controls">
           <label className="figma-explode-amount">
-            <span>Spread</span>
+            <span>Size</span>
             <input
               type="range"
               min={0}
@@ -420,13 +593,46 @@ export default function FigmaExploreModal({
               step={0.01}
               value={explodeAmount}
               onChange={(e) => setExplodeAmount(Number(e.target.value))}
+              aria-valuetext={`${Math.round(explodeAmount * 100)}% explosion size`}
             />
           </label>
+          <label className="figma-explode-amount">
+            <span>Pieces · {pieceCount}</span>
+            <input
+              type="range"
+              min={2}
+              max={maxPieces}
+              step={1}
+              value={pieceCount}
+              disabled={maxPieces <= 2}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setExplodePieceCount(next);
+                const subset = plates.slice(0, next);
+                if (activePlateId && !subset.some((plate) => plate.id === activePlateId)) {
+                  setActivePlateId(subset[subset.length - 1]?.id ?? null);
+                }
+              }}
+            />
+          </label>
+          {onApplyExplosion ? (
+            <label className="figma-explode-amount">
+              <span>Extrude{deferredExtrusion > 0.001 ? ` · ${Math.round(deferredExtrusion * 100)}%` : ''}</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={explodeExtrusion}
+                onChange={(e) => setExplodeExtrusion(Number(e.target.value))}
+              />
+            </label>
+          ) : null}
           <div className="figma-explode-actions">
             <button
               type="button"
               className="button secondary-button"
-              disabled={exporting || !activePlateId}
+              disabled={exporting || !activePlateId || !activePlates.some((plate) => plate.id === activePlateId)}
               onClick={() => void applyActivePlate()}
             >
               {exporting ? 'Exporting…' : 'Use selected layer'}
@@ -434,10 +640,12 @@ export default function FigmaExploreModal({
             <button
               type="button"
               className="button primary-button"
-              disabled={exporting}
+              disabled={exporting || activePlates.length < 2}
               onClick={() => void applyExplodedComposite()}
             >
-              {onApplyExplosion ? 'Place on device in 3D' : 'Use exploded stack'}
+              {onApplyExplosion
+                ? (explodeExtrusion > 0.001 ? 'Place as 3D cards' : 'Place on device in 3D')
+                : 'Use exploded stack'}
             </button>
           </div>
         </div>
@@ -506,11 +714,23 @@ export default function FigmaExploreModal({
                 >
                   {exploding ? 'Exploding…' : 'Explode view'}
                 </button>
+                {explodeCandidates(selected).length >= 2 && onApplyExplosion ? (
+                  <button
+                    type="button"
+                    className="button primary-button"
+                    disabled={exporting || !canApplyFigmaLayer(selected.type)}
+                    onClick={() => void applySelected('layered')}
+                  >
+                    {exporting ? 'Exporting…' : 'Place layers'}
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  className="button primary-button"
+                  className={explodeCandidates(selected).length >= 2 && onApplyExplosion
+                    ? 'button secondary-button'
+                    : 'button primary-button'}
                   disabled={exporting || !canApplyFigmaLayer(selected.type)}
-                  onClick={() => void applySelected()}
+                  onClick={() => void applySelected('flat')}
                 >
                   {exporting ? 'Exporting…' : 'Use flat'}
                 </button>
@@ -552,42 +772,49 @@ export default function FigmaExploreModal({
         </div>
         <h2 id="figma-explore-title">Explode view</h2>
         <p>
-          Paste still gives a flat image. Explode pulls real Figma child layers into 3D plates
-          on the device — pick one layer, or place the whole stack and scrub Explosion.
+          {hasLinkedToken
+            ? 'Paste a Figma frame link, load layers, then explode top-level plates onto the device.'
+            : 'Connect to Figma first. The frame-link field appears only after your access token is saved.'}
         </p>
 
-        <form className="figma-explore-form" onSubmit={(e) => void loadFile(e)}>
-          <label className="field-stack">
-            <span>Figma URL</span>
-            <input
-              value={urlDraft}
-              onChange={(e) => setUrlDraft(e.target.value)}
-              placeholder="https://www.figma.com/design/…"
-              autoFocus
-              spellCheck={false}
-            />
-          </label>
-          <label className="field-stack">
-            <span>Personal access token</span>
-            <input
-              type="password"
-              value={tokenDraft}
-              onChange={(e) => setTokenDraft(e.target.value)}
-              placeholder="figd_…"
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </label>
-          <button type="submit" className="button secondary-button" disabled={loading}>
-            {loading ? 'Loading…' : file ? 'Reload file' : 'Load layers'}
-          </button>
-        </form>
+        {hasLinkedToken ? (
+          <form className="figma-explore-form" onSubmit={(e) => void loadFile(e)}>
+            <label className="field-stack figma-explore-url-field">
+              <span>Paste Figma frame link</span>
+              <input
+                value={urlDraft}
+                onChange={(e) => setUrlDraft(e.target.value)}
+                placeholder="https://www.figma.com/design/…"
+                autoFocus
+                spellCheck={false}
+              />
+            </label>
+            <div className="figma-explore-form-actions">
+              <button type="submit" className="button primary-button" disabled={loading || !urlDraft.trim()}>
+                {loading ? 'Loading…' : file ? 'Reload' : 'Open'}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="figma-explore-connect-prompt">
+            <p>Do you want to connect to Figma?</p>
+            <button
+              type="button"
+              className="button primary-button"
+              onClick={() => onNeedToken?.()}
+            >
+              Connect Figma token
+            </button>
+          </div>
+        )}
 
         {error && <p className="figma-explore-error" role="alert">{error}</p>}
 
-        <div className={`figma-explore-panel ${mode === 'explode' ? 'is-explode' : ''}`}>
-          {panelBody}
-        </div>
+        {hasLinkedToken ? (
+          <div className={`figma-explore-panel ${mode === 'explode' ? 'is-explode' : ''}`}>
+            {panelBody}
+          </div>
+        ) : null}
 
         <div className="export-modal-actions">
           <button type="button" className="button subtle-button" onClick={onClose}>Close</button>

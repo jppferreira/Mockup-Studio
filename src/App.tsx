@@ -7,7 +7,7 @@ import {
   ClipboardPaste, Columns2, Command, Copy, Download, FileImage, FlipHorizontal2, Gauge, Glasses, Headphones,
   ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, MessageSquarePlus, Minus,
   Menu, Monitor, MonitorSmartphone, MoreHorizontal, Orbit, PanelLeftClose, PanelLeftOpen, PanelRightClose,
-  Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, Upload, UserRound, Watch, Waves, Wrench, X,
+  Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, UnfoldVertical, Upload, UserRound, Watch, Waves, Wrench, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import AccentThemePicker from './components/AccentThemePicker';
@@ -29,6 +29,7 @@ import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload, type MaterialP
 import { type AnnotationMark } from './components/ModelAnnotations';
 import DualCanvasLayout from './components/DualCanvasLayout';
 import FeedbackModal from './components/FeedbackModal';
+import FigmaConnectModal from './components/FigmaConnectModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
 import LicenseModal from './components/LicenseModal';
 import UpdateBanner from './components/UpdateBanner';
@@ -81,8 +82,8 @@ import { TONE_CLAY } from './lib/referenceTones';
 import { recordProjectChange, type ChangeLogEntry } from './lib/changeLog';
 import { bindScrollMore, pinToContainerTop, releasePinPadding } from './lib/scrollMore';
 import {
-  defaultCameraPosition, evaluateAnimation, evaluateCamera, hasAnimation, hasCameraAnimation,
-  upsertKeyframe,
+  defaultCameraPosition, evaluateAnimation, evaluateAnimationOverlayProps, evaluateCamera,
+  hasAnimation, hasCameraAnimation, upsertKeyframe,
 } from './lib/animation';
 import { applyAnimationPreset, getAnimationPreset, shiftDeviceRotation } from './lib/animationPresets';
 import { STUDIO_POSES, getStudioPose, studioPoseIdFor } from './lib/studioPoses';
@@ -132,13 +133,25 @@ import {
   screenMediaKind, seekAllScreenMedia,
 } from './lib/screenMedia';
 import {
-  exportFigmaClipboardHtmlAsScreenPng, exportFigmaUrlAsScreenPng, isFigmaClipboardHtml, parseFigmaUrl,
+  clearFigmaToken,
+  exportFigmaClipboardHtmlAsScreenPng,
+  exportFigmaDirectChildPlates,
+  exportFigmaNodeAsDataUrl,
+  exportFigmaUrlAsScreenPng,
+  fetchFigmaFileLastModified,
+  hasFigmaToken,
+  bindFigmaTokenAccount,
+  isFigmaClipboardHtml,
+  loadFigmaToken,
+  maskFigmaToken,
+  onFigmaTokenChange,
+  parseFigmaUrl,
 } from './lib/figma';
 import {
   isSvgFile, parseSvgDocument, readFileAsText, readSvgTextFromPasteEvent,
   type SvgDocumentModel,
 } from './lib/svgLayers';
-import { compositeFlatScreenStack, normalizeScreenLayers } from './lib/screenLayers';
+import { compositeFlatScreenStack, normalizeScreenLayers, planIncrementalExtrusion } from './lib/screenLayers';
 import {
   isDesktopApp,
   listMirrorDevices,
@@ -172,6 +185,7 @@ import {
   canonicalProjectJson, isPathInsideLibrary, projectFromCloudRow, projectFromStoredJson,
   type CloudLibraryStatus, type CloudProjectEntry,
 } from './lib/cloudLibrary';
+import { warmProjectDeviceModels } from './lib/useDeviceModelUrl';
 import { downloadBlob, keepSessionPose, safeFilename, validateProject } from './lib/project';
 import {
   encodeMockupFile, encodeProjectJson, isProjectFileName, mockupDownloadName, MOCKUP_MIME,
@@ -263,15 +277,17 @@ import {
   patchActiveCompositionScene, removeCompositionScene, renameCompositionScene,
   switchCompositionScene, syncProjectFromActiveScene, syncProjectFromSelected,
   type AnimProperty, type BackgroundPreset, type CameraView, type DeviceColor, type ExportAspectId,
-  type ExportResolutionId, type GradientColors, type MaterialTweak, type MockupProject, type PublishTarget,
-  type ReflectionMapSetting, type SceneLight, type ScenePreset, type SceneProp, type ScenePropKind,
-  type ShadowType, type Vec3,
+  type ExportResolutionId, type FigmaScreenSource, type GradientColors, type MaterialTweak, type MockupProject,
+  type PublishTarget, type ReflectionMapSetting, type SceneLight, type ScenePreset, type SceneProp,
+  type ScenePropKind, type ShadowType, type Vec3,
 } from './types';
 
 /** Top-left pinned tabs: Layer hierarchy vs Assets library (plus change log). */
 type LeftWorkspaceTab = 'scenes' | 'assets' | 'log';
 /** Right inspector: properties, preset motion cards, or agent chat. */
 type RightWorkspaceTab = 'inspect' | 'presets' | 'agent';
+/** Classic = current dense accordion; proposed = quieter merged inspector. */
+type InspectorLayout = 'classic' | 'proposed';
 type Workspace = { tabs: ProjectTab[]; activeId: string | null };
 type ExportScale = 0.5 | 1 | 2 | 3 | 4;
 type ExportMediaMode = 'static' | 'animated';
@@ -384,6 +400,7 @@ function stageTypeOf(project: MockupProject): StageType {
   return project.showGroundBase !== false ? 'floor' : 'none';
 }
 const CANVAS_HINT_KEY = 'mockup-studio.canvas-usage-hint-seen';
+const INSPECTOR_LAYOUT_KEY = 'mockup-studio.inspector-layout';
 
 function canvasHintAlreadySeen() {
   try {
@@ -391,6 +408,23 @@ function canvasHintAlreadySeen() {
   } catch {
     return false;
   }
+}
+
+function loadInspectorLayout(): InspectorLayout {
+  try {
+    localStorage.setItem(INSPECTOR_LAYOUT_KEY, 'classic');
+  } catch {
+    /* ignore */
+  }
+  return 'classic';
+}
+
+/** Map legacy section ids onto the proposed inspector accordion. */
+function remapInspectorSectionId(id: string, layout: InspectorLayout): string {
+  if (layout !== 'proposed') return id;
+  if (id === 'light' || id === 'rim' || id === 'shadow') return 'lighting';
+  if (id === 'reflection') return 'materials';
+  return id;
 }
 
 function createExportEntry(kind: ExportKind = 'png', scale: ExportScale = 1): ExportEntry {
@@ -527,7 +561,7 @@ function SwitchControl({
 }
 
 function SettingsSection({
-  id, title, hint, icon: Icon, trailing, open, onToggle, children, last = false,
+  id, title, hint, icon: Icon, trailing, open, onToggle, children, last = false, chrome = 'full',
 }: {
   id: string;
   title: string;
@@ -538,6 +572,8 @@ function SettingsSection({
   onToggle: (id: string) => void;
   children: ReactNode;
   last?: boolean;
+  /** `body-only` nests under a parent accordion (proposed Lighting merge). */
+  chrome?: 'full' | 'body-only';
 }) {
   const sectionRef = useRef<HTMLElement>(null);
   const wasOpen = useRef(open);
@@ -553,8 +589,16 @@ function SettingsSection({
     if (!becameOpen) return undefined;
     return pinToContainerTop(el);
   }, [open]);
+  if (chrome === 'body-only') {
+    if (!open) return null;
+    return (
+      <div className="settings-section-body is-nested-inspector-body" data-section={id}>
+        {children}
+      </div>
+    );
+  }
   return (
-    <section ref={sectionRef} className={`settings-section ${last ? 'last-section' : ''} ${open ? 'is-open' : 'is-collapsed'}`}>
+    <section ref={sectionRef} className={`settings-section ${last ? 'last-section' : ''} ${open ? 'is-open' : 'is-collapsed'}`} data-section={id}>
       <button
         type="button"
         className="section-heading section-toggle"
@@ -1077,6 +1121,11 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [licenseOpen, setLicenseOpen] = useState(false);
   const [figmaExploreOpen, setFigmaExploreOpen] = useState(false);
   const [figmaLinkDraft, setFigmaLinkDraft] = useState('');
+  const [figmaTokenConnected, setFigmaTokenConnected] = useState(() => hasFigmaToken());
+  const [figmaConnectOpen, setFigmaConnectOpen] = useState(false);
+  const [figmaTokenBusy, setFigmaTokenBusy] = useState(false);
+  const [figmaSourceStale, setFigmaSourceStale] = useState(false);
+  const [figmaRefreshBusy, setFigmaRefreshBusy] = useState(false);
   const [assetsDropActive, setAssetsDropActive] = useState(false);
   const [studioAiStatus, setStudioAiStatus] = useState<string | null>(null);
   const [studioAiBusy, setStudioAiBusy] = useState(false);
@@ -1084,6 +1133,31 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [license, setLicense] = useState<LicenseState>(() => loadLicense());
   useEffect(() => {
     if (LICENSING_DISABLED) setLicense(loadLicense());
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const syncFigmaForAccount = async (userId: string | null | undefined) => {
+      await bindFigmaTokenAccount(userId ?? null);
+      if (!cancelled) setFigmaTokenConnected(hasFigmaToken());
+    };
+    void getAuthSnapshot()
+      .then((snap) => syncFigmaForAccount(snap.user?.id ?? null))
+      .catch(() => syncFigmaForAccount(null));
+    const stopAuth = onAuthChange((snap) => {
+      void syncFigmaForAccount(snap.user?.id ?? null);
+    });
+    const stopToken = onFigmaTokenChange((connected, reason) => {
+      if (cancelled) return;
+      setFigmaTokenConnected(connected);
+      if (reason === 'revoked') {
+        notify('Figma token revoked — reconnect with Connect Figma token in Assets');
+      }
+    });
+    return () => {
+      cancelled = true;
+      stopAuth();
+      stopToken();
+    };
   }, []);
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>('devices');
@@ -1157,6 +1231,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   /** Bumped on format/device changes so both panes snap to center instantly. */
   const [cameraRecenterToken, setCameraRecenterToken] = useState(0);
   const [openSectionId, setOpenSectionId] = useState<string | null>('device');
+  const [inspectorLayout] = useState<InspectorLayout>(() => loadInspectorLayout());
+  const inspectorProposed = inspectorLayout === 'proposed';
   const customDevicePanelRef = useRef<CustomDevicePanelHandle>(null);
   const [deviceCategoryFilter, setDeviceCategoryFilter] = useState<DeviceCategoryFilter>('all');
   const [deviceCardPreview, setDeviceCardPreview] = useState<DeviceCardPreviewLayout>('fit');
@@ -1224,11 +1300,19 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const mirrorStreamRef = useRef<MediaStream | null>(null);
   const androidPlayerRef = useRef<AndroidMirrorPlayer | null>(null);
   const androidUnsubRef = useRef<(() => void) | null>(null);
+  const openInspectorSection = useCallback((id: string) => {
+    const next = remapInspectorSectionId(id, inspectorLayout);
+    if (next !== 'look') setStudioSetFocus(null);
+    setOpenSectionId(next);
+  }, [inspectorLayout]);
+
   const toggleSection = useCallback((id: string) => {
+    const next = remapInspectorSectionId(id, inspectorLayout);
     // Background colour dock is tap-to-open only — leave it when opening other sections.
-    if (id !== 'look') setStudioSetFocus(null);
-    setOpenSectionId((current) => (current === id ? null : id));
-  }, []);
+    if (next !== 'look') setStudioSetFocus(null);
+    setOpenSectionId((current) => (current === next ? null : next));
+  }, [inspectorLayout]);
+
   const captureRef = useRef<CaptureApi | null>(null);
   const iosCaptureRef = useRef<CaptureApi | null>(null);
   const androidCaptureRef = useRef<CaptureApi | null>(null);
@@ -1311,7 +1395,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     void refresh();
     const onChange = () => { void refresh(); };
     navigator.mediaDevices?.addEventListener?.('devicechange', onChange);
-    const timer = window.setInterval(() => { void refresh(); }, 4000);
+    const timer = window.setInterval(() => { void refresh(); }, 15_000);
     return () => {
       cancelled = true;
       navigator.mediaDevices?.removeEventListener?.('devicechange', onChange);
@@ -1349,13 +1433,23 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     if (!activeTab) return [];
     return changeLogsRef.current.get(activeTab.id) ?? [];
   }, [activeTab, changeLogVersion]);
-  const animTime = activeTab?.animTime ?? 0;
   const animPlaying = activeTab?.animPlaying ?? false;
   const timelineOpen = activeTab?.timelineOpen ?? false;
   const timelineOpenRef = useRef(timelineOpen);
   timelineOpenRef.current = timelineOpen;
+  const animPlayingRef = useRef(animPlaying);
+  animPlayingRef.current = animPlaying;
+  /** Live playhead — canvas reads this during playback so App can skip 60fps setState. */
+  const playheadRef = useRef(activeTab?.animTime ?? 0);
+  const [animTime, setAnimTimeState] = useState(activeTab?.animTime ?? 0);
   const animTimeRef = useRef(animTime);
   animTimeRef.current = animTime;
+  const animSeekRafRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!activeTab) return;
+    playheadRef.current = activeTab.animTime;
+    setAnimTimeState(activeTab.animTime);
+  }, [activeTab?.id]); // eslint-disable-line react-hooks/exhaustive-deps -- tab switch only
 
   useEffect(() => {
     const el = leftScrollRef.current;
@@ -1804,7 +1898,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     // Periodic catch-up while both clients are open.
     const interval = window.setInterval(() => {
       void syncIfSignedIn({ license: false, library: false }).catch(() => undefined);
-    }, 4_000);
+    }, 30_000);
 
     return () => {
       cancelled = true;
@@ -1875,6 +1969,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         activeIdRef.current = restored.activeId;
         setWorkspace(restored);
         const active = restored.tabs.find((tab) => tab.id === restored.activeId) ?? restored.tabs[0];
+        // Start decrypting the active scene's GLBs during splash / gate, not after first canvas mount.
+        if (active?.project?.devices?.length) {
+          warmProjectDeviceModels(active.project.devices.map((device) => device.deviceId));
+        }
         if (active?.shippedTemplateId && isDevEditableTemplateId(active.shippedTemplateId)) {
           setCompositionPick({ tabId: active.id, templateId: active.shippedTemplateId });
         }
@@ -2070,22 +2168,49 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     notifyRef.current(`Restored to before “${entry.summary}”`);
   }, []);
 
-  const setAnimTime = useCallback((value: number | ((time: number) => number)) => {
+  const persistAnimTime = useCallback((time: number) => {
     setWorkspace((ws) => ({
       ...ws,
       tabs: ws.tabs.map((tab) => {
         if (tab.id !== ws.activeId) return tab;
-        return { ...tab, animTime: typeof value === 'function' ? value(tab.animTime) : value };
+        if (Math.abs(tab.animTime - time) < 1e-6) return tab;
+        return { ...tab, animTime: time };
       }),
     }));
   }, []);
 
+  const setAnimTime = useCallback((value: number | ((time: number) => number)) => {
+    const next = typeof value === 'function' ? value(playheadRef.current) : value;
+    playheadRef.current = next;
+    animTimeRef.current = next;
+    // Coalesce to one React update per frame. Canvas still owns transforms;
+    // React only needs the playhead for lid / layer overlay props + UI.
+    if (animSeekRafRef.current != null) return;
+    animSeekRafRef.current = requestAnimationFrame(() => {
+      animSeekRafRef.current = null;
+      const time = playheadRef.current;
+      setAnimTimeState(time);
+      if (!animPlayingRef.current) persistAnimTime(time);
+    });
+  }, [persistAnimTime]);
+
   const setAnimPlaying = useCallback((value: boolean | ((playing: boolean) => boolean)) => {
+    const activePlaying = animPlayingRef.current;
+    const nextPlaying = typeof value === 'function' ? value(activePlaying) : value;
+    const time = playheadRef.current;
+    if (!nextPlaying) {
+      setAnimTimeState(time);
+    }
     setWorkspace((ws) => ({
       ...ws,
       tabs: ws.tabs.map((tab) => {
         if (tab.id !== ws.activeId) return tab;
-        return { ...tab, animPlaying: typeof value === 'function' ? value(tab.animPlaying) : value };
+        return {
+          ...tab,
+          animPlaying: nextPlaying,
+          // Seal the playhead when pausing so reloads stay in sync.
+          animTime: nextPlaying ? tab.animTime : time,
+        };
       }),
     }));
   }, []);
@@ -2124,6 +2249,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
   const animation = project.animation ?? createDefaultAnimation(project.selectedDeviceId || 'device-main');
   const animActive = timelineOpen || animPlaying;
+  const canvasDrivesAnim = animActive && hasAnimation(animation) && !gizmoDragging;
   const displayProject = useMemo(() => {
     // While the gizmo is live, feed raw project poses — evaluating keys mid-drag
     // overwrote the drag and fought TransformControls.
@@ -2134,14 +2260,54 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       }
       return project;
     }
+    // Canvas owns position/rotation/scale; still sample lid + layer tracks so
+    // ScreenLayerExplosion / lid rigs keep moving during preview + export.
+    if (canvasDrivesAnim) {
+      const overlayDevices = evaluateAnimationOverlayProps(project.devices, animation, animTime);
+      if (project.compositionMode === 'split' && project.linkSplitTransform !== false) {
+        const source = getPublishEnvDevice({ ...project, devices: overlayDevices });
+        return {
+          ...project,
+          animation,
+          devices: mirrorLinkedTransforms(overlayDevices, source),
+        };
+      }
+      return { ...project, animation, devices: overlayDevices };
+    }
     const evaluated = evaluateAnimation(project.devices, animation, animTime);
     return {
       ...project,
       animation,
       devices: applyLinkedTransformsAfterAnim(project, evaluated),
     };
-  }, [project, animation, animActive, animTime, gizmoDragging]);
+  }, [project, animation, animActive, animTime, gizmoDragging, canvasDrivesAnim]);
   const displaySelected = getSelectedDevice(displayProject);
+  useEffect(() => {
+    const source = displaySelected.figmaSource;
+    if (!source?.fileKey || !hasFigmaToken()) {
+      setFigmaSourceStale(false);
+      return;
+    }
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const remote = await fetchFigmaFileLastModified(source.fileKey);
+        if (cancelled || !remote) return;
+        setFigmaSourceStale(Date.parse(remote) > Date.parse(source.lastModified));
+      } catch {
+        if (!cancelled) setFigmaSourceStale(false);
+      }
+    };
+    void check();
+    const onFocus = () => { void check(); };
+    window.addEventListener('focus', onFocus);
+    const timer = window.setInterval(() => { void check(); }, 60_000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      window.clearInterval(timer);
+    };
+  }, [displaySelected.figmaSource?.fileKey, displaySelected.figmaSource?.nodeId, displaySelected.figmaSource?.lastModified, figmaTokenConnected]);
   const activePublishTarget = resolvePublishTarget(project);
   const activeEnvDevice = getPublishEnvDevice(project);
   const activeEnvScreenshot = deviceScreenMedia(activeEnvDevice, project.screenshot);
@@ -2158,6 +2324,19 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     if (!isDualCanvas) return null;
     return projectForEnvCanvas(displayProject, 'android');
   }, [isDualCanvas, displayProject]);
+  // Decrypt / preload GLBs for the open scene before Suspense asks for them.
+  useEffect(() => {
+    const ids = [
+      ...displayProject.devices.map((device) => device.deviceId),
+      ...(iosDisplayProject?.devices.map((device) => device.deviceId) ?? []),
+      ...(androidDisplayProject?.devices.map((device) => device.deviceId) ?? []),
+    ];
+    warmProjectDeviceModels(ids);
+  }, [
+    displayProject.devices,
+    iosDisplayProject?.devices,
+    androidDisplayProject?.devices,
+  ]);
   const platformRecentScreenshots = useMemo(
     () => recentForPlatform(recentScreenshots, activePublishTarget),
     [recentScreenshots, activePublishTarget],
@@ -2169,15 +2348,16 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       ?? activeEnvDevice.id;
   }, [mirrorStream, mirrorSource, activePublishTarget, project.devices, activeEnvDevice.id]);
   // Dual canvases each use solo framing — never the old wide “two phones in one scene” camera.
+  // When the canvas drives animation, camera tracks are applied in-canvas from playheadRef.
   const animatedCamera = useMemo(() => {
-    if (!animActive || !hasCameraAnimation(animation)) return null;
+    if (canvasDrivesAnim || !animActive || !hasCameraAnimation(animation)) return null;
     return evaluateCamera(
       animation,
       animTime,
       project.cameraView,
       false,
     );
-  }, [animActive, animation, animTime, project.cameraView]);
+  }, [canvasDrivesAnim, animActive, animation, animTime, project.cameraView]);
 
   const liveCameraPose = useMemo(() => {
     const focus = displaySelected.position ?? { x: 0, y: 0, z: 0 };
@@ -2324,15 +2504,28 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     ));
   }, [setProject]);
 
+  const orbitReactRafRef = useRef<number | null>(null);
   const rememberCameraOrbit = useCallback((orbit: { offset: Vec3; lookOffset?: Vec3 } | null) => {
     if (!orbit?.offset || suppressOrbitSaveRef.current || pickingCameraViewRef.current) return;
     sharedOrbitRef.current = orbit;
-    setSharedOrbit(orbit);
+    // Coalesce React orbit state to one update/frame — dual-pane live sync uses liveOrbit bus.
+    if (orbitReactRafRef.current == null) {
+      orbitReactRafRef.current = requestAnimationFrame(() => {
+        orbitReactRafRef.current = null;
+        const latest = sharedOrbitRef.current;
+        if (!latest?.offset) return;
+        setSharedOrbit((prev) => (
+          cameraOrbitKey(prev) === cameraOrbitKey(latest) ? prev : latest
+        ));
+      });
+    }
     if (orbitSaveTimerRef.current != null) window.clearTimeout(orbitSaveTimerRef.current);
     orbitSaveTimerRef.current = window.setTimeout(() => {
       orbitSaveTimerRef.current = null;
       if (suppressOrbitSaveRef.current || pickingCameraViewRef.current) return;
-      writeCameraOrbit(orbit);
+      const latest = sharedOrbitRef.current;
+      if (!latest?.offset) return;
+      writeCameraOrbit(latest);
     }, 320);
   }, [writeCameraOrbit]);
 
@@ -3592,6 +3785,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     name: string,
     message = 'Screenshot added to your device',
     deviceId?: string | null,
+    figmaSource?: FigmaScreenSource | null,
   ) => {
     setProject((current) => {
       const targetId = deviceId && current.devices.some((device) => device.id === deviceId)
@@ -3605,7 +3799,13 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         ...next,
         devices: next.devices.map((device) => (
           device.id === targetId
-            ? { ...device, screenLayers: undefined, layerExplosion: undefined }
+            ? {
+              ...device,
+              screenLayers: undefined,
+              layerExplosion: undefined,
+              layerExtrusion: undefined,
+              figmaSource: figmaSource ?? undefined,
+            }
             : device
         )),
       };
@@ -3620,17 +3820,35 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
   /** Rotato-style: flat stack on the glass + separate plates that lift with layerExplosion. */
   const applyScreenExplosion = async (
-    plates: { id: string; name: string; dataUrl: string }[],
+    plates: {
+      id: string;
+      name: string;
+      dataUrl: string;
+      layerType?: string;
+      type?: string;
+      extrusionGroup?: string;
+    }[],
     amount: number,
     label: string,
+    extrusion = 0,
+    figmaSource?: FigmaScreenSource | null,
   ) => {
-    const layers = normalizeScreenLayers(plates);
-    if (layers.length < 2) {
+    const normalized = normalizeScreenLayers(plates);
+    if (normalized.length < 2) {
       notify('Need at least two layers to explode');
       return;
     }
     try {
+      const extrude = Math.min(1, Math.max(0, extrusion));
+      // Containers stay paper-thin; pieces thicken in small subgroups (not one full-tree pass).
+      const layers = planIncrementalExtrusion(normalized, extrude);
       const flat = await compositeFlatScreenStack(layers);
+      const extrudedCount = layers.filter((plate) => (plate.extrusionScale ?? 0) > 0.001).length;
+      const subgroupCount = new Set(
+        layers
+          .filter((plate) => (plate.extrusionScale ?? 0) > 0.001)
+          .map((plate) => plate.extrusionGroup || 'piece'),
+      ).size;
       setProject((current) => {
         const targetId = hoveredDeviceIdRef.current
           && current.devices.some((device) => device.id === hoveredDeviceIdRef.current)
@@ -3646,6 +3864,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 screenshot: flat,
                 screenLayers: layers,
                 layerExplosion: Math.min(1, Math.max(0, amount)),
+                layerExtrusion: extrude,
+                figmaSource: figmaSource
+                  ? { ...figmaSource, layered: true }
+                  : device.figmaSource,
               }
               : device
           )),
@@ -3658,9 +3880,66 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         ));
         return next;
       });
-      notify(`Exploded ${layers.length} layers from “${label}” on the device`);
+      notify(
+        extrude > 0.001
+          ? `Exploded “${label}” — ${extrudedCount} pieces in ${subgroupCount} subgroup${subgroupCount === 1 ? '' : 's'} (containers stay flat)`
+          : `Exploded ${layers.length} layers from “${label}” on the device`,
+      );
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Could not place exploded layers');
+    }
+  };
+
+  const refreshFigmaScreen = async () => {
+    const source = getSelectedDevice(project).figmaSource;
+    if (!source) {
+      notify('No Figma link stored on this device screen');
+      return;
+    }
+    if (!hasFigmaToken()) {
+      notify('Connect a Figma token first');
+      return;
+    }
+    setFigmaRefreshBusy(true);
+    try {
+      const remoteModified = await fetchFigmaFileLastModified(source.fileKey);
+      const layered = await exportFigmaDirectChildPlates(source.fileKey, source.nodeId);
+      if (layered.plates.length >= 2) {
+        await applyScreenExplosion(
+          layered.plates,
+          getSelectedDevice(project).layerExplosion ?? 0,
+          layered.rootName || source.rootName || 'Figma',
+          getSelectedDevice(project).layerExtrusion ?? 0,
+          {
+            ...source,
+            lastModified: remoteModified || layered.lastModified || new Date().toISOString(),
+            rootName: layered.rootName || source.rootName,
+            layered: true,
+            url: layered.url || source.url,
+          },
+        );
+      } else {
+        const { dataUrl } = await exportFigmaNodeAsDataUrl(source.fileKey, source.nodeId, loadFigmaToken(), 2);
+        applyScreenImage(
+          dataUrl,
+          layered.rootName || source.rootName || 'Figma',
+          'Figma screen refreshed',
+          getSelectedDevice(project).id,
+          {
+            ...source,
+            lastModified: remoteModified || layered.lastModified || new Date().toISOString(),
+            rootName: layered.rootName || source.rootName,
+            layered: false,
+            url: layered.url || source.url,
+          },
+        );
+      }
+      setFigmaSourceStale(false);
+      notify('Figma screen refreshed');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not refresh Figma screen');
+    } finally {
+      setFigmaRefreshBusy(false);
     }
   };
 
@@ -3725,14 +4004,25 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
       // Figma ⌘C first — proprietary HTML, not a PNG. Needs Assets → Figma token.
       if (isFigmaClipboardHtml(html)) {
-        notify('Exporting Figma frame as PNG…');
+        notify('Exporting Figma layers…');
         const fromFigmaCopy = await exportFigmaClipboardHtmlAsScreenPng(html);
+        if (fromFigmaCopy?.plates && fromFigmaCopy.plates.length >= 2) {
+          await applyScreenExplosion(
+            fromFigmaCopy.plates,
+            0,
+            fromFigmaCopy.name,
+            0,
+            fromFigmaCopy.source ?? null,
+          );
+          return;
+        }
         if (fromFigmaCopy) {
           applyScreenImage(
             fromFigmaCopy.dataUrl,
             fromFigmaCopy.name,
             'Figma frame pasted onto the device screen',
             targetId,
+            fromFigmaCopy.source ?? null,
           );
           return;
         }
@@ -3769,8 +4059,24 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         }
       }
       const figmaPng = plain ? await exportFigmaUrlAsScreenPng(plain) : null;
+      if (figmaPng?.plates && figmaPng.plates.length >= 2) {
+        await applyScreenExplosion(
+          figmaPng.plates,
+          0,
+          figmaPng.name,
+          0,
+          figmaPng.source ?? null,
+        );
+        return;
+      }
       if (figmaPng) {
-        applyScreenImage(figmaPng.dataUrl, figmaPng.name, 'Figma frame pasted onto the device screen', targetId);
+        applyScreenImage(
+          figmaPng.dataUrl,
+          figmaPng.name,
+          'Figma frame pasted onto the device screen',
+          targetId,
+          figmaPng.source ?? null,
+        );
         return;
       }
 
@@ -3782,7 +4088,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         return;
       }
 
-      throw new Error('Copy a frame in Figma (⌘C), then paste here — needs a Figma token in Assets');
+      throw new Error('Copy a frame in Figma (⌘C), then paste here — connect a Figma token in Assets first');
     } catch (error) {
       notify(error instanceof Error ? error.message : 'Nothing to paste — copy an image first');
     }
@@ -4773,7 +5079,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         : null,
       onProgress: (_ratio, label) => setExportProgress(`${formatInfo.label}: ${label}`),
       renderFrame: async (time, ctx, frameWidth, frameHeight) => {
-        flushSync(() => setAnimTime(time));
+        // Bypass RAF-coalesced setAnimTime so export frames pose synchronously.
+        playheadRef.current = time;
+        animTimeRef.current = time;
+        if (animSeekRafRef.current != null) {
+          cancelAnimationFrame(animSeekRafRef.current);
+          animSeekRafRef.current = null;
+        }
+        flushSync(() => setAnimTimeState(time));
         await seekAllScreenMedia(time);
         await waitFrames(2);
         if (dual) {
@@ -5066,14 +5379,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const focusKeyLight = useCallback(() => {
     setLayerSelection({ kind: 'key-light' });
     setLightGizmoActive(true);
-    setOpenSectionId('light');
-  }, []);
+    openInspectorSection('light');
+  }, [openInspectorSection]);
 
   const focusSceneLight = useCallback((lightId: string) => {
     setLayerSelection({ kind: 'scene-light', id: lightId });
     setLightGizmoActive(false);
-    setOpenSectionId('light');
-  }, []);
+    openInspectorSection('light');
+  }, [openInspectorSection]);
 
   const patchSceneLightPosition = useCallback((id: string, position: Vec3) => {
     setProject((current) => ({
@@ -5658,7 +5971,19 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       window.removeEventListener('keydown', handler);
       window.removeEventListener('keyup', onKeyUp);
     };
-  });
+  }, [
+    hasOpenProject,
+    timelineOpen,
+    layerSelection,
+    project.selectedDeviceId,
+    project.sceneProps,
+    project.overlays,
+    selectedOverlayId,
+    workspace.tabs.length,
+    workspace.activeId,
+    animation.duration,
+    restoreChange,
+  ]);
 
   useEffect(() => {
     if (!hasOpenProject) return;
@@ -6524,7 +6849,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                     });
                   }}
                   onRemoveDevice={deleteDeviceById}
-                  onOpenSection={(sectionId) => setOpenSectionId(sectionId)}
+                  onOpenSection={(sectionId) => openInspectorSection(sectionId)}
                   onOpenAssets={() => setLeftWorkspaceTab('assets')}
                   onSelectOverlay={selectCanvasOverlay}
                   onSelectProp={(propId) => {
@@ -6611,28 +6936,86 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         </span>
                       </div>
                     </button>
-                    <div className="assets-figma-row">
-                      <input
-                        type="url"
-                        className="assets-figma-input"
-                        value={figmaLinkDraft}
-                        placeholder="Or paste a Figma frame link"
-                        aria-label="Figma file link"
-                        onChange={(event) => setFigmaLinkDraft(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key !== 'Enter') return;
-                          event.preventDefault();
-                          setFigmaExploreOpen(true);
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="assets-figma-open"
-                        title="Open Figma file"
-                        onClick={() => setFigmaExploreOpen(true)}
-                      >
-                        Open
-                      </button>
+                    <div className="assets-figma-connect">
+                      <div className="field-caption section-label assets-section-label">Figma</div>
+                      {figmaTokenConnected && hasFigmaToken() ? (
+                        <>
+                          <div className="assets-figma-row">
+                            <span className="assets-figma-status is-connected">
+                              Connected · {maskFigmaToken(loadFigmaToken())}
+                            </span>
+                            <button
+                              type="button"
+                              className="assets-figma-open"
+                              title="Delete the Figma token for this account on this device"
+                              disabled={figmaTokenBusy}
+                              onClick={() => {
+                                void (async () => {
+                                  setFigmaTokenBusy(true);
+                                  try {
+                                    await clearFigmaToken();
+                                    setFigmaTokenConnected(false);
+                                    setFigmaLinkDraft('');
+                                    notify('Figma token deleted for this account');
+                                  } catch (error) {
+                                    notify(error instanceof Error ? error.message : 'Could not disconnect Figma');
+                                  } finally {
+                                    setFigmaTokenBusy(false);
+                                  }
+                                })();
+                              }}
+                            >
+                              Disconnect
+                            </button>
+                          </div>
+                          <p className="assets-figma-hint">Paste a Figma frame link, then open it.</p>
+                          <div className="assets-figma-row">
+                            <input
+                              type="url"
+                              className="assets-figma-input"
+                              value={figmaLinkDraft}
+                              placeholder="Paste a Figma frame or file link"
+                              aria-label="Figma file link"
+                              onChange={(event) => setFigmaLinkDraft(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter') return;
+                                event.preventDefault();
+                                setFigmaExploreOpen(true);
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="assets-figma-open"
+                              title="Open this Figma link"
+                              onClick={() => setFigmaExploreOpen(true)}
+                            >
+                              Open
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="assets-figma-prompt">
+                          <p className="assets-figma-hint">Do you want to connect to Figma?</p>
+                          <button
+                            type="button"
+                            className="assets-figma-open assets-figma-connect-start"
+                            onClick={() => {
+                              if (!accountEmail) {
+                                notify('Sign in to your mokstudio account before connecting Figma');
+                                return;
+                              }
+                              setFigmaConnectOpen(true);
+                            }}
+                          >
+                            Connect Figma token
+                          </button>
+                          <span className="assets-figma-status">
+                            {accountEmail
+                              ? 'The paste-link field appears after your token is saved'
+                              : 'Sign in required — Figma tokens are saved per account'}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </section>
 
@@ -6937,6 +7320,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         liveStream={mirrorSource === 'ios' || (!mirrorSource && activePublishTarget === 'ios') ? mirrorStream : null}
                         liveStreamDeviceId={liveStreamDeviceId}
                         cameraPosition={animatedCamera}
+                        playheadRef={canvasDrivesAnim ? playheadRef : undefined}
                         gizmoActive={activePublishTarget === 'ios'}
                         sharedOrbit={sharedOrbit}
                         onSharedOrbitChange={rememberCameraOrbit}
@@ -7006,6 +7390,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         liveStream={mirrorSource === 'android' || (!mirrorSource && activePublishTarget === 'android') ? mirrorStream : null}
                         liveStreamDeviceId={liveStreamDeviceId}
                         cameraPosition={animatedCamera}
+                        playheadRef={canvasDrivesAnim ? playheadRef : undefined}
                         gizmoActive={activePublishTarget === 'android'}
                         sharedOrbit={sharedOrbit}
                         onSharedOrbitChange={rememberCameraOrbit}
@@ -7068,6 +7453,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   liveStream={mirrorStream}
                   liveStreamDeviceId={liveStreamDeviceId}
                   cameraPosition={animatedCamera}
+                  playheadRef={canvasDrivesAnim ? playheadRef : undefined}
                   sharedOrbit={sharedOrbit}
                   onSharedOrbitChange={rememberCameraOrbit}
                   onCameraCommit={onCameraCommit}
@@ -7215,6 +7601,17 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   }}
                 >
                   <ImagePlus size={14} /> Replace screenshot
+                </button>
+                <button
+                  type="button"
+                  title="Load a Figma frame and explode its layers onto this device"
+                  onClick={() => {
+                    setDeviceMenu(null);
+                    setLeftWorkspaceTab('assets');
+                    setFigmaExploreOpen(true);
+                  }}
+                >
+                  <UnfoldVertical size={14} /> Explode from Figma
                 </button>
                 <button
                   type="button"
@@ -7571,7 +7968,11 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             </div>
         </main>
 
-        <aside className="right-panel" aria-hidden={sidePanelsHidden} ref={rightPanelRef}>
+        <aside
+          className={`right-panel${inspectorProposed ? ' is-proposed' : ''}`}
+          aria-hidden={sidePanelsHidden}
+          ref={rightPanelRef}
+        >
           <div className="right-workspace-tabs" role="tablist" aria-label="Inspector tools">
             <button
               type="button"
@@ -7826,7 +8227,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 )}
               </div>
             )}
-            <SettingsSection id="camera" title="Camera" hint="Control the camera view, lens, and focus" icon={Camera} open={openSectionId === 'camera'} onToggle={toggleSection}>
+            <SettingsSection id="camera" title="Camera" hint={inspectorProposed ? undefined : 'Control the camera view, lens, and focus'} icon={Camera} open={openSectionId === 'camera'} onToggle={toggleSection}>
               <div className="field-caption">Angle</div>
               <div className="camera-icon-rail" role="toolbar" aria-label="Camera angle">
                 {CAMERA_VIEW_OPTIONS.map((view) => {
@@ -7904,7 +8305,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 With the timeline open, orbit or dolly the view to key Camera X, Y, and Z. Scrub, then orbit again for the next pose.
               </p>
             </SettingsSection>
-            <SettingsSection id="frame" title="Frame size" hint="Canvas aspect ratio and crop" icon={Columns2} open={openSectionId === 'frame'} onToggle={toggleSection}>
+            <SettingsSection id="frame" title={inspectorProposed ? 'Frame' : 'Frame size'} hint={inspectorProposed ? undefined : 'Canvas aspect ratio and crop'} icon={Columns2} open={openSectionId === 'frame'} onToggle={toggleSection}>
             <section
               className="frame-size-block"
               aria-label="Aspect ratio"
@@ -8194,6 +8595,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 </>
               )}
               <DeviceCategoryBar value={deviceCategoryFilter} onChange={setDeviceCategoryFilter} />
+              {!inspectorProposed && (
               <div className="device-card-preview-toggle" role="group" aria-label="Device card layout preview">
                 <span className="device-card-preview-label">Card preview</span>
                 <div className="device-card-preview-options">
@@ -8217,6 +8619,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   </button>
                 </div>
               </div>
+              )}
               {project.compositionMode === 'split' ? (
                 <div className="split-env-device-block">
                   {([
@@ -8236,7 +8639,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         </div>
                         <DeviceCardGrid
                           devices={platformDevices}
-                          previewLayout={deviceCardPreview}
+                          previewLayout={inspectorProposed ? 'fit' : deviceCardPreview}
                           isSelected={(id) => device.deviceId === id}
                           isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
                           onLibraryDragStart={(id) => { draggingLibraryDeviceRef.current = id; }}
@@ -8273,7 +8676,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 <>
                   <DeviceCardGrid
                     devices={filteredDevices}
-                    previewLayout={deviceCardPreview}
+                    previewLayout={inspectorProposed ? 'fit' : deviceCardPreview}
                     isSelected={(id) => project.deviceId === id}
                     isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
                     onLibraryDragStart={(id) => { draggingLibraryDeviceRef.current = id; }}
@@ -8384,7 +8787,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               )}
             </SettingsSection>
 
-            <SettingsSection id="transform" title="Transform" hint="Position, angle, rotation and materials" icon={Rotate3D} open={openSectionId === 'transform'} onToggle={toggleSection}>
+            <SettingsSection id="transform" title="Transform" hint={inspectorProposed ? undefined : 'Position, angle, rotation and materials'} icon={Rotate3D} open={openSectionId === 'transform'} onToggle={toggleSection}>
               <div className="field-caption">Studio angle</div>
               <div className="camera-preset-grid studio-pose-grid" role="group" aria-label="Studio angles">
                 {STUDIO_POSES.map((pose) => (
@@ -8529,6 +8932,26 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   }}
                 />
               ) : null}
+              {displaySelected.figmaSource ? (
+                <div className={`figma-screen-sync${figmaSourceStale ? ' is-stale' : ''}`}>
+                  <div className="figma-screen-sync-copy">
+                    <strong>{figmaSourceStale ? 'Figma file updated' : 'Linked to Figma'}</strong>
+                    <span>
+                      {displaySelected.figmaSource.rootName || 'Frame'}
+                      {displaySelected.figmaSource.layered ? ' · layered plates' : ' · flat'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="button secondary-button"
+                    disabled={figmaRefreshBusy || !figmaTokenConnected}
+                    onClick={() => void refreshFigmaScreen()}
+                  >
+                    <RefreshCw size={13} />
+                    {figmaRefreshBusy ? 'Refreshing…' : 'Refresh'}
+                  </button>
+                </div>
+              ) : null}
               {(displaySelected.screenLayers?.length ?? 0) >= 2 ? (
                 <>
                   <div className="field-caption">Layer explosion</div>
@@ -8544,38 +8967,59 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                       if (timelineOpen) keyPropertyAtPlayhead('layerExplosion', v);
                     }}
                   />
+                  <SliderField
+                    label="Extrusion"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    unit=""
+                    value={displaySelected.layerExtrusion ?? 0}
+                    onChange={(v) => {
+                      patchSelectedDevice({ layerExtrusion: v });
+                      if (timelineOpen) keyPropertyAtPlayhead('layerExtrusion', v);
+                    }}
+                  />
                   <p className="device-card-import-hint">
-                    {displaySelected.screenLayers!.length} UI plates lift off the glass — animate Explosion on the timeline like Rotato.
+                    {displaySelected.screenLayers!.length} UI plates lift off the glass — top-level containers stay flat; Extrusion thickens smaller subgroups bit by bit.
                   </p>
                   <button
                     type="button"
                     className="text-button"
-                    onClick={() => patchSelectedDevice({ screenLayers: undefined, layerExplosion: undefined })}
+                    onClick={() => patchSelectedDevice({
+                      screenLayers: undefined,
+                      layerExplosion: undefined,
+                      layerExtrusion: undefined,
+                      figmaSource: undefined,
+                    })}
                   >
                     <X size={13} /> Clear exploded layers
                   </button>
                 </>
               ) : null}
-              <div className="field-caption">Materials</div>
-              <SliderField
-                label="Glass reflection"
-                min={0}
-                max={1}
-                step={0.05}
-                unit=""
-                value={displaySelected.glassReflection ?? 0.55}
-                onChange={(v) => patchSelectedDevice({
-                  glassReflection: v,
-                  reflectionStyle: reflectionStyleForAmount(v),
-                })}
-              />
+              {!inspectorProposed && (
+                <>
+                  <div className="field-caption">Materials</div>
+                  <SliderField
+                    label="Glass reflection"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    unit=""
+                    value={displaySelected.glassReflection ?? 0.55}
+                    onChange={(v) => patchSelectedDevice({
+                      glassReflection: v,
+                      reflectionStyle: reflectionStyleForAmount(v),
+                    })}
+                  />
+                </>
+              )}
               <button className="text-button" onClick={resetDevice}><RotateCcw size={13} /> Reset transform</button>
             </SettingsSection>
 
             <SettingsSection
               id="overlays"
               title="Overlays"
-              hint="Add titles on top of the shot"
+              hint={inspectorProposed ? undefined : 'Add titles on top of the shot'}
               icon={Layers3}
               open={openSectionId === 'overlays'}
               onToggle={toggleSection}
@@ -8867,7 +9311,28 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               ))}
             </SettingsSection>
 
-            <SettingsSection id="reflection" title="Reflection" hint="Finish and environment on glass and screens" icon={Aperture} open={openSectionId === 'reflection'} onToggle={toggleSection}>
+            <SettingsSection
+              id={inspectorProposed ? 'materials' : 'reflection'}
+              title={inspectorProposed ? 'Materials' : 'Reflection'}
+              hint={inspectorProposed ? undefined : 'Finish and environment on glass and screens'}
+              icon={Aperture}
+              open={openSectionId === (inspectorProposed ? 'materials' : 'reflection')}
+              onToggle={toggleSection}
+            >
+              {inspectorProposed && (
+                <SliderField
+                  label="Glass"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  unit=""
+                  value={displaySelected.glassReflection ?? 0.55}
+                  onChange={(v) => patchSelectedDevice({
+                    glassReflection: v,
+                    reflectionStyle: reflectionStyleForAmount(v),
+                  })}
+                />
+              )}
               <div className="field-caption">Type</div>
               <div className="reflection-type-segment" role="tablist" aria-label="Reflection type">
                 {REFLECTION_STYLES.map((style) => {
@@ -8904,7 +9369,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               />
             </SettingsSection>
 
-            <SettingsSection id="light" title="Light" hint="Gentle key, soft HDRI, and optional extra lights" icon={Sun} open={openSectionId === 'light'} onToggle={toggleSection}>
+            <SettingsSection
+              id={inspectorProposed ? 'lighting' : 'light'}
+              title={inspectorProposed ? 'Lighting' : 'Light'}
+              hint={inspectorProposed ? undefined : 'Gentle key, soft HDRI, and optional extra lights'}
+              icon={Sun}
+              open={openSectionId === (inspectorProposed ? 'lighting' : 'light')}
+              onToggle={toggleSection}
+            >
               <div className="env-group">
                 <div className="env-group-head">
                   <div className="field-caption">Key light</div>
@@ -9206,7 +9678,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               </div>
             </SettingsSection>
 
-            <SettingsSection id="rim" title="Ambient" hint="Soft wrap that fills the dark side" icon={Sun} open={openSectionId === 'rim'} onToggle={toggleSection}>
+            <SettingsSection
+              id="rim"
+              title="Ambient"
+              hint={inspectorProposed ? undefined : 'Soft wrap that fills the dark side'}
+              icon={Sun}
+              open={inspectorProposed ? openSectionId === 'lighting' : openSectionId === 'rim'}
+              onToggle={toggleSection}
+              chrome={inspectorProposed ? 'body-only' : 'full'}
+            >
               <div className="env-group">
                 <div className="env-group-head">
                   <div className="field-caption">Wrap</div>
@@ -9247,7 +9727,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               </div>
             </SettingsSection>
 
-            <SettingsSection id="shadow" title="Shadows" hint="Soft studio shadows, contact, and ambient occlusion" icon={Layers3} open={openSectionId === 'shadow'} onToggle={toggleSection}>
+            <SettingsSection
+              id="shadow"
+              title="Shadows"
+              hint={inspectorProposed ? undefined : 'Soft studio shadows, contact, and ambient occlusion'}
+              icon={Layers3}
+              open={inspectorProposed ? openSectionId === 'lighting' : openSectionId === 'shadow'}
+              onToggle={toggleSection}
+              chrome={inspectorProposed ? 'body-only' : 'full'}
+            >
               <div className="env-group">
                 <div className="env-group-head">
                   <div className="field-caption">Shadows</div>
@@ -9417,7 +9905,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               </div>
             </SettingsSection>
 
-            <SettingsSection id="look" title="Look & motion" hint="Style, effects and animation" icon={Sparkles} open={openSectionId === 'look'} onToggle={toggleSection}>
+            <SettingsSection id="look" title={inspectorProposed ? 'Look' : 'Look & motion'} hint={inspectorProposed ? undefined : 'Style, effects and animation'} icon={Sparkles} open={openSectionId === 'look'} onToggle={toggleSection}>
               <div className="scene-look-block is-inspector">
                 <div className="scene-look-group">
                   <BackdropLooksPicker
@@ -9647,41 +10135,54 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 )}
 
                 <div className="scene-look-group">
-                  <div className="field-caption scene-look-sub">Motion</div>
-                  <div className="motion-preset-row" role="group" aria-label="Motion presets">
-                    {([
-                      ['turntable', 'Turntable', RotateCw],
-                      ['spin', 'Spin 360', RefreshCw],
-                      ['float', 'Float', ArrowUpDown],
-                      ['tilt', 'Tilt', FlipHorizontal2],
-                      ['orbit', 'Orbit', Orbit],
-                      ['zoom', 'Zoom in', ZoomIn],
-                      ['present', 'Present', Presentation],
-                      ['wobble', 'Wobble', Waves],
-                      ['fan', 'Fan', Layers3],
-                      ['swing', 'Swing', ArrowLeftRight],
-                    ] as const).map(([id, label, Icon]) => (
-                      <button
-                        key={id}
-                        type="button"
-                        className="motion-preset-chip"
-                        title={label}
-                        aria-label={`Apply ${label} motion`}
-                        onClick={() => applyMotionPreset(id)}
-                      >
-                        <Icon size={16} strokeWidth={1.8} aria-hidden />
-                      </button>
-                    ))}
+                  {inspectorProposed ? (
                     <button
                       type="button"
-                      className="motion-preset-chip motion-preset-browse"
+                      className="button full-outline compact"
                       title="Browse preset animations with previews"
-                      aria-label="Browse preset animations"
                       onClick={() => setRightWorkspaceTab('presets')}
                     >
-                      All presets
+                      Browse motion presets
                     </button>
-                  </div>
+                  ) : (
+                    <>
+                      <div className="field-caption scene-look-sub">Motion</div>
+                      <div className="motion-preset-row" role="group" aria-label="Motion presets">
+                        {([
+                          ['turntable', 'Turntable', RotateCw],
+                          ['spin', 'Spin 360', RefreshCw],
+                          ['float', 'Float', ArrowUpDown],
+                          ['tilt', 'Tilt', FlipHorizontal2],
+                          ['orbit', 'Orbit', Orbit],
+                          ['zoom', 'Zoom in', ZoomIn],
+                          ['present', 'Present', Presentation],
+                          ['wobble', 'Wobble', Waves],
+                          ['fan', 'Fan', Layers3],
+                          ['swing', 'Swing', ArrowLeftRight],
+                        ] as const).map(([id, label, Icon]) => (
+                          <button
+                            key={id}
+                            type="button"
+                            className="motion-preset-chip"
+                            title={label}
+                            aria-label={`Apply ${label} motion`}
+                            onClick={() => applyMotionPreset(id)}
+                          >
+                            <Icon size={16} strokeWidth={1.8} aria-hidden />
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          className="motion-preset-chip motion-preset-browse"
+                          title="Browse preset animations with previews"
+                          aria-label="Browse preset animations"
+                          onClick={() => setRightWorkspaceTab('presets')}
+                        >
+                          All presets
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 <div className="scene-look-group">
@@ -10562,16 +11063,35 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           onNotify={notify}
         />
       )}
+      <FigmaConnectModal
+        open={figmaConnectOpen}
+        onClose={() => setFigmaConnectOpen(false)}
+        onNotify={notify}
+        onConnected={() => {
+          setFigmaTokenConnected(true);
+        }}
+      />
       <FigmaExploreModal
         open={figmaExploreOpen}
         initialUrl={figmaLinkDraft}
-        onClose={() => setFigmaExploreOpen(false)}
-        onNotify={notify}
-        onApply={(dataUrl, layerName) => {
-          applyScreenImage(dataUrl, layerName, `Applied “${layerName}” from Figma`);
+        tokenConnected={figmaTokenConnected && hasFigmaToken()}
+        onClose={() => {
+          setFigmaExploreOpen(false);
+          setFigmaTokenConnected(hasFigmaToken());
         }}
-        onApplyExplosion={(plates, amount, label) => {
-          void applyScreenExplosion(plates, amount, label);
+        onNeedToken={() => {
+          if (!accountEmail) {
+            notify('Sign in to your mokstudio account before connecting Figma');
+            return;
+          }
+          setFigmaConnectOpen(true);
+        }}
+        onNotify={notify}
+        onApply={(dataUrl, layerName, source) => {
+          applyScreenImage(dataUrl, layerName, `Applied “${layerName}” from Figma`, null, source);
+        }}
+        onApplyExplosion={(plates, amount, label, extrusion, source) => {
+          void applyScreenExplosion(plates, amount, label, extrusion, source);
         }}
       />
       <SvgExplodeModal
@@ -10582,8 +11102,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         onApply={(dataUrl, layerName) => {
           applyScreenImage(dataUrl, layerName, `Applied “${layerName}” from SVG`);
         }}
-        onApplyExplosion={(plates, amount, label) => {
-          void applyScreenExplosion(plates, amount, label);
+        onApplyExplosion={(plates, amount, label, extrusion) => {
+          void applyScreenExplosion(plates, amount, label, extrusion);
         }}
       />
       <StudioTour

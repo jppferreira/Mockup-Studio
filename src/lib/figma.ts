@@ -1,8 +1,58 @@
 import { compileSchema, decodeBinarySchema } from 'kiwi-schema';
 import { inflateRaw } from 'pako';
 
-const TOKEN_KEY = 'mockup-studio.figma-token';
+/** Legacy device-wide plaintext — deleted, never reused across accounts. */
+const TOKEN_KEY_PLAIN = 'mockup-studio.figma-token';
+/** Legacy device-wide ciphertext — deleted on bind/save/clear. */
+const TOKEN_KEY_ENC_LEGACY = 'mockup-studio.figma-token.v2';
+const TOKEN_CONSENT_KEY_LEGACY = 'mockup-studio.figma-token-consent';
+const WEB_AES_STORE = 'mockup-studio-figma-aes';
+const WEB_AES_KEY_ID_LEGACY = 'figma-token-key';
 const FIGMA_API = 'https://api.figma.com/v1';
+
+function tokenEncKey(userId: string) {
+  return `mockup-studio.figma-token.v2.${userId}`;
+}
+function tokenConsentKey(userId: string) {
+  return `mockup-studio.figma-token-consent.${userId}`;
+}
+function webAesKeyId(userId: string) {
+  return `figma-token-key.${userId}`;
+}
+
+/**
+ * Shown before connecting a personal access token (GDPR transparency).
+ * Token and Figma file bytes stay on-device except for direct calls to api.figma.com.
+ */
+export const FIGMA_TOKEN_PRIVACY_NOTICE =
+  'Token stays encrypted on this device for your mokstudio account, and is sent only to Figma’s API for files you choose. '
+  + 'Disconnect deletes it here.';
+
+/** Step-by-step guide shown when the user starts Connect Figma token. */
+export const FIGMA_TOKEN_SETUP_STEPS = [
+  {
+    title: 'Figma → Settings → Security',
+    detail: 'Open Personal access tokens.',
+  },
+  {
+    title: 'Generate a token',
+    detail: 'Enable File content read access, then create it.',
+  },
+  {
+    title: 'Paste and Confirm',
+    detail: 'Paste the token below and tap Confirm.',
+  },
+] as const;
+
+/** Official docs for generating a personal access token. */
+export const FIGMA_TOKEN_HELP_URL =
+  'https://help.figma.com/hc/en-us/articles/8085703771159-Manage-personal-access-tokens';
+
+/** In-memory cache so sync callers (paste / export defaults) see the current token. */
+let cachedFigmaToken = '';
+/** Signed-in mokstudio account the in-memory token belongs to (null = signed out). */
+let activeAccountId: string | null = null;
+let hydrateGeneration = 0;
 
 export type FigmaNodeType =
   | 'DOCUMENT'
@@ -30,6 +80,10 @@ export type FigmaLayerNode = {
   name: string;
   type: FigmaNodeType;
   visible: boolean;
+  /** Absolute canvas X from Figma `absoluteBoundingBox` (when known). */
+  x?: number;
+  /** Absolute canvas Y from Figma `absoluteBoundingBox` (when known). */
+  y?: number;
   width?: number;
   height?: number;
   children: FigmaLayerNode[];
@@ -64,21 +118,445 @@ const APPLYABLE_TYPES = new Set([
   'SECTION',
 ]);
 
+/** Sync read of the hydrated token cache (empty until `initFigmaTokenStore` finishes). */
 export function loadFigmaToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_KEY) ?? '';
-  } catch {
-    return '';
+  return cachedFigmaToken;
+}
+
+/** True when a personal access token is stored for Figma API calls. */
+export function hasFigmaToken(): boolean {
+  return Boolean(cachedFigmaToken.trim());
+}
+
+type FigmaTokenChangeHandler = (connected: boolean, reason?: 'saved' | 'cleared' | 'revoked') => void;
+const tokenChangeListeners = new Set<FigmaTokenChangeHandler>();
+
+/** Subscribe to local Figma token connect / disconnect / revoke wipes. */
+export function onFigmaTokenChange(handler: FigmaTokenChangeHandler): () => void {
+  tokenChangeListeners.add(handler);
+  return () => { tokenChangeListeners.delete(handler); };
+}
+
+function emitFigmaTokenChange(connected: boolean, reason?: 'saved' | 'cleared' | 'revoked') {
+  for (const handler of tokenChangeListeners) {
+    try {
+      handler(connected, reason);
+    } catch {
+      /* ignore listener failures */
+    }
   }
 }
 
-export function saveFigmaToken(token: string) {
+/** Thrown when Figma rejects the stored PAT; local copy is wiped before throw. */
+export class FigmaAuthError extends Error {
+  readonly code = 'FIGMA_AUTH' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'FigmaAuthError';
+  }
+}
+
+export function isFigmaAuthError(error: unknown): error is FigmaAuthError {
+  return error instanceof FigmaAuthError
+    || (Boolean(error) && typeof error === 'object' && (error as { code?: string }).code === 'FIGMA_AUTH');
+}
+
+/**
+ * True when a 401/403 means the credential itself is bad (revoked, expired, invalid, bad scopes),
+ * not merely “no access to this particular file”.
+ */
+export function isFigmaTokenCredentialFailure(status: number, errMessage: string | null | undefined): boolean {
+  if (status === 401) return true;
+  if (status !== 403) return false;
+  const lower = (errMessage || '').toLowerCase();
+  if (!lower) return false;
+  return (
+    lower.includes('invalid token')
+    || lower.includes('token expired')
+    || lower.includes('invalid scope')
+    || lower.includes('revoked')
+  );
+}
+
+function extractFigmaErrMessage(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  if ('err' in body && typeof (body as { err: unknown }).err === 'string') {
+    return (body as { err: string }).err;
+  }
+  if ('message' in body && typeof (body as { message: unknown }).message === 'string') {
+    return (body as { message: string }).message;
+  }
+  return null;
+}
+
+/** Mask a token for UI status (keeps prefix + last 4). Never log the raw token. */
+export function maskFigmaToken(token: string): string {
+  const trimmed = token.trim();
+  if (!trimmed) return '';
+  if (trimmed.length <= 10) return '••••••••';
+  return `${trimmed.slice(0, 5)}…${trimmed.slice(-4)}`;
+}
+
+/** Account the in-memory Figma token is bound to (null when signed out). */
+export function getFigmaTokenAccountId(): string | null {
+  return activeAccountId;
+}
+
+export function hasFigmaTokenConsent(userId: string | null = activeAccountId): boolean {
+  if (!userId) return false;
   try {
-    const trimmed = token.trim();
-    if (!trimmed) localStorage.removeItem(TOKEN_KEY);
-    else localStorage.setItem(TOKEN_KEY, trimmed);
+    return localStorage.getItem(tokenConsentKey(userId)) === '1';
   } catch {
-    /* ignore quota / private mode */
+    return false;
+  }
+}
+
+export function setFigmaTokenConsent(accepted: boolean, userId: string | null = activeAccountId) {
+  if (!userId) return;
+  try {
+    if (accepted) localStorage.setItem(tokenConsentKey(userId), '1');
+    else localStorage.removeItem(tokenConsentKey(userId));
+  } catch {
+    /* private mode */
+  }
+}
+
+function desktopTokenApi() {
+  return typeof window !== 'undefined' ? window.mockupDesktop : undefined;
+}
+
+async function openAesKeyStore(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(WEB_AES_STORE, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains('keys')) db.createObjectStore('keys');
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error('Could not open token key store'));
+  });
+}
+
+async function readWebAesKey(db: IDBDatabase, keyId: string): Promise<CryptoKey | undefined> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('keys', 'readonly');
+    const req = tx.objectStore('keys').get(keyId);
+    req.onsuccess = () => resolve(req.result as CryptoKey | undefined);
+    req.onerror = () => reject(req.error ?? new Error('Could not read token key'));
+  });
+}
+
+async function writeWebAesKey(db: IDBDatabase, keyId: string, key: CryptoKey): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('keys', 'readwrite');
+    tx.objectStore('keys').put(key, keyId);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error ?? new Error('Could not store token key'));
+  });
+}
+
+/** Serialize first-time key creation so concurrent encrypts don't mint two keys. */
+const webAesKeyLoads = new Map<string, Promise<CryptoKey>>();
+
+async function loadOrCreateWebAesKey(userId: string): Promise<CryptoKey> {
+  const pending = webAesKeyLoads.get(userId);
+  if (pending) return pending;
+
+  const job = (async () => {
+    const db = await openAesKeyStore();
+    try {
+      const keyId = webAesKeyId(userId);
+      const existing = await readWebAesKey(db, keyId);
+      if (existing) return existing;
+
+      // One-time: reuse the pre-account key so legacy ciphertext still decrypts.
+      const legacy = await readWebAesKey(db, WEB_AES_KEY_ID_LEGACY);
+      if (legacy) {
+        await writeWebAesKey(db, keyId, legacy);
+        return legacy;
+      }
+
+      const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+      // Re-read after generate in case another tab won the race.
+      const raced = await readWebAesKey(db, keyId);
+      if (raced) return raced;
+      await writeWebAesKey(db, keyId, key);
+      return key;
+    } finally {
+      try { db.close(); } catch { /* ignore */ }
+    }
+  })();
+
+  webAesKeyLoads.set(userId, job);
+  try {
+    return await job;
+  } finally {
+    if (webAesKeyLoads.get(userId) === job) webAesKeyLoads.delete(userId);
+  }
+}
+
+/** Decrypt-only: never mint a new AES key for missing ciphertext. */
+async function loadWebAesKeyOnly(userId: string): Promise<CryptoKey | null> {
+  const db = await openAesKeyStore();
+  try {
+    const keyId = webAesKeyId(userId);
+    const existing = await readWebAesKey(db, keyId);
+    if (existing) return existing;
+    const legacy = await readWebAesKey(db, WEB_AES_KEY_ID_LEGACY);
+    if (legacy) {
+      await writeWebAesKey(db, keyId, legacy);
+      return legacy;
+    }
+    return null;
+  } finally {
+    try { db.close(); } catch { /* ignore */ }
+  }
+}
+
+async function encryptTokenForWeb(userId: string, token: string): Promise<string> {
+  const key = await loadOrCreateWebAesKey(userId);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cipher = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    new TextEncoder().encode(token),
+  );
+  const packed = new Uint8Array(iv.length + cipher.byteLength);
+  packed.set(iv, 0);
+  packed.set(new Uint8Array(cipher), iv.length);
+  let binary = '';
+  packed.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
+
+async function decryptTokenForWeb(userId: string, payload: string): Promise<string | null> {
+  try {
+    const binary = atob(payload);
+    const packed = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
+    if (packed.length < 13) return null;
+    const iv = packed.subarray(0, 12);
+    const cipher = packed.subarray(12);
+    const key = await loadWebAesKeyOnly(userId);
+    if (!key) return null;
+    const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, cipher);
+    return new TextDecoder().decode(plain);
+  } catch {
+    return null;
+  }
+}
+
+async function clearWebAesKey(userId: string | null) {
+  if (!userId) return;
+  webAesKeyLoads.delete(userId);
+  try {
+    const db = await openAesKeyStore();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction('keys', 'readwrite');
+        tx.objectStore('keys').delete(webAesKeyId(userId));
+        tx.objectStore('keys').delete(WEB_AES_KEY_ID_LEGACY);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error ?? new Error('Could not clear token key'));
+      });
+    } finally {
+      try { db.close(); } catch { /* ignore */ }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearLegacyDeviceWideKeys() {
+  try {
+    localStorage.removeItem(TOKEN_KEY_PLAIN);
+    localStorage.removeItem(TOKEN_KEY_ENC_LEGACY);
+    localStorage.removeItem(TOKEN_CONSENT_KEY_LEGACY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Move device-wide web token + consent into the signed-in account once. */
+async function migrateLegacyWebToken(userId: string): Promise<string | null> {
+  try {
+    if (localStorage.getItem(tokenConsentKey(userId)) !== '1') {
+      if (localStorage.getItem(TOKEN_CONSENT_KEY_LEGACY) === '1') {
+        localStorage.setItem(tokenConsentKey(userId), '1');
+      }
+    }
+    if (localStorage.getItem(tokenEncKey(userId))) return null;
+
+    const legacyPlain = localStorage.getItem(TOKEN_KEY_PLAIN);
+    if (legacyPlain && legacyPlain.trim()) {
+      await persistFigmaToken(userId, legacyPlain.trim());
+      clearLegacyDeviceWideKeys();
+      return legacyPlain.trim();
+    }
+
+    const legacyEnc = localStorage.getItem(TOKEN_KEY_ENC_LEGACY);
+    if (!legacyEnc) return null;
+    const plain = await decryptTokenForWeb(userId, legacyEnc);
+    if (!plain?.trim()) {
+      clearLegacyDeviceWideKeys();
+      return null;
+    }
+    await persistFigmaToken(userId, plain.trim());
+    clearLegacyDeviceWideKeys();
+    return plain.trim();
+  } catch {
+    return null;
+  }
+}
+
+async function hydrateTokenForActiveAccount(userId: string): Promise<void> {
+  const generation = ++hydrateGeneration;
+  cachedFigmaToken = '';
+
+  const desktop = desktopTokenApi();
+  if (desktop?.figmaTokenGet) {
+    try {
+      const result = await desktop.figmaTokenGet(userId);
+      if (generation !== hydrateGeneration || activeAccountId !== userId) return;
+      if (result.ok && result.token) {
+        cachedFigmaToken = result.token;
+        clearLegacyDeviceWideKeys();
+        return;
+      }
+    } catch {
+      /* fall through to web storage */
+    }
+  }
+
+  try {
+    const migrated = await migrateLegacyWebToken(userId);
+    if (generation !== hydrateGeneration || activeAccountId !== userId) return;
+    if (migrated) {
+      cachedFigmaToken = migrated;
+      return;
+    }
+
+    const enc = localStorage.getItem(tokenEncKey(userId));
+    if (enc) {
+      const plain = await decryptTokenForWeb(userId, enc);
+      if (generation !== hydrateGeneration || activeAccountId !== userId) return;
+      if (plain) {
+        cachedFigmaToken = plain;
+        clearLegacyDeviceWideKeys();
+        return;
+      }
+    }
+    clearLegacyDeviceWideKeys();
+  } catch {
+    if (generation === hydrateGeneration && activeAccountId === userId) {
+      cachedFigmaToken = '';
+    }
+  }
+}
+
+/**
+ * Bind Figma token storage to the signed-in account (or unload when signed out).
+ * Call on app start and whenever auth changes. Does not upload the token.
+ */
+export async function bindFigmaTokenAccount(userId: string | null | undefined): Promise<void> {
+  const next = typeof userId === 'string' ? userId.trim() : '';
+  if (!next) {
+    hydrateGeneration += 1;
+    activeAccountId = null;
+    cachedFigmaToken = '';
+    clearLegacyDeviceWideKeys();
+    return;
+  }
+  if (next === activeAccountId) return;
+  activeAccountId = next;
+  await hydrateTokenForActiveAccount(next);
+}
+
+/**
+ * Hydrate the in-memory token for the currently bound account.
+ * Prefer `bindFigmaTokenAccount` with the session user id.
+ */
+export async function initFigmaTokenStore(userId?: string | null): Promise<void> {
+  if (userId !== undefined) {
+    await bindFigmaTokenAccount(userId);
+    return;
+  }
+  if (!activeAccountId) {
+    cachedFigmaToken = '';
+    clearLegacyDeviceWideKeys();
+    return;
+  }
+  await hydrateTokenForActiveAccount(activeAccountId);
+}
+
+async function persistFigmaToken(userId: string, trimmed: string): Promise<void> {
+  const desktop = desktopTokenApi();
+  if (desktop?.figmaTokenSet) {
+    const result = await desktop.figmaTokenSet(userId, trimmed);
+    if (!result.ok) throw new Error(result.error || 'Could not store Figma token securely');
+    try {
+      localStorage.removeItem(tokenEncKey(userId));
+    } catch {
+      /* ignore */
+    }
+    clearLegacyDeviceWideKeys();
+    return;
+  }
+
+  const payload = await encryptTokenForWeb(userId, trimmed);
+  localStorage.setItem(tokenEncKey(userId), payload);
+  clearLegacyDeviceWideKeys();
+}
+
+/** Persist a Figma PAT (encrypted) for the signed-in account. Empty string clears. */
+export async function saveFigmaToken(token: string): Promise<void> {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    await clearFigmaToken();
+    return;
+  }
+  const userId = activeAccountId;
+  if (!userId) {
+    throw new Error('Sign in to your mokstudio account before connecting a Figma token.');
+  }
+  if (!hasFigmaTokenConsent(userId)) {
+    throw new Error('Accept the Figma privacy notice before connecting a token.');
+  }
+
+  await persistFigmaToken(userId, trimmed);
+  // Account may have switched while encrypting — never poison another user's cache.
+  if (activeAccountId !== userId) return;
+  cachedFigmaToken = trimmed;
+  emitFigmaTokenChange(true, 'saved');
+}
+
+/**
+ * Delete the stored token for the current account (Figma disconnect).
+ * Clears memory + encrypted on-disk / web storage for that account.
+ */
+export async function clearFigmaToken(reason: 'cleared' | 'revoked' = 'cleared'): Promise<void> {
+  const userId = activeAccountId;
+  const hadToken = Boolean(cachedFigmaToken.trim());
+  cachedFigmaToken = '';
+  const desktop = desktopTokenApi();
+  if (desktop?.figmaTokenClear && userId) {
+    try {
+      await desktop.figmaTokenClear(userId);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (userId) {
+    try {
+      localStorage.removeItem(tokenEncKey(userId));
+      localStorage.removeItem(tokenConsentKey(userId));
+    } catch {
+      /* ignore */
+    }
+    await clearWebAesKey(userId);
+  }
+  clearLegacyDeviceWideKeys();
+  if (hadToken || reason === 'revoked') {
+    emitFigmaTokenChange(false, reason);
   }
 }
 
@@ -149,6 +627,8 @@ function simplifyNode(node: RawFigmaNode, depth: number): FigmaLayerNode | null 
     name: node.name || node.type,
     type: node.type,
     visible,
+    x: box?.x,
+    y: box?.y,
     width: box?.width,
     height: box?.height,
     children,
@@ -167,7 +647,7 @@ async function figmaApiGet(apiPath: string, token: string): Promise<unknown> {
       throw new Error('Figma returned an invalid response');
     }
     if (result.status >= 400) {
-      throw figmaError(result.status, parsed);
+      await throwFigmaHttpError(result.status, parsed);
     }
     return parsed;
   }
@@ -177,17 +657,27 @@ async function figmaApiGet(apiPath: string, token: string): Promise<unknown> {
     headers: { 'X-Figma-Token': token },
   });
   const parsed = await response.json().catch(() => null);
-  if (!response.ok) throw figmaError(response.status, parsed);
+  if (!response.ok) await throwFigmaHttpError(response.status, parsed);
   return parsed;
 }
 
+/**
+ * Map Figma HTTP failures. Credential rejections wipe the local encrypted PAT
+ * for this account so a revoked token cannot keep being reused.
+ */
+async function throwFigmaHttpError(status: number, body: unknown): Promise<never> {
+  const message = extractFigmaErrMessage(body);
+  if (isFigmaTokenCredentialFailure(status, message)) {
+    await clearFigmaToken('revoked');
+    throw new FigmaAuthError(
+      'Your Figma token was rejected or revoked. It was removed from this account on this device — reconnect with Connect Figma token in Assets.',
+    );
+  }
+  throw figmaError(status, body);
+}
+
 function figmaError(status: number, body: unknown): Error {
-  const message =
-    body && typeof body === 'object' && 'err' in body && typeof (body as { err: unknown }).err === 'string'
-      ? (body as { err: string }).err
-      : body && typeof body === 'object' && 'message' in body && typeof (body as { message: unknown }).message === 'string'
-        ? (body as { message: string }).message
-        : null;
+  const message = extractFigmaErrMessage(body);
 
   if (status === 403 || status === 401) {
     return new Error(message || 'Figma token is missing or does not have access to this file.');
@@ -201,12 +691,35 @@ function figmaError(status: number, body: unknown): Error {
   return new Error(message || `Figma request failed (${status})`);
 }
 
+/**
+ * Cap document tree depth for explore/import. Full unbounded `/files/:key`
+ * payloads were freezing the renderer on large designs.
+ */
+export const FIGMA_FILE_TREE_DEPTH = 4;
+
+/** Lightweight lastModified probe (depth=1) for out-of-date checks. */
+export async function fetchFigmaFileLastModified(
+  fileKey: string,
+  token = loadFigmaToken(),
+): Promise<string | null> {
+  const trimmed = token.trim();
+  if (!trimmed || !fileKey) return null;
+  const data = await figmaApiGet(
+    `/files/${encodeURIComponent(fileKey)}?depth=1`,
+    trimmed,
+  ) as { lastModified?: string };
+  return typeof data.lastModified === 'string' ? data.lastModified : null;
+}
+
 export async function fetchFigmaFile(fileKey: string, token: string): Promise<FigmaFileSummary> {
   const trimmedToken = token.trim();
   if (!trimmedToken) throw new Error('Add a Figma personal access token first.');
   if (!fileKey) throw new Error('Paste a Figma file URL or key.');
 
-  const data = await figmaApiGet(`/files/${encodeURIComponent(fileKey)}`, trimmedToken) as {
+  const data = await figmaApiGet(
+    `/files/${encodeURIComponent(fileKey)}?depth=${FIGMA_FILE_TREE_DEPTH}`,
+    trimmedToken,
+  ) as {
     name?: string;
     lastModified?: string;
     thumbnailUrl?: string;
@@ -225,6 +738,43 @@ export async function fetchFigmaFile(fileKey: string, token: string): Promise<Fi
     lastModified: data.lastModified,
     thumbnailUrl: data.thumbnailUrl,
     layers,
+  };
+}
+
+/**
+ * Fetch one node (+ shallow children) via `/files/:key/nodes` — avoids reloading
+ * the whole document when exporting explode plates.
+ */
+async function fetchFigmaNodeSubtree(
+  fileKey: string,
+  nodeId: string,
+  token: string,
+  depth = 2,
+): Promise<{ root: FigmaLayerNode; lastModified?: string; fileName?: string }> {
+  const query = new URLSearchParams({
+    ids: nodeId,
+    depth: String(Math.max(1, depth)),
+  });
+  const data = await figmaApiGet(
+    `/files/${encodeURIComponent(fileKey)}/nodes?${query.toString()}`,
+    token,
+  ) as {
+    name?: string;
+    lastModified?: string;
+    err?: string;
+    nodes?: Record<string, { document?: RawFigmaNode; err?: string } | null>;
+  };
+
+  const entry = data.nodes?.[nodeId] ?? data.nodes?.[Object.keys(data.nodes || {})[0] || ''];
+  if (!entry?.document) {
+    throw new Error(entry?.err || data.err || 'Could not load that Figma layer.');
+  }
+  const root = simplifyNode(entry.document, 0);
+  if (!root) throw new Error('Figma layer tree was empty.');
+  return {
+    root,
+    lastModified: data.lastModified,
+    fileName: data.name,
   };
 }
 
@@ -269,20 +819,200 @@ export async function exportFigmaNodesAsDataUrls(
   if (data.err) throw new Error(data.err);
 
   const out = new Map<string, string>();
-  await Promise.all(unique.map(async (id) => {
+  // Keep successful plates when one image fetch fails — callers decide if <2 remains.
+  const settled = await Promise.allSettled(unique.map(async (id) => {
     const imageUrl = data.images?.[id];
-    if (!imageUrl) return;
-    out.set(id, await fetchImageAsDataUrl(imageUrl, trimmedToken));
+    if (!imageUrl) return null;
+    const dataUrl = await fetchImageAsDataUrl(imageUrl, trimmedToken);
+    return [id, dataUrl] as const;
   }));
+  for (const result of settled) {
+    if (result.status === 'fulfilled' && result.value) {
+      out.set(result.value[0], result.value[1]);
+    } else if (result.status === 'rejected') {
+      console.warn('[figma] layer image fetch failed', result.reason);
+    }
+  }
   return out;
 }
 
-/** Direct children worth showing in an explode stack (bottom → top). */
-export function explodeCandidates(node: FigmaLayerNode, limit = 12): FigmaLayerNode[] {
+/** Containers that must not become a single 3D card — expand to their children. */
+const EXPANDABLE_CONTAINER_TYPES = new Set([
+  'FRAME',
+  'GROUP',
+  'SECTION',
+  'COMPONENT',
+  'COMPONENT_SET',
+  'INSTANCE',
+]);
+
+/**
+ * Direct children of a frame/group (bottom → top). Kept for tree UI / flat previews.
+ * Prefer `explodeSubgroupCandidates` for 3D explosion/extrusion plates.
+ */
+export function explodeCandidates(node: FigmaLayerNode, limit = 16): FigmaLayerNode[] {
+  // Direct children only — do not recurse.
   const kids = node.children.filter((child) => child.visible !== false);
   if (!kids.length) return [];
   // Figma lists children bottom → top; keep that order for the stack
-  return kids.slice(-limit);
+  const cap = Math.max(1, Math.min(16, limit));
+  return kids.slice(-cap);
+}
+
+export type ExplodeSubgroupCandidate = {
+  node: FigmaLayerNode;
+  /** Parent frame/group when this plate was expanded out of a container. */
+  groupId?: string;
+  groupName?: string;
+};
+
+/**
+ * Build 3D explode plates by expanding top-level containers into their children.
+ * Frame/group/section rasters are skipped so the whole import never becomes one card.
+ * Leaf top-level nodes stay as their own plate.
+ */
+export function explodeSubgroupCandidates(
+  node: FigmaLayerNode,
+  limit = 16,
+): ExplodeSubgroupCandidate[] {
+  const kids = node.children.filter((child) => child.visible !== false);
+  if (!kids.length) return [];
+  const cap = Math.max(1, Math.min(16, limit));
+  const out: ExplodeSubgroupCandidate[] = [];
+
+  for (const child of kids) {
+    const nested = (child.children || []).filter((piece) => piece.visible !== false);
+    const expand = EXPANDABLE_CONTAINER_TYPES.has(child.type) && nested.length > 0;
+    if (expand) {
+      for (const piece of nested) {
+        out.push({
+          node: piece,
+          groupId: child.id,
+          groupName: child.name,
+        });
+      }
+    } else {
+      out.push({ node: child });
+    }
+  }
+
+  // Expansion produced nothing useful (e.g. empty nested trees) — fall back to direct kids.
+  if (out.length < 2 && kids.length >= 2) {
+    return kids.slice(-cap).map((child) => ({ node: child }));
+  }
+  // Prefer topmost (painter's front) plates when over the cap — matches explodeCandidates.
+  return out.length > cap ? out.slice(-cap) : out;
+}
+
+export function buildFigmaNodeUrl(fileKey: string, nodeId?: string): string {
+  const base = `https://www.figma.com/design/${encodeURIComponent(fileKey)}`;
+  if (!nodeId) return base;
+  return `${base}?node-id=${encodeURIComponent(nodeId.replace(/:/g, '-'))}`;
+}
+
+export function findFigmaNode(nodes: FigmaLayerNode[], id: string): FigmaLayerNode | null {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const nested = findFigmaNode(node.children, id);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+export type FigmaDirectChildPlate = {
+  id: string;
+  name: string;
+  dataUrl: string;
+  /** Figma node type — used to skip extruding top-level containers. */
+  layerType?: string;
+  /** Subgroup parent when this plate was expanded from a frame/group. */
+  extrusionGroup?: string;
+};
+
+export type FigmaPlateTreeSource = {
+  /** Already-loaded explore tree — skips another `/files` round-trip. */
+  layers?: FigmaLayerNode[];
+  lastModified?: string;
+};
+
+/**
+ * Export 3D explode plates for `nodeId`.
+ * Top-level frames/groups are expanded into their children so the layout is
+ * driven by subgroups — never one card per parent frame.
+ * Always loads a depth≥3 subtree so nested children exist for expansion
+ * (explore trees can be depth-truncated).
+ */
+export async function exportFigmaDirectChildPlates(
+  fileKey: string,
+  nodeId: string,
+  token = loadFigmaToken(),
+  scale = 1.5,
+  tree?: FigmaPlateTreeSource,
+): Promise<{
+  rootName: string;
+  lastModified?: string;
+  plates: FigmaDirectChildPlate[];
+  url: string;
+}> {
+  const trimmed = token.trim();
+  if (!trimmed) throw new Error('Connect a Figma personal access token first.');
+
+  // Depth 3: node → direct children → grandchildren (subgroup pieces).
+  const subtree = await fetchFigmaNodeSubtree(fileKey, nodeId, trimmed, 3);
+  let root = subtree.root;
+  let lastModified = subtree.lastModified || tree?.lastModified;
+
+  // If the explore tree has a richer name for the same id, prefer it.
+  if (tree?.layers?.length) {
+    const fromTree = findFigmaNode(tree.layers, nodeId);
+    if (fromTree?.name) root = { ...root, name: fromTree.name };
+  }
+
+  const candidates = explodeSubgroupCandidates(root);
+  if (candidates.length < 2) {
+    return {
+      rootName: root.name,
+      lastModified,
+      plates: [],
+      url: buildFigmaNodeUrl(fileKey, nodeId),
+    };
+  }
+  const images = await exportFigmaNodesAsDataUrls(
+    fileKey,
+    candidates.map((entry) => entry.node.id),
+    trimmed,
+    scale,
+  );
+  const rootBox = nodeBounds(root);
+  const plates: FigmaDirectChildPlate[] = [];
+  for (const entry of candidates) {
+    const raw = images.get(entry.node.id);
+    if (!raw) continue;
+    const layerBox = nodeBounds(entry.node);
+    let dataUrl = raw;
+    if (rootBox && layerBox) {
+      try {
+        dataUrl = await padLayerImageToRoot(raw, layerBox, rootBox);
+      } catch {
+        dataUrl = raw;
+      }
+    }
+    plates.push({
+      id: entry.node.id,
+      name: entry.node.name,
+      dataUrl,
+      layerType: entry.node.type,
+      ...(entry.groupId
+        ? { extrusionGroup: entry.groupName || entry.groupId }
+        : {}),
+    });
+  }
+  return {
+    rootName: root.name,
+    lastModified,
+    plates,
+    url: buildFigmaNodeUrl(fileKey, nodeId),
+  };
 }
 
 export function loadImageElement(src: string): Promise<HTMLImageElement> {
@@ -292,6 +1022,49 @@ export function loadImageElement(src: string): Promise<HTMLImageElement> {
     img.onerror = () => reject(new Error('Could not load layer preview'));
     img.src = src;
   });
+}
+
+type LayerBounds = { x: number; y: number; width: number; height: number };
+
+function nodeBounds(node: FigmaLayerNode): LayerBounds | null {
+  if (
+    typeof node.x !== 'number'
+    || typeof node.y !== 'number'
+    || typeof node.width !== 'number'
+    || typeof node.height !== 'number'
+    || !(node.width > 0)
+    || !(node.height > 0)
+  ) {
+    return null;
+  }
+  return { x: node.x, y: node.y, width: node.width, height: node.height };
+}
+
+/**
+ * Figma's images API returns tight crops. Pad each crop onto a transparent
+ * parent-sized canvas so flat composites and 3D plates keep layout.
+ */
+export async function padLayerImageToRoot(
+  dataUrl: string,
+  layer: LayerBounds,
+  root: LayerBounds,
+): Promise<string> {
+  const rootW = Math.max(2, Math.round(root.width));
+  const rootH = Math.max(2, Math.round(root.height));
+  const img = await loadImageElement(dataUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = rootW;
+  canvas.height = rootH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return dataUrl;
+  const dx = Math.round(layer.x - root.x);
+  const dy = Math.round(layer.y - root.y);
+  const dw = Math.max(1, Math.round(layer.width));
+  const dh = Math.max(1, Math.round(layer.height));
+  ctx.drawImage(img, dx, dy, dw, dh);
+  const padded = canvas.toDataURL('image/png');
+  img.src = '';
+  return padded;
 }
 
 /** Composite exploded layer plates into one transparent PNG for the phone screen. */
@@ -331,7 +1104,9 @@ export async function compositeExplodeStack(
     ctx.restore();
   });
 
-  return canvas.toDataURL('image/png');
+  const url = canvas.toDataURL('image/png');
+  for (const img of images) img.src = '';
+  return url;
 }
 
 async function fetchImageAsDataUrl(imageUrl: string, token: string): Promise<string> {
@@ -360,18 +1135,44 @@ function readBlobAsDataUrl(blob: Blob): Promise<string> {
 
 /**
  * If the clipboard text is a Figma design URL with a node-id, export that
- * frame/component as PNG. Used for “copy link → paste onto device screen”.
+ * frame/component. Prefers direct-child plates when the node has 2+ children;
+ * otherwise a single flattened PNG of the node.
  */
 export async function exportFigmaUrlAsScreenPng(
   rawUrl: string,
   token = loadFigmaToken(),
   scale = 2,
-): Promise<{ dataUrl: string; name: string } | null> {
+): Promise<{ dataUrl: string; name: string; plates?: FigmaDirectChildPlate[]; source?: {
+  url: string;
+  fileKey: string;
+  nodeId: string;
+  lastModified: string;
+  rootName?: string;
+  layered: boolean;
+} } | null> {
   const parsed = parseFigmaUrl(rawUrl);
   if (!parsed?.fileKey || !parsed.nodeId) return null;
   const trimmed = token.trim();
   if (!trimmed) {
-    throw new Error('Add a Figma token in Assets → Open to paste Figma frame links.');
+    throw new Error('Connect a Figma personal access token in Assets, then paste again.');
+  }
+  const layered = await exportFigmaDirectChildPlates(parsed.fileKey, parsed.nodeId, trimmed, Math.min(scale, 1.5));
+  if (layered.plates.length >= 2) {
+    const { compositeFlatScreenStack } = await import('./screenLayers');
+    const flatDataUrl = await compositeFlatScreenStack(layered.plates);
+    return {
+      dataUrl: flatDataUrl,
+      name: layered.rootName,
+      plates: layered.plates,
+      source: {
+        url: layered.url || rawUrl.trim(),
+        fileKey: parsed.fileKey,
+        nodeId: parsed.nodeId,
+        lastModified: layered.lastModified || new Date().toISOString(),
+        rootName: layered.rootName,
+        layered: true,
+      },
+    };
   }
   const { dataUrl, nameHint } = await exportFigmaNodeAsDataUrl(
     parsed.fileKey,
@@ -379,7 +1180,18 @@ export async function exportFigmaUrlAsScreenPng(
     trimmed,
     scale,
   );
-  return { dataUrl, name: nameHint };
+  return {
+    dataUrl,
+    name: nameHint,
+    source: {
+      url: buildFigmaNodeUrl(parsed.fileKey, parsed.nodeId),
+      fileKey: parsed.fileKey,
+      nodeId: parsed.nodeId,
+      lastModified: layered.lastModified || new Date().toISOString(),
+      rootName: layered.rootName || nameHint,
+      layered: false,
+    },
+  };
 }
 
 /** True when the clipboard HTML is a Figma ⌘C selection (not Copy as PNG). */
@@ -546,29 +1358,65 @@ export function parseFigmaClipboardHtml(html: string): { fileKey: string; nodeId
 }
 
 /**
- * Turn a Figma ⌘C HTML clipboard payload into a PNG for the device screen.
- * Needs a personal access token (same as Assets → Open).
+ * Turn a Figma ⌘C HTML clipboard payload into screen art.
+ * When the selection has 2+ direct children, returns separate plates (no recursive split).
  */
 export async function exportFigmaClipboardHtmlAsScreenPng(
   html: string,
   token = loadFigmaToken(),
   scale = 2,
-): Promise<{ dataUrl: string; name: string } | null> {
+): Promise<{ dataUrl: string; name: string; plates?: FigmaDirectChildPlate[]; source?: {
+  url: string;
+  fileKey: string;
+  nodeId: string;
+  lastModified: string;
+  rootName?: string;
+  layered: boolean;
+} } | null> {
   const parsed = parseFigmaClipboardHtml(html);
   if (!parsed) return null;
   const trimmed = token.trim();
   if (!trimmed) {
-    throw new Error('Add a Figma token in Assets → Open, then paste again (⌘C from Figma works).');
+    throw new Error('Connect a Figma personal access token in Assets, then paste again (⌘C from Figma works).');
   }
   // One selected layer is the common case; if several are selected, export the first.
   const nodeId = parsed.nodeIds[0];
+  const layered = await exportFigmaDirectChildPlates(parsed.fileKey, nodeId, trimmed, Math.min(scale, 1.5));
+  if (layered.plates.length >= 2) {
+    const { compositeFlatScreenStack } = await import('./screenLayers');
+    const flatDataUrl = await compositeFlatScreenStack(layered.plates);
+    return {
+      dataUrl: flatDataUrl,
+      name: parsed.nameHint || layered.rootName,
+      plates: layered.plates,
+      source: {
+        url: layered.url,
+        fileKey: parsed.fileKey,
+        nodeId,
+        lastModified: layered.lastModified || new Date().toISOString(),
+        rootName: layered.rootName,
+        layered: true,
+      },
+    };
+  }
   const { dataUrl, nameHint } = await exportFigmaNodeAsDataUrl(
     parsed.fileKey,
     nodeId,
     trimmed,
     scale,
   );
-  return { dataUrl, name: parsed.nameHint || nameHint };
+  return {
+    dataUrl,
+    name: parsed.nameHint || nameHint,
+    source: {
+      url: buildFigmaNodeUrl(parsed.fileKey, nodeId),
+      fileKey: parsed.fileKey,
+      nodeId,
+      lastModified: layered.lastModified || new Date().toISOString(),
+      rootName: layered.rootName || parsed.nameHint || nameHint,
+      layered: false,
+    },
+  };
 }
 
 /** Direct API base — used by Electron main process only. */

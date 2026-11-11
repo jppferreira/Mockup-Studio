@@ -18,11 +18,12 @@ interface Props {
     plates: { id: string; name: string; dataUrl: string }[],
     amount: number,
     label: string,
+    extrusion?: number,
   ) => void;
   onNotify: (message: string) => void;
 }
 
-type ExplodePlate = { id: string; name: string; tag: string; dataUrl: string };
+type ExplodePlate = { id: string; name: string; tag: string; dataUrl: string; extrusionGroup?: string };
 
 function matchesQuery(node: SvgLayerNode, query: string): boolean {
   if (!query) return true;
@@ -147,6 +148,8 @@ export default function SvgExplodeModal({
   const [mode, setMode] = useState<'tree' | 'explode'>('tree');
   const [plates, setPlates] = useState<ExplodePlate[]>([]);
   const [explodeAmount, setExplodeAmount] = useState(0.65);
+  const [explodeExtrusion, setExplodeExtrusion] = useState(0.35);
+  const [explodePieceCount, setExplodePieceCount] = useState(8);
   const [activePlateId, setActivePlateId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +168,11 @@ export default function SvgExplodeModal({
     () => (model && selectedId ? findSvgLayer(model.layers, selectedId) : null),
     [model, selectedId],
   );
+
+  const activePlates = useMemo(() => {
+    const count = Math.min(plates.length, Math.max(2, explodePieceCount));
+    return plates.slice(0, count);
+  }, [plates, explodePieceCount]);
 
   if (!open || !model) return null;
 
@@ -230,6 +238,7 @@ export default function SvgExplodeModal({
       const next = await buildSvgExplodePlates(model, parent);
       if (!next.length) throw new Error('Could not rasterize SVG layers for explode view.');
       setPlates(next);
+      setExplodePieceCount(next.length);
       setActivePlateId(next[next.length - 1]?.id ?? null);
       setMode('explode');
       onNotify(`Exploded ${next.length} SVG layers`);
@@ -241,21 +250,29 @@ export default function SvgExplodeModal({
   };
 
   const applyExplodedComposite = async () => {
-    if (!plates.length || !model) return;
+    if (!activePlates.length || !model) return;
     setBusy(true);
     setError(null);
     try {
       if (onApplyExplosion) {
         onApplyExplosion(
-          plates.map((plate) => ({ id: plate.id, name: plate.name, dataUrl: plate.dataUrl })),
+          activePlates.map((plate) => ({
+            id: plate.id,
+            name: plate.name,
+            dataUrl: plate.dataUrl,
+            layerType: plate.tag,
+            type: plate.tag,
+            ...(plate.extrusionGroup ? { extrusionGroup: plate.extrusionGroup } : {}),
+          })),
           explodeAmount,
           model.fileName,
+          explodeExtrusion,
         );
         onClose();
         return;
       }
       const dataUrl = await compositeSvgExplode(
-        plates.map((plate) => ({ dataUrl: plate.dataUrl, name: plate.name })),
+        activePlates.map((plate) => ({ dataUrl: plate.dataUrl, name: plate.name })),
         explodeAmount,
       );
       onApply(dataUrl, `${model.fileName} explode`);
@@ -269,6 +286,8 @@ export default function SvgExplodeModal({
 
   let panelBody: ReactNode;
   if (mode === 'explode' && plates.length) {
+    const maxPieces = plates.length;
+    const pieceCount = Math.min(maxPieces, Math.max(2, explodePieceCount));
     panelBody = (
       <>
         <div className="figma-explore-toolbar">
@@ -276,7 +295,9 @@ export default function SvgExplodeModal({
             <UnfoldVertical size={14} />
             <div>
               <strong>Explode · {selected?.name ?? model.fileName}</strong>
-              <span>{plates.length} layers pulled apart</span>
+              <span>
+                {pieceCount} of {maxPieces} layer{maxPieces === 1 ? '' : 's'} in the explosion
+              </span>
             </div>
           </div>
           <button type="button" className="button subtle-button" onClick={() => setMode('tree')}>
@@ -284,14 +305,14 @@ export default function SvgExplodeModal({
           </button>
         </div>
         <ExplodeStage
-          plates={plates}
+          plates={activePlates}
           amount={explodeAmount}
           activeId={activePlateId}
           onSelect={setActivePlateId}
         />
         <div className="figma-explode-controls">
           <label className="figma-explode-amount">
-            <span>Spread</span>
+            <span>Size</span>
             <input
               type="range"
               min={0}
@@ -299,15 +320,48 @@ export default function SvgExplodeModal({
               step={0.01}
               value={explodeAmount}
               onChange={(e) => setExplodeAmount(Number(e.target.value))}
+              aria-valuetext={`${Math.round(explodeAmount * 100)}% explosion size`}
             />
           </label>
+          <label className="figma-explode-amount">
+            <span>Pieces · {pieceCount}</span>
+            <input
+              type="range"
+              min={2}
+              max={maxPieces}
+              step={1}
+              value={pieceCount}
+              disabled={maxPieces <= 2}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setExplodePieceCount(next);
+                const subset = plates.slice(0, next);
+                if (activePlateId && !subset.some((plate) => plate.id === activePlateId)) {
+                  setActivePlateId(subset[subset.length - 1]?.id ?? null);
+                }
+              }}
+            />
+          </label>
+          {onApplyExplosion ? (
+            <label className="figma-explode-amount">
+              <span>Extrude</span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={explodeExtrusion}
+                onChange={(e) => setExplodeExtrusion(Number(e.target.value))}
+              />
+            </label>
+          ) : null}
           <div className="figma-explode-actions">
             <button
               type="button"
               className="button secondary-button"
-              disabled={busy || !activePlateId}
+              disabled={busy || !activePlateId || !activePlates.some((plate) => plate.id === activePlateId)}
               onClick={() => {
-                const plate = plates.find((item) => item.id === activePlateId);
+                const plate = activePlates.find((item) => item.id === activePlateId);
                 if (plate) void applyLayer(plate.id, plate.name);
               }}
             >
@@ -316,10 +370,12 @@ export default function SvgExplodeModal({
             <button
               type="button"
               className="button primary-button"
-              disabled={busy}
+              disabled={busy || activePlates.length < 2}
               onClick={() => void applyExplodedComposite()}
             >
-              {onApplyExplosion ? 'Place on device in 3D' : 'Use exploded stack'}
+              {onApplyExplosion
+                ? (explodeExtrusion > 0.001 ? 'Place as 3D cards' : 'Place on device in 3D')
+                : 'Use exploded stack'}
             </button>
           </div>
         </div>

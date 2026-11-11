@@ -235,21 +235,57 @@ export function findSvgLayer(nodes: SvgLayerNode[], id: string): SvgLayerNode | 
   return null;
 }
 
-export function svgExplodeCandidates(node: SvgLayerNode, limit = 12): SvgLayerNode[] {
+export function svgExplodeCandidates(node: SvgLayerNode, limit = 16): SvgLayerNode[] {
   if (!node.children.length) return [];
-  return node.children.slice(0, limit);
+  const cap = Math.max(2, Math.min(16, limit));
+  // DOM order is back → front; keep the topmost plates when capped.
+  return node.children.slice(-cap);
+}
+
+/** Expand `<g>` containers into children so SVG explode is not one card per group. */
+export function svgExplodeSubgroupCandidates(
+  node: SvgLayerNode,
+  limit = 16,
+): { node: SvgLayerNode; groupId?: string; groupName?: string }[] {
+  const kids = node.children;
+  if (!kids.length) return [];
+  const cap = Math.max(2, Math.min(16, limit));
+  const out: { node: SvgLayerNode; groupId?: string; groupName?: string }[] = [];
+  for (const child of kids) {
+    const nested = child.children || [];
+    const isGroup = child.tag.toLowerCase() === 'g' || child.tag.toLowerCase() === 'svg';
+    if (isGroup && nested.length > 0) {
+      for (const piece of nested) {
+        out.push({ node: piece, groupId: child.id, groupName: child.name });
+      }
+    } else {
+      out.push({ node: child });
+    }
+  }
+  if (out.length < 2 && kids.length >= 2) {
+    return kids.slice(-cap).map((child) => ({ node: child }));
+  }
+  return out.length > cap ? out.slice(-cap) : out;
 }
 
 export async function buildSvgExplodePlates(
   model: SvgDocumentModel,
   parent: SvgLayerNode,
-): Promise<{ id: string; name: string; tag: string; dataUrl: string }[]> {
-  const candidates = svgExplodeCandidates(parent);
+): Promise<{ id: string; name: string; tag: string; dataUrl: string; extrusionGroup?: string }[]> {
+  const candidates = svgExplodeSubgroupCandidates(parent);
   const plates = [];
-  for (const child of candidates) {
+  for (const entry of candidates) {
     try {
-      const dataUrl = await exportSvgLayerPng(model, child.id, 1.5);
-      plates.push({ id: child.id, name: child.name, tag: child.tag, dataUrl });
+      const dataUrl = await exportSvgLayerPng(model, entry.node.id, 1.5);
+      plates.push({
+        id: entry.node.id,
+        name: entry.node.name,
+        tag: entry.node.tag,
+        dataUrl,
+        ...(entry.groupName || entry.groupId
+          ? { extrusionGroup: entry.groupName || entry.groupId }
+          : {}),
+      });
     } catch {
       /* skip layers that fail to rasterize */
     }

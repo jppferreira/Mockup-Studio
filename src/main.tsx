@@ -9,12 +9,15 @@ import { applyAccentTheme, readAccentColor, readAccentTheme } from './lib/accent
 import { installNumberScrub } from './lib/numberScrub';
 import { clearOnboardingComplete, isOnboardingComplete } from './lib/onboarding';
 import { clearStudioTourComplete } from './lib/studioTour';
+import { prepareModelCache } from './lib/modelCache';
 import { getAuthSnapshot } from './lib/supabaseClient';
 import './styles.css';
 
 installNumberScrub();
 
 applyAccentTheme(readAccentTheme(), readAccentColor());
+// Open IndexedDB + AES key while the splash is up so the first GLB resolve is warm.
+prepareModelCache();
 
 /** Bump when onboarding/tour content changes so returning users see the new flow once. */
 const GUIDE_VERSION = '3';

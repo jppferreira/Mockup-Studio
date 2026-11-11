@@ -8,6 +8,7 @@ import type { SceneOverlay } from './lib/overlays';
 import {
   TONE_CLAY, TONE_GRAPHITE, TONE_ROSE, TONE_SILVER, TONE_TITANIUM,
 } from './lib/referenceTones';
+import { isSceneAssetRef } from './lib/screenMedia';
 
 export type BuiltinBackgroundId = 'midnight' | 'studio' | 'mint' | 'sunset' | 'transparent';
 /** Stack entry kind within one composition (not per-scene). */
@@ -254,6 +255,32 @@ export interface ScreenLayerPlate {
   name: string;
   /** Transparent PNG data URL for this top-level layer. */
   dataUrl: string;
+  /** Figma/SVG node type when known (FRAME, GROUP, TEXT, …). */
+  layerType?: string;
+  /**
+   * Per-plate extrusion multiplier (0–1) against device `layerExtrusion`.
+   * Top-level containers use 0; subgroup pieces use stepped values.
+   */
+  extrusionScale?: number;
+  /** Subgroup id for incremental extrusion (containers omit / use `container`). */
+  extrusionGroup?: string;
+}
+
+/**
+ * Provenance for a screen pulled from Figma — used to detect out-of-date exports
+ * and re-fetch the same node without re-pasting the link.
+ */
+export interface FigmaScreenSource {
+  /** Design URL including node-id when known. */
+  url: string;
+  fileKey: string;
+  nodeId: string;
+  /** Figma `lastModified` at the time of export (ISO). */
+  lastModified: string;
+  /** Frame / component name at export time. */
+  rootName?: string;
+  /** True when child layers were stored as separate `screenLayers` plates. */
+  layered?: boolean;
 }
 
 export interface DeviceInstance {
@@ -278,6 +305,13 @@ export interface DeviceInstance {
   screenLayers?: ScreenLayerPlate[];
   /** 0 = flat on screen, 1 = fully exploded. Ignored when `screenLayers` is empty. */
   layerExplosion?: number;
+  /**
+   * Thickness for exploded UI plates (0 = paper-thin planes, 1 = chunky cards).
+   * Ignored when `screenLayers` is empty.
+   */
+  layerExtrusion?: number;
+  /** Present when the screen (or exploded stack) was imported from Figma. */
+  figmaSource?: FigmaScreenSource;
   /** Per-environment device finish; falls back to project.deviceColor when absent. */
   deviceColor?: DeviceColor;
   /** Per-environment clay finish; falls back to project.clayMode when absent. */
@@ -474,6 +508,7 @@ export type AnimProperty =
   | 'scale'
   | 'lidOpen'
   | 'layerExplosion'
+  | 'layerExtrusion'
   | 'camera.x'
   | 'camera.y'
   | 'camera.z';
@@ -655,6 +690,32 @@ export interface MockupProject {
   soundtrackFadeOut: number;
 }
 
+export function normalizeFigmaScreenSource(input: unknown): FigmaScreenSource | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const raw = input as Partial<FigmaScreenSource>;
+  if (
+    typeof raw.url !== 'string'
+    || typeof raw.fileKey !== 'string'
+    || typeof raw.nodeId !== 'string'
+    || typeof raw.lastModified !== 'string'
+  ) {
+    return undefined;
+  }
+  const url = raw.url.trim();
+  const fileKey = raw.fileKey.trim();
+  const nodeId = raw.nodeId.trim();
+  const lastModified = raw.lastModified.trim();
+  if (!url || !fileKey || !nodeId || !lastModified) return undefined;
+  return {
+    url: url.slice(0, 2048),
+    fileKey: fileKey.slice(0, 128),
+    nodeId: nodeId.slice(0, 64),
+    lastModified: lastModified.slice(0, 64),
+    rootName: typeof raw.rootName === 'string' ? raw.rootName.slice(0, 120) : undefined,
+    layered: raw.layered === true,
+  };
+}
+
 export function createDeviceInstance(partial?: Partial<DeviceInstance>): DeviceInstance {
   return {
     id: partial?.id ?? `device-${Math.random().toString(36).slice(2, 10)}`,
@@ -675,14 +736,32 @@ export function createDeviceInstance(partial?: Partial<DeviceInstance>): DeviceI
           && typeof plate.id === 'string'
           && typeof plate.name === 'string'
           && typeof plate.dataUrl === 'string'
-          && plate.dataUrl.startsWith('data:image/')
+          // Keep cloud/file asset refs — stripping these made explosions vanish on sync.
+          && (plate.dataUrl.startsWith('data:image/') || isSceneAssetRef(plate.dataUrl))
         ))
         .slice(0, 16)
-        .map((plate) => ({ id: plate.id, name: plate.name.slice(0, 80), dataUrl: plate.dataUrl }))
+        .map((plate) => ({
+          id: plate.id,
+          name: plate.name.slice(0, 80),
+          dataUrl: plate.dataUrl,
+          ...(typeof plate.layerType === 'string' && plate.layerType
+            ? { layerType: plate.layerType.slice(0, 40) }
+            : {}),
+          ...(typeof plate.extrusionScale === 'number'
+            ? { extrusionScale: Math.min(1, Math.max(0, plate.extrusionScale)) }
+            : {}),
+          ...(typeof plate.extrusionGroup === 'string' && plate.extrusionGroup
+            ? { extrusionGroup: plate.extrusionGroup.slice(0, 40) }
+            : {}),
+        }))
       : undefined,
     layerExplosion: typeof partial?.layerExplosion === 'number'
       ? Math.min(1, Math.max(0, partial.layerExplosion))
       : undefined,
+    layerExtrusion: typeof partial?.layerExtrusion === 'number'
+      ? Math.min(1, Math.max(0, partial.layerExtrusion))
+      : undefined,
+    figmaSource: normalizeFigmaScreenSource(partial?.figmaSource),
     deviceColor: partial?.deviceColor,
     clayMode: partial?.clayMode,
     lidOpen: partial?.lidOpen,
@@ -843,6 +922,7 @@ export const ANIM_PROPERTIES: { id: AnimProperty; label: string; unit: string }[
   { id: 'scale', label: 'Scale', unit: '×' },
   { id: 'lidOpen', label: 'Fold / Lid', unit: '' },
   { id: 'layerExplosion', label: 'Layer explosion', unit: '' },
+  { id: 'layerExtrusion', label: 'Layer extrusion', unit: '' },
   { id: 'camera.x', label: 'Camera X', unit: '' },
   { id: 'camera.y', label: 'Camera Y', unit: '' },
   { id: 'camera.z', label: 'Camera Z', unit: '' },
@@ -856,6 +936,7 @@ export const DEVICE_ANIM_PROPERTIES: AnimProperty[] = [
   'scale',
   'lidOpen',
   'layerExplosion',
+  'layerExtrusion',
 ];
 
 export const IOS_DEVICE_ID: DeviceId = 'iphone_15_pro_max';

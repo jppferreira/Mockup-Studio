@@ -149,6 +149,11 @@ export const PRIVACY_POINTS = [
     title: 'No non-essential cookies',
     copy: 'This site does not set analytics or marketing cookies. A beta signup is a form you submit, not a tracker.',
   },
+  {
+    title: 'Optional Figma connection',
+    copy:
+      'If you connect a Figma personal access token in the app, it stays on your device encrypted for your signed-in account and is sent only to Figma’s API for the files you choose. Disconnect deletes it for that account on the device. mokstudio does not receive your token or Figma file contents.',
+  },
 ] as const;
 
 export const PRIVACY_BETA = {

@@ -44,7 +44,8 @@ export interface CloudListRow {
 
 export function canonicalProjectJson(project: MockupProject) {
   try {
-    return JSON.stringify(validateProject(JSON.parse(JSON.stringify(project)) as unknown));
+    // validateProject builds a fresh object — no deep clone needed (clone OOMed huge screen media).
+    return JSON.stringify(validateProject(project as unknown));
   } catch {
     return JSON.stringify(project);
   }

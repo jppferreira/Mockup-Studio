@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, clipboard, ipcMain, dialog, nativeImage, shell, session, systemPreferences } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, ipcMain, dialog, nativeImage, safeStorage, shell, session, systemPreferences } = require('electron');
 const fs = require('node:fs/promises');
 const { existsSync, appendFileSync } = require('node:fs');
 const path = require('node:path');
@@ -515,6 +515,91 @@ app.whenReady().then(() => {
     const url = pendingAuthCallbackUrl;
     pendingAuthCallbackUrl = null;
     return url;
+  });
+
+  /** One encrypted PAT file per signed-in account id (never plaintext on disk). */
+  function sanitizeFigmaAccountId(userId) {
+    if (typeof userId !== 'string') return null;
+    const safe = userId.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+    return safe || null;
+  }
+
+  function figmaTokenFilePath(userId) {
+    const safe = sanitizeFigmaAccountId(userId);
+    if (!safe) return null;
+    return path.join(app.getPath('userData'), `figma-token-${safe}.enc`);
+  }
+
+  function legacyFigmaTokenFilePath() {
+    return path.join(app.getPath('userData'), 'figma-token.enc');
+  }
+
+  async function unlinkIfExists(target) {
+    if (target && existsSync(target)) await fs.unlink(target);
+  }
+
+  /** Encrypted Figma PAT via OS safeStorage — scoped to the signed-in account. */
+  ipcMain.handle('figma:tokenGet', async (_event, userId) => {
+    const target = figmaTokenFilePath(userId);
+    if (!target) return { ok: false, error: 'Sign in required to load a Figma token' };
+    const legacyPath = legacyFigmaTokenFilePath();
+    // Migrate pre-account shared file into this account once, then delete it.
+    if (!existsSync(target) && existsSync(legacyPath) && safeStorage.isEncryptionAvailable()) {
+      try {
+        const legacyBuf = await fs.readFile(legacyPath);
+        const legacyToken = safeStorage.decryptString(legacyBuf);
+        if (typeof legacyToken === 'string' && legacyToken.trim()) {
+          await fs.writeFile(target, safeStorage.encryptString(legacyToken.trim()));
+          await unlinkIfExists(legacyPath);
+        }
+      } catch {
+        /* leave legacy in place for a later retry */
+      }
+    } else if (existsSync(target) && existsSync(legacyPath)) {
+      try { await unlinkIfExists(legacyPath); } catch { /* ignore */ }
+    }
+    if (!existsSync(target)) return { ok: true, token: null };
+    if (!safeStorage.isEncryptionAvailable()) {
+      return { ok: false, error: 'Secure storage is unavailable on this system' };
+    }
+    try {
+      const buf = await fs.readFile(target);
+      const token = safeStorage.decryptString(buf);
+      if (typeof token !== 'string' || !token.trim()) return { ok: true, token: null };
+      return { ok: true, token };
+    } catch {
+      return { ok: false, error: 'Could not decrypt the stored Figma token' };
+    }
+  });
+
+  ipcMain.handle('figma:tokenSet', async (_event, userId, token) => {
+    const target = figmaTokenFilePath(userId);
+    if (!target) return { ok: false, error: 'Sign in required to save a Figma token' };
+    if (typeof token !== 'string' || token.trim().length < 8 || token.length > 512) {
+      return { ok: false, error: 'Invalid Figma token' };
+    }
+    if (!safeStorage.isEncryptionAvailable()) {
+      return { ok: false, error: 'Secure storage is unavailable — cannot save the Figma token on this system' };
+    }
+    try {
+      const sealed = safeStorage.encryptString(token.trim());
+      await fs.writeFile(target, sealed);
+      try { await unlinkIfExists(legacyFigmaTokenFilePath()); } catch { /* ignore */ }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'Could not save Figma token' };
+    }
+  });
+
+  ipcMain.handle('figma:tokenClear', async (_event, userId) => {
+    const target = figmaTokenFilePath(userId);
+    try {
+      await unlinkIfExists(target);
+      try { await unlinkIfExists(legacyFigmaTokenFilePath()); } catch { /* ignore */ }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'Could not clear Figma token' };
+    }
   });
 
   ipcMain.handle('figma:request', async (_event, { apiPath, token }) => {

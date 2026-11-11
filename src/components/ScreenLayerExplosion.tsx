@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { planIncrementalExtrusion } from '../lib/screenLayers';
 import type { ScreenLayerPlate } from '../types';
 
 type ScreenFrame = {
@@ -109,21 +110,39 @@ function measureScreenFrame(host: THREE.Object3D): ScreenFrame {
   };
 }
 
+/** Fit plate art inside the screen frame without stretching (letterbox / pillarbox). */
+function containSize(
+  srcW: number,
+  srcH: number,
+  maxW: number,
+  maxH: number,
+): { width: number; height: number } {
+  if (!(srcW > 0) || !(srcH > 0) || !(maxW > 0) || !(maxH > 0)) {
+    return { width: maxW, height: maxH };
+  }
+  const scale = Math.min(maxW / srcW, maxH / srcH);
+  return { width: srcW * scale, height: srcH * scale };
+}
+
 function LayerPlateMesh({
   dataUrl,
-  width,
-  height,
+  maxWidth,
+  maxHeight,
+  depth,
   position,
   renderOrder,
 }: {
   dataUrl: string;
-  width: number;
-  height: number;
+  maxWidth: number;
+  maxHeight: number;
+  depth: number;
   position: [number, number, number];
   renderOrder: number;
 }) {
   const invalidate = useThree((state) => state.invalidate);
   const [map, setMap] = useState<THREE.Texture | null>(null);
+  const [size, setSize] = useState({ width: maxWidth, height: maxHeight });
+  const extruded = depth > 0.012;
 
   useEffect(() => {
     let cancelled = false;
@@ -137,7 +156,16 @@ function LayerPlateMesh({
         }
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.anisotropy = 8;
+        // Prevent UV stretch: map covers the plane 1:1; geometry matches image aspect.
+        tex.wrapS = THREE.ClampToEdgeWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.repeat.set(1, 1);
+        tex.offset.set(0, 0);
         tex.needsUpdate = true;
+        const image = tex.image as { width?: number; height?: number; naturalWidth?: number; naturalHeight?: number } | undefined;
+        const srcW = Number(image?.naturalWidth || image?.width) || 0;
+        const srcH = Number(image?.naturalHeight || image?.height) || 0;
+        setSize(containSize(srcW, srcH, maxWidth, maxHeight));
         setMap(tex);
         invalidate();
       },
@@ -153,44 +181,95 @@ function LayerPlateMesh({
         return null;
       });
     };
-  }, [dataUrl, invalidate]);
+  }, [dataUrl, maxWidth, maxHeight, invalidate]);
 
-  const material = useMemo(() => {
-    const mat = new THREE.MeshPhysicalMaterial({
+  const materials = useMemo(() => {
+    // Standard (no clearcoat) — Physical + N plates thrash the live preview.
+    const face = new THREE.MeshStandardMaterial({
       color: '#ffffff',
       transparent: true,
       opacity: 1,
-      depthWrite: false,
-      side: THREE.DoubleSide,
+      depthWrite: extruded,
+      side: THREE.FrontSide,
       toneMapped: false,
       metalness: 0,
-      roughness: 0.55,
-      clearcoat: 0.15,
-      clearcoatRoughness: 0.4,
-      envMapIntensity: 0.15,
+      roughness: extruded ? 0.42 : 0.55,
+      envMapIntensity: extruded ? 0.35 : 0.15,
     });
-    return mat;
-  }, []);
+    if (!extruded) {
+      face.side = THREE.DoubleSide;
+      face.depthWrite = false;
+      return face;
+    }
+    const edge = new THREE.MeshStandardMaterial({
+      color: '#d8dde4',
+      transparent: false,
+      depthWrite: true,
+      side: THREE.FrontSide,
+      toneMapped: true,
+      metalness: 0.08,
+      roughness: 0.55,
+      envMapIntensity: 0.4,
+    });
+    const back = new THREE.MeshStandardMaterial({
+      color: '#eceff3',
+      transparent: false,
+      depthWrite: true,
+      side: THREE.FrontSide,
+      toneMapped: true,
+      metalness: 0.05,
+      roughness: 0.6,
+      envMapIntensity: 0.25,
+    });
+    // Box face order: +X, -X, +Y, -Y, +Z, -Z
+    return [edge, edge, edge, edge, face, back];
+  }, [extruded]);
 
   useEffect(() => {
-    material.map = map;
-    material.needsUpdate = true;
+    if (Array.isArray(materials)) {
+      materials.forEach((mat, index) => {
+        // Box face order: +X, -X, +Y, -Y, +Z, -Z — UI art on the front (+Z).
+        mat.map = index === 4 ? map : null;
+        mat.needsUpdate = true;
+      });
+    } else {
+      materials.map = map;
+      materials.needsUpdate = true;
+    }
     invalidate();
-  }, [material, map, invalidate]);
+  }, [materials, map, invalidate]);
 
-  useEffect(() => () => material.dispose(), [material]);
+  useEffect(() => () => {
+    const list = Array.isArray(materials) ? materials : [materials];
+    // Edge faces share one material instance — dispose each unique mat once.
+    new Set(list).forEach((mat) => mat.dispose());
+  }, [materials]);
 
   if (!map) return null;
+
+  if (!extruded) {
+    return (
+      <mesh
+        position={position}
+        renderOrder={renderOrder}
+        castShadow={false}
+        receiveShadow={false}
+        material={materials}
+      >
+        <planeGeometry args={[size.width, size.height]} />
+      </mesh>
+    );
+  }
 
   return (
     <mesh
       position={position}
       renderOrder={renderOrder}
-      castShadow
+      castShadow={false}
       receiveShadow={false}
-      material={material}
+      material={materials}
     >
-      <planeGeometry args={[width, height]} />
+      <boxGeometry args={[size.width, size.height, depth]} />
     </mesh>
   );
 }
@@ -198,19 +277,24 @@ function LayerPlateMesh({
 /**
  * Rotato-style UI layer explosion: top-level plates lift off the device glass along +Z.
  * Amount 0 keeps them coincident with the screen; 1 spreads them into a depth stack.
+ * Extrusion thickens each plate into a 3D card.
  */
 export default function ScreenLayerExplosion({
   host,
   layers,
   amount,
+  extrusion = 0,
 }: {
   host: THREE.Object3D | null;
   layers: ScreenLayerPlate[];
   amount: number;
+  /** 0 = paper-thin planes, 1 = chunky extruded cards. */
+  extrusion?: number;
 }) {
   const invalidate = useThree((state) => state.invalidate);
   const [frame, setFrame] = useState<ScreenFrame | null>(null);
   const clamped = Math.min(1, Math.max(0, amount));
+  const extrude = Math.min(1, Math.max(0, extrusion));
 
   useLayoutEffect(() => {
     if (!host || layers.length < 2) {
@@ -229,12 +313,18 @@ export default function ScreenLayerExplosion({
     return () => cancelAnimationFrame(id);
   }, [host, layers, invalidate]);
 
+  const planned = useMemo(
+    () => planIncrementalExtrusion(layers, extrude),
+    [layers, extrude],
+  );
+
   if (!host || !frame || layers.length < 2 || clamped < 0.001) return null;
 
   // Spread grows with plate count so tall stacks still read as exploded.
   // Bottom plate stays on the device screenshot; upper plates peel off like Rotato.
   const gap = (0.055 + clamped * 0.22) * (0.85 + Math.min(layers.length, 10) * 0.04);
-  const upper = layers.slice(1);
+  const maxDepth = 0.004 + extrude * 0.12;
+  const upper = planned.slice(1);
 
   return (
     <group
@@ -244,13 +334,18 @@ export default function ScreenLayerExplosion({
       {upper.map((plate, index) => {
         const step = index + 1;
         const lift = step * gap;
+        // Containers stay paper-thin; subgroups thicken with stepped scales.
+        const plateScale = Math.min(1, Math.max(0, plate.extrusionScale ?? 0));
+        const depth = maxDepth * plateScale;
+        const z = lift + (depth > 0.012 ? depth * 0.5 : 0);
         return (
           <LayerPlateMesh
             key={plate.id}
             dataUrl={plate.dataUrl}
-            width={frame.width}
-            height={frame.height}
-            position={[0, 0, lift]}
+            maxWidth={frame.width}
+            maxHeight={frame.height}
+            depth={depth}
+            position={[0, 0, z]}
             renderOrder={40 + step}
           />
         );
