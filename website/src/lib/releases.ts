@@ -26,6 +26,36 @@ export interface AppRelease {
 /** Offline / rate-limit fallback — keep in sync when shipping a new GitHub Release. */
 export const FALLBACK_RELEASES: AppRelease[] = [
   {
+    tag: 'v0.1.1',
+    name: 'mokstudio 0.1.1',
+    publishedAt: '2026-11-11T11:06:15Z',
+    prerelease: false,
+    htmlUrl: `https://github.com/${RELEASES_REPO}/releases/tag/v0.1.1`,
+    notes: 'Direct Mac build with auto-update feed. Notarisation pending Apple timestamp access.',
+    dmg: {
+      name: 'mokstudio-0.1.1-arm64.dmg',
+      url: `https://github.com/${RELEASES_REPO}/releases/download/v0.1.1/mokstudio-0.1.1-arm64.dmg`,
+      size: 178_536_648,
+    },
+    assets: [
+      {
+        name: 'mokstudio-0.1.1-arm64.dmg',
+        url: `https://github.com/${RELEASES_REPO}/releases/download/v0.1.1/mokstudio-0.1.1-arm64.dmg`,
+        size: 178_536_648,
+      },
+      {
+        name: 'mokstudio-0.1.1-arm64-mac.zip',
+        url: `https://github.com/${RELEASES_REPO}/releases/download/v0.1.1/mokstudio-0.1.1-arm64-mac.zip`,
+        size: 171_059_624,
+      },
+      {
+        name: 'latest-mac.yml',
+        url: `https://github.com/${RELEASES_REPO}/releases/download/v0.1.1/latest-mac.yml`,
+        size: 511,
+      },
+    ],
+  },
+  {
     tag: 'v0.1.0',
     name: 'mokstudio 0.1.0',
     publishedAt: '2026-11-04T11:23:17Z',
