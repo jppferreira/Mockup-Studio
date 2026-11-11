@@ -40,11 +40,21 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
   },
   updateStatus: () => ipcRenderer.invoke('updater:status'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   onUpdateStatus: (handler) => {
     const listener = (_event, payload) => handler(payload);
     ipcRenderer.on('updater:status', listener);
     return () => ipcRenderer.removeListener('updater:status', listener);
   },
+  getDistributionChannel: () => {
+    try {
+      return ipcRenderer.sendSync('distribution:channel-sync');
+    } catch {
+      return 'mac_direct';
+    }
+  },
+  getInstallDeviceId: () => ipcRenderer.invoke('device:installId'),
+  restorePurchases: () => ipcRenderer.invoke('iap:restore'),
   readClipboardImage: () => ipcRenderer.invoke('clipboard:readImage'),
   readClipboardHtml: () => ipcRenderer.invoke('clipboard:readHtml'),
   ensureCameraAccess: () => ipcRenderer.invoke('media:ensureCameraAccess'),

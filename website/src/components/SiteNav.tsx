@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Menu, X } from 'lucide-react';
+import { SHOW_RELEASE_DOWNLOADS } from '../content';
 import { Logo } from './Logo';
 import type { ContactIntent } from './ContactModal';
 
@@ -13,7 +14,8 @@ const NAV_LINKS: { to: string; label: string }[] = [
   { to: '/features', label: 'Features' },
   { to: '/workflow', label: 'Workflow' },
   { to: '/pricing', label: 'Pricing' },
-  { to: '/releases', label: 'Releases' },
+  // Hidden until public Mac builds are ready again.
+  ...(SHOW_RELEASE_DOWNLOADS ? [{ to: '/releases', label: 'Releases' }] : []),
   { to: '/privacy', label: 'Privacy' },
   { to: '/terms', label: 'Terms' },
 ];

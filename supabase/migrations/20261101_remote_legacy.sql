@@ -1,0 +1,1 @@
+-- Applied remotely before local migration files existed.

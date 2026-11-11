@@ -29,6 +29,7 @@ export default defineConfig(({ mode }) => {
     define: {
       __APP_VERSION__: JSON.stringify(appVersion),
       __SITE_GATE_SHA256__: JSON.stringify(gateHash),
+      __DISTRIBUTION_CHANNEL__: JSON.stringify(env.MOCKUP_DISTRIBUTION || 'web'),
     },
     base: './',
     resolve: {

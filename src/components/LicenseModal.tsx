@@ -1,25 +1,28 @@
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 import { ExternalLink, KeyRound, Sparkles, X } from 'lucide-react';
-import {
-  checkoutCtaLabel,
-  openCheckout,
-  type PaidPlanId,
-} from '../lib/checkout';
+import { type PaidPlanId } from '../lib/checkout';
 import {
   PLAN_PRICES_GBP,
   PLANS,
   UPDATE_PASS,
-  activateLicenseKey,
   clearLicense,
   formatGbp,
   planLabel,
   type LicenseState,
 } from '../lib/license';
+import { startStripeCheckout } from '../lib/stripeCheckout';
+import { ensureFreshSession } from '../lib/supabaseClient';
 import { getCheckoutConfig } from '@shared/checkout';
 import {
   MODEL_LICENSING_NOTICE,
   NON_AFFILIATION_DISCLAIMER,
 } from '@shared/legal';
+
+function stripeBuyLabel(plan: PaidPlanId): string {
+  if (plan === 'pro') return `Buy Pro — ${formatGbp(PLAN_PRICES_GBP.pro)}`;
+  if (plan === 'pro_max') return `Buy Pro Max — ${formatGbp(PLAN_PRICES_GBP.pro_max)}`;
+  return `Buy Update Pass — ${formatGbp(PLAN_PRICES_GBP.update_pass)}/year`;
+}
 
 interface Props {
   open: boolean;
@@ -30,38 +33,12 @@ interface Props {
 }
 
 export default function LicenseModal({ open, license, onClose, onChange, onNotify }: Props) {
-  const [keyDraft, setKeyDraft] = useState('');
-  const [error, setError] = useState<string | null>(null);
   const [buying, setBuying] = useState<PaidPlanId | null>(null);
-  const [activating, setActivating] = useState(false);
 
   if (!open) return null;
 
   const creditsUrl = `${getCheckoutConfig().siteUrl}/credits`;
   const termsUrl = `${getCheckoutConfig().siteUrl}/terms`;
-  const recoverUrl = `${getCheckoutConfig().siteUrl}/recover`;
-
-  const onSubmit = (event: FormEvent) => {
-    event.preventDefault();
-    void (async () => {
-      setActivating(true);
-      const result = await activateLicenseKey(keyDraft, license);
-      setActivating(false);
-      if (!result.ok) {
-        setError(result.error);
-        return;
-      }
-      setError(null);
-      setKeyDraft('');
-      onChange(result.state);
-      onNotify(
-        result.state.key?.startsWith('MS-UPDATE')
-          ? `Update Pass active until ${result.state.updatesUntil ? new Date(result.state.updatesUntil).toLocaleDateString() : '—'}`
-          : `Activated ${planLabel(result.state.tier)}`,
-      );
-      onClose();
-    })();
-  };
 
   const onClear = () => {
     const next = clearLicense();
@@ -71,16 +48,27 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
 
   const buy = async (plan: PaidPlanId) => {
     setBuying(plan);
-    const result = await openCheckout(plan);
-    setBuying(null);
-    if (result.ok) {
+    try {
+      const snap = await ensureFreshSession();
+      if (!snap.session?.access_token) {
+        onNotify('Sign in to your mokstudio account to continue to checkout.');
+        return;
+      }
+
+      const result = await startStripeCheckout(plan);
+      if (!result.ok) {
+        onNotify(result.error || 'Could not open checkout');
+        return;
+      }
+
+      await openExternal(result.url);
       onNotify(
         plan === 'update_pass'
           ? 'Opened Update Pass checkout'
-          : `Opened ${plan === 'pro_max' ? 'Pro Max' : 'Pro'} checkout — activate your key when it arrives`,
+          : `Opened ${plan === 'pro_max' ? 'Pro Max' : 'Pro'} checkout`,
       );
-    } else {
-      onNotify('Could not open checkout');
+    } finally {
+      setBuying(null);
     }
   };
 
@@ -110,6 +98,9 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
           {license.updatesUntil
             ? ` · updates until ${new Date(license.updatesUntil).toLocaleDateString()}`
             : ''}.
+        </p>
+        <p className="license-hint">
+          Sign in, buy with Stripe, and Pro unlocks on this account automatically — no license key to paste.
         </p>
 
         <div className="license-plan-grid">
@@ -141,7 +132,7 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
                     onClick={() => void buy(paidId)}
                   >
                     <ExternalLink size={14} />
-                    {buying === paidId ? 'Opening…' : checkoutCtaLabel(paidId)}
+                    {buying === paidId ? 'Opening…' : stripeBuyLabel(paidId)}
                   </button>
                 )}
                 {paidId && license.tier !== 'free' && license.tier !== paidId && paidId === 'pro_max' && (
@@ -152,7 +143,7 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
                     onClick={() => void buy('pro_max')}
                   >
                     <ExternalLink size={14} />
-                    Upgrade to Pro Max · {formatGbp(PLAN_PRICES_GBP.pro_max)}
+                    {buying === 'pro_max' ? 'Opening…' : `Upgrade to Pro Max — ${formatGbp(PLAN_PRICES_GBP.pro_max)}`}
                   </button>
                 )}
               </div>
@@ -172,48 +163,24 @@ export default function LicenseModal({ open, license, onClose, onChange, onNotif
             disabled={buying !== null}
             onClick={() => void buy('update_pass')}
           >
-            {buying === 'update_pass' ? 'Opening…' : checkoutCtaLabel('update_pass')}
+            {buying === 'update_pass' ? 'Opening…' : stripeBuyLabel('update_pass')}
           </button>
         </div>
 
-        <form className="license-activate" onSubmit={onSubmit}>
-          <label htmlFor="license-key">Activate a license key</label>
-          <div className="license-activate-row">
-            <input
-              id="license-key"
-              value={keyDraft}
-              onChange={(e) => { setKeyDraft(e.target.value); setError(null); }}
-              placeholder="MS-PRO.<payload>.<sig>"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <button type="submit" className="button primary-button" disabled={activating}>
-              {activating ? 'Checking…' : 'Activate'}
-            </button>
-          </div>
-          {error && <p className="license-error">{error}</p>}
+        {license.tier === 'pro_max' && (
           <p className="license-hint">
-            After checkout, paste the signed key from your email. Lost it?{' '}
-            <button type="button" className="license-inline-link" onClick={() => void openExternal(recoverUrl)}>
-              Recover key
+            Pro Max: use on up to 2 Macs you own, or email support to transfer. See{' '}
+            <button type="button" className="license-inline-link" onClick={() => void openExternal(termsUrl)}>
+              Terms
             </button>
-            . Random <code>MS-PRO-…</code> strings will not unlock Pro.
+            .
           </p>
-          {license.tier === 'pro_max' && (
-            <p className="license-hint">
-              Pro Max: activate on up to 2 Macs you own, or email support to transfer. See{' '}
-              <button type="button" className="license-inline-link" onClick={() => void openExternal(termsUrl)}>
-                Terms
-              </button>
-              .
-            </p>
-          )}
-          {license.tier === 'pro' && (
-            <p className="license-hint">
-              Need a second Mac? Upgrade to Pro Max for dual-Mac / transfer policy.
-            </p>
-          )}
-        </form>
+        )}
+        {license.tier === 'pro' && (
+          <p className="license-hint">
+            Need a second Mac? Upgrade to Pro Max for dual-Mac / transfer policy.
+          </p>
+        )}
 
         <p className="license-hint">{NON_AFFILIATION_DISCLAIMER}</p>
         <p className="license-hint">

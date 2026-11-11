@@ -33,6 +33,7 @@ import FigmaConnectModal from './components/FigmaConnectModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
 import LicenseModal from './components/LicenseModal';
 import UpdateBanner from './components/UpdateBanner';
+import AccountLicencePanel from './components/AccountLicencePanel';
 import { getCheckoutConfig } from '@shared/checkout';
 import {
   APP_ABOUT_SUMMARY,
@@ -171,6 +172,7 @@ import {
   LICENSING_DISABLED,
   PLAN_PRICES_GBP,
   canExportVideo,
+  canUseProMaxTemplates,
   formatGbp,
   isFreeDevice,
   isResolutionAllowed,
@@ -178,6 +180,7 @@ import {
   maxDevicesFor,
   planLabel,
   upgradeCopy,
+  upgradeCopyProMax,
   type LicenseState,
 } from './lib/license';
 import { canUseDevice as isDeviceUnlocked, syncLicenseWithAccount } from './lib/entitlements';
@@ -264,7 +267,8 @@ import {
   type SavedAngle, type SavedAssetSize,
 } from './lib/userLibrary';
 import {
-  applyCompositionKeepingDevices, getCompositionTemplate, isDevEditableTemplateId, projectFromTemplate, templatesByCategory,
+  applyCompositionKeepingDevices, getCompositionTemplate, isDevEditableTemplateId, isProMaxPackTemplate,
+  projectFromTemplate, templatesVisibleForTier,
   type CompositionTemplate, type TemplateCategory,
 } from './lib/templates';
 import {
@@ -3127,6 +3131,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const startFromTemplate = (template: CompositionTemplate) => {
+    if (
+      isProMaxPackTemplate(template)
+      && !canUseProMaxTemplates(license.tier)
+      && !isDeveloperToolset
+    ) {
+      notify(upgradeCopyProMax('The Pro Max template & motion pack'));
+      setLicenseOpen(true);
+      return;
+    }
     const needsPro = template.devices.length > 1
       || template.compositionMode === 'split'
       || template.devices.some((d) => !isDeviceUnlocked(license.tier, d.deviceId));
@@ -6273,13 +6286,20 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     setTemplatesTick((n) => n + 1);
   }), []);
 
+  const canUseProMaxPack = canUseProMaxTemplates(license.tier) || isDeveloperToolset;
   const sceneCompositions = useMemo(
-    () => templatesByCategory('scenes'),
-    [templatesTick],
+    () => templatesVisibleForTier('scenes', {
+      canUseProMaxPack,
+      includeAll: isDeveloperToolset,
+    }),
+    [templatesTick, canUseProMaxPack, isDeveloperToolset],
   );
   const deviceCompositions = useMemo(
-    () => templatesByCategory('devices'),
-    [templatesTick],
+    () => templatesVisibleForTier('devices', {
+      canUseProMaxPack,
+      includeAll: isDeveloperToolset,
+    }),
+    [templatesTick, canUseProMaxPack, isDeveloperToolset],
   );
   const mainShipTargets = useMemo(
     () => [...deviceCompositions, ...sceneCompositions],
@@ -6316,6 +6336,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const onApplyComposition = (template: CompositionTemplate) => {
     const tabId = workspace.activeId;
     if (!tabId) return;
+    if (
+      isProMaxPackTemplate(template)
+      && !canUseProMaxTemplates(license.tier)
+      && !isDeveloperToolset
+    ) {
+      notify(upgradeCopyProMax('The Pro Max template & motion pack'));
+      setLicenseOpen(true);
+      return;
+    }
     applyTemplateCameraOrbit(template);
     // Dev can override the phones in the open file; User keeps current models.
     const replaceDevices = isDeveloperToolset && template.category !== 'scenes';
@@ -10710,10 +10739,18 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             <div className="modal-head"><div className="modal-icon"><Settings2 size={21} /></div>
               <button className="modal-close" aria-label="Close settings" onClick={() => setHelpOpen(false)}><X size={19} /></button></div>
             <h2 id="help-title">Settings</h2>
-            <p>Theme, shortcuts, and how the studio works.</p>
+            <p>Theme, account, licence, updates, and how the studio works.</p>
             <div className="help-appearance">
               <AccentThemePicker />
             </div>
+            <AccountLicencePanel
+              license={license}
+              onLicenseChange={setLicense}
+              onOpenPlans={() => {
+                setHelpOpen(false);
+                setLicenseOpen(true);
+              }}
+            />
             <div className="help-rows">
               <div><MousePointer2 size={17} /><span>Drag anywhere to orbit the camera — including over a device. Tap empty sky to set the surround colour in Look. Shift+drag slides a device; Alt+drag tumbles it. Right-drag or Space+drag pans the view. Scroll zooms. Rings and arrows still work for precise moves.</span></div>
               <div><ImagePlus size={17} /><span>Drop a screenshot onto the preview, or drop an FBX, DAE, OBJ, glTF, Blend, or C4D file to extract it as a device. Blend uses your local Blender install.</span></div>
@@ -10759,7 +10796,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             <div className="help-legal" id="settings-about">
               <h3>About</h3>
               <p>{APP_ABOUT_SUMMARY}</p>
-              <p>mokstudio · 0.1.0</p>
+              <p>mokstudio · {typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.1.1'}</p>
             </div>
             <div className="help-modal-actions">
               <button
@@ -10842,7 +10879,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         open={feedbackOpen}
         onClose={() => setFeedbackOpen(false)}
         onNotify={notify}
-        appVersion="0.1.0"
+        appVersion={typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.1.1'}
       />
       {templatePickerOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setTemplatePickerOpen(false); }}>
@@ -10902,15 +10939,17 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               >
                 <Smartphone size={14} /> Device templates
               </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={templateCategory === 'scenes'}
-                className={templateCategory === 'scenes' ? 'active' : ''}
-                onClick={() => setTemplateCategory('scenes')}
-              >
-                <Sparkles size={14} /> Pre-compositions
-              </button>
+              {canUseProMaxPack && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={templateCategory === 'scenes'}
+                  className={templateCategory === 'scenes' ? 'active' : ''}
+                  onClick={() => setTemplateCategory('scenes')}
+                >
+                  <Sparkles size={14} /> Pre-compositions
+                </button>
+              )}
               <button
                 type="button"
                 role="tab"
@@ -10991,7 +11030,13 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               </div>
             )}
             <div className="template-grid">
-              {(templateCategory === 'saved' ? savedCompositions : templatesByCategory(templateCategory)).map((template) => {
+              {(templateCategory === 'saved'
+                ? savedCompositions
+                : templatesVisibleForTier(templateCategory, {
+                  canUseProMaxPack,
+                  includeAll: isDeveloperToolset,
+                })
+              ).map((template) => {
                 const editable = isDeveloperToolset && templateCategory !== 'saved';
                 return (
                   <div key={template.id} className={`template-card-wrap${editable ? ' is-dev-editable' : ''}`}>

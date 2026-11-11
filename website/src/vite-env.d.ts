@@ -1,5 +1,8 @@
 /// <reference types="vite/client" />
 
+/** SHA-256 hex of SITE_PASSWORD (or SITE_GATE_PASSWORD). Empty string = gate off. */
+declare const __WEBSITE_GATE_SHA256__: string;
+
 interface ImportMetaEnv {
   readonly VITE_CHECKOUT_PRO_URL?: string;
   readonly VITE_CHECKOUT_PRO_MAX_URL?: string;

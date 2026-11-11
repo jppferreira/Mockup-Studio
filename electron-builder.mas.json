@@ -1,0 +1,49 @@
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "studio.mockup.desktop.mas",
+  "productName": "mokstudio",
+  "directories": {
+    "output": "release/mas"
+  },
+  "files": [
+    "dist/**/*",
+    "electron/**/*",
+    "package.json"
+  ],
+  "protocols": [
+    {
+      "name": "mokstudio Auth",
+      "schemes": ["mokstudio"]
+    }
+  ],
+  "fileAssociations": [
+    {
+      "ext": "mockup",
+      "name": "mokstudio Project",
+      "description": "mokstudio Project",
+      "mimeType": "application/x-mockup-studio",
+      "role": "Editor",
+      "rank": "Owner"
+    }
+  ],
+  "mac": {
+    "icon": "build/icon.icns",
+    "category": "public.app-category.graphics-design",
+    "hardenedRuntime": false,
+    "gatekeeperAssess": false,
+    "entitlements": "electron/entitlements.mas.plist",
+    "entitlementsInherit": "electron/entitlements.mas.plist",
+    "extendInfo": {
+      "NSCameraUsageDescription": "mokstudio uses camera access to mirror your iPhone or iPad screen over USB into the 3D mockup."
+    },
+    "target": [
+      { "target": "mas", "arch": ["universal"] }
+    ]
+  },
+  "mas": {
+    "type": "distribution",
+    "entitlements": "electron/entitlements.mas.plist",
+    "entitlementsInherit": "electron/entitlements.mas.plist",
+    "provisioningProfile": "build/mas.provisionprofile"
+  }
+}

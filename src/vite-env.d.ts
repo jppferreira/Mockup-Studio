@@ -5,6 +5,7 @@ import type { CloudLibraryStatus, CloudListRow } from './lib/cloudLibrary';
 declare global {
 declare const __APP_VERSION__: string;
 declare const __SITE_GATE_SHA256__: string;
+declare const __DISTRIBUTION_CHANNEL__: string;
 
 interface ImportMetaEnv {
   readonly VITE_CHECKOUT_PRO_URL?: string;
@@ -101,16 +102,28 @@ interface Window {
     /** Live OAuth deep-link handoff from the system browser (Figma-style). */
     onAuthCallback?: (handler: (url: string) => void) => () => void;
     updateStatus?: () => Promise<{
-      state: 'idle' | 'downloading' | 'ready';
+      state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error' | 'up-to-date';
       version?: string | null;
       percent?: number;
+      message?: string | null;
     }>;
     installUpdate?: () => Promise<{ ok: boolean }>;
-    onUpdateStatus?: (handler: (status: {
-      state: 'idle' | 'downloading' | 'ready';
+    checkForUpdates?: () => Promise<{
+      ok: boolean;
+      state?: 'idle' | 'checking' | 'downloading' | 'ready' | 'error' | 'up-to-date';
       version?: string | null;
       percent?: number;
+      error?: string;
+    }>;
+    onUpdateStatus?: (handler: (status: {
+      state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error' | 'up-to-date';
+      version?: string | null;
+      percent?: number;
+      message?: string | null;
     }) => void) => () => void;
+    getDistributionChannel?: () => 'web' | 'mac_direct' | 'mac_mas';
+    getInstallDeviceId?: () => Promise<string>;
+    restorePurchases?: () => Promise<{ ok: boolean; error?: string }>;
     readClipboardImage?: () => Promise<{ ok: boolean; dataUrl?: string; name?: string }>;
     readClipboardHtml?: () => Promise<{ ok: boolean; html?: string }>;
     ensureCameraAccess?: () => Promise<{ granted: boolean; status?: string; reason?: string }>;

@@ -105,13 +105,14 @@ process.env.REQUIRE_NOTARIZE = '1';
 delete process.env.SKIP_NOTARIZE;
 
 const publish = process.env.GH_TOKEN ? 'always' : 'never';
+process.env.MOCKUP_DISTRIBUTION = 'mac_direct';
 console.log(`[dist:mac:beta] Signing as: ${IDENTITY}`);
 if (publish === 'never') {
   console.log('[dist:mac:beta] GH_TOKEN is unset, so this build will not publish the update feed.');
 }
-execSync('npm run build', { stdio: 'inherit' });
+execSync('npm run build', { stdio: 'inherit', env: process.env });
 execSync(
-  `npx electron-builder --mac dmg zip --arm64 --publish ${publish} -c.mac.identity="${SIGN_NAME}"`,
+  `npx electron-builder --config electron-builder.direct.json --mac dmg zip --arm64 --publish ${publish} -c.mac.identity="${SIGN_NAME}"`,
   { stdio: 'inherit', env: process.env },
 );
 console.log(publish === 'always'

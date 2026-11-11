@@ -58,9 +58,14 @@ export interface CompositionTemplate {
   /** Short badge shown on the card, e.g. "1 device" */
   badge: string;
   category: TemplateCategory;
+  /**
+   * Pro Max template / motion pack entry.
+   * Scene compositions are the pack by default; device layouts stay on Pro.
+   */
+  proMaxPack?: boolean;
   /** CSS thumbnail layout hint */
   preview: 'solo' | 'pair' | 'trio' | 'fan' | 'depth' | 'split' | 'stack'
-    | 'clay' | 'concrete' | 'pedestal' | 'desk' | 'studio' | 'rocks' | 'stage';
+    | 'clay' | 'concrete' | 'pedestal' | 'desk' | 'studio' | 'rocks' | 'stage'
   background: BackgroundPreset;
   gradient?: GradientColors;
   compositionMode: MockupProject['compositionMode'];
@@ -890,6 +895,27 @@ export function isDevEditableTemplateId(id: string | null | undefined): boolean 
 export function templatesByCategory(category: TemplateCategory) {
   if (category === 'saved') return [];
   return listShippedCompositionTemplates().filter((item) => item.category === category);
+}
+
+/** Scene compositions (and any explicit flag) form the Pro Max template / motion pack. */
+export function isProMaxPackTemplate(template: Pick<CompositionTemplate, 'category' | 'proMaxPack'>): boolean {
+  if (template.proMaxPack === true) return true;
+  if (template.proMaxPack === false) return false;
+  return template.category === 'scenes';
+}
+
+/**
+ * Templates visible for a license tier.
+ * Free/Pro keep device layouts + saved; Pro Max pack (scenes) only for pro_max (or includeAll for Dev).
+ */
+export function templatesVisibleForTier(
+  category: TemplateCategory,
+  options: { canUseProMaxPack: boolean; includeAll?: boolean },
+): CompositionTemplate[] {
+  if (category === 'saved') return [];
+  const list = templatesByCategory(category);
+  if (options.includeAll || options.canUseProMaxPack) return list;
+  return list.filter((item) => !isProMaxPackTemplate(item));
 }
 
 function remapStoredAnimation(clip: AnimationClip, devices: DeviceInstance[]): AnimationClip {

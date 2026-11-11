@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
@@ -7,10 +8,19 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(__dirname), '');
   // GitHub Pages project site: VITE_SITE_BASE=/repo-name/ in .env.production
   const base = env.VITE_SITE_BASE || process.env.VITE_SITE_BASE || '/';
+  // Launch gate: plaintext stays in env; only the SHA-256 hash is baked into the bundle.
+  // Prefer SITE_PASSWORD; SITE_GATE_PASSWORD is accepted as an alias.
+  const gatePassword = (env.SITE_PASSWORD || env.SITE_GATE_PASSWORD || '').trim();
+  const gateHash = gatePassword
+    ? createHash('sha256').update(gatePassword).digest('hex')
+    : '';
 
   return {
     plugins: [react()],
     base,
+    define: {
+      __WEBSITE_GATE_SHA256__: JSON.stringify(gateHash),
+    },
     root: path.resolve(__dirname),
     publicDir: path.resolve(__dirname, 'public'),
     resolve: {
@@ -34,3 +44,4 @@ export default defineConfig(({ mode }) => {
     },
   };
 });
+

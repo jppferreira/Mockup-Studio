@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 
 type UpdateStatus = {
-  state: 'idle' | 'downloading' | 'ready';
+  state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error' | 'up-to-date';
   version?: string | null;
   percent?: number;
+  message?: string | null;
 };
 
 export default function UpdateBanner() {

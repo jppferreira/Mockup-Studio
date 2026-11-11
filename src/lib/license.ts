@@ -301,6 +301,15 @@ export function canExportVideo(tier: LicenseTier): boolean {
   return LICENSING_DISABLED || ENTITLEMENTS[tier].videoExport;
 }
 
+/** Pro Max template / motion pack (scene compositions). Free and Pro stay locked out. */
+export function canUseProMaxTemplates(tier: LicenseTier): boolean {
+  return LICENSING_DISABLED || ENTITLEMENTS[tier].proMaxTemplates;
+}
+
+export function upgradeCopyProMax(feature: string): string {
+  return `${feature} is included in Pro Max (${formatGbp(PLAN_PRICES_GBP.pro_max)} one-time).`;
+}
+
 export function maxStillLongEdge(tier: LicenseTier): number {
   return ENTITLEMENTS[LICENSING_DISABLED ? 'pro_max' : tier].maxStillLongEdge;
 }

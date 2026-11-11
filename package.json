@@ -18,9 +18,11 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "preview": "vite preview",
-    "dist:mac": "npm run build && electron-builder --mac dmg zip --arm64 -c.mac.identity=null",
+    "dist:mac": "MOCKUP_DISTRIBUTION=mac_direct npm run build && MOCKUP_DISTRIBUTION=mac_direct electron-builder --config electron-builder.direct.json --mac dmg zip --arm64",
+    "dist:mac:unsigned": "MOCKUP_DISTRIBUTION=mac_direct npm run build && MOCKUP_DISTRIBUTION=mac_direct electron-builder --config electron-builder.direct.json --mac dmg zip --arm64 -c.mac.identity=null",
     "dist:mac:beta": "node scripts/dist-mac-beta.mjs",
-    "dist:mac:universal": "npm run build && electron-builder --mac dmg zip --universal"
+    "dist:mac:universal": "MOCKUP_DISTRIBUTION=mac_direct npm run build && MOCKUP_DISTRIBUTION=mac_direct electron-builder --config electron-builder.direct.json --mac dmg zip --universal",
+    "dist:mac:mas": "MOCKUP_DISTRIBUTION=mac_mas npm run build && MOCKUP_DISTRIBUTION=mac_mas electron-builder --config electron-builder.mas.json --mac mas"
   },
   "dependencies": {
     "@react-three/drei": "^9.122.0",
