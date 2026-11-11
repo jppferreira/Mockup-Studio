@@ -15,10 +15,10 @@ Open follow-ups that are not blocking day-to-day development.
 | Webhook accepts `charge.refunded` (HTTP 200) | **Pass** |
 | Full refund of one-time **Pro** → `tier/plan=free`, `status=revoked` | **Pass** |
 | `plan=monthly` + `charge.refunded` → **not** revoked (skipped) | **Pass** |
-| Partial refund (`charge.refunded === false`, £10 of £50) → entitlement unchanged (`pro`/`active`) | **Pass (gap confirmed)** |
+| Partial refund (`charge.refunded === false`, £10 of £50) → entitlement unchanged (`pro`/`active`) | **Pass** |
 
-**Partial-refund gap:** Confirmed no-op. Product decision still open: whether partial refunds should revoke/reduce entitlements.
+**Partial-refund decision — DONE (2026-11-11):** Keep no-op. Only full refunds (`charge.refunded === true`) revoke one-time Pro / Pro Max. Partial refunds leave entitlements unchanged (support handles exceptions). Subscriptions still skip revoke here.
 
-**Follow-up — webhook signature algorithm:** This edge function verifies signatures with HMAC over the **raw `whsec_…` string**. Stripe’s official libraries use the **base64-decoded** secret after the `whsec_` prefix. A probe with Stripe-style (b64) signing returned `400 invalid_signature`; raw-string signing returned `200`. After real test refunds, Stripe still showed `pending_webhooks: 1` on events — native Dashboard delivery may be failing verification. Fix `verifyStripeSignature` to match Stripe’s algorithm (and keep test coverage) so live/test Dashboard deliveries succeed without manual signed posts.
+**Webhook signature algorithm — DONE (2026-11-11):** `verifyStripeSignature` now HMACs with Stripe’s official key bytes (base64 after `whsec_`), accepts multiple `v1` signatures, and keeps a raw-UTF-8 `whsec_…` fallback for older manual probes.
 
-**Related code:** `supabase/functions/stripe-webhook/index.ts` → `handleRefund`.
+**Related code:** `supabase/functions/stripe-webhook/index.ts` → `verifyStripeSignature`, `handleRefund`.

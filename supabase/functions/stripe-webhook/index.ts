@@ -48,35 +48,69 @@ function grantForSku(sku: CheckoutSku): {
   return { tier: "pro", plan: "update_pass", maxDevices: 1, lifetime: false, updatesOnly: true };
 }
 
+/** Stripe signs with HMAC-SHA256 over `t.payload` using the base64 payload of `whsec_…`. */
+function stripeWebhookKeyBytes(secret: string): Uint8Array {
+  if (secret.startsWith("whsec_")) {
+    const b64 = secret.slice("whsec_".length);
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+  return new TextEncoder().encode(secret);
+}
+
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let ok = 0;
+  for (let i = 0; i < a.length; i += 1) ok |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return ok === 0;
+}
+
+async function hmacHex(keyBytes: Uint8Array, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function verifyStripeSignature(
   payload: string,
   header: string | null,
   secret: string,
 ): Promise<boolean> {
   if (!header) return false;
-  const parts = Object.fromEntries(
-    header.split(",").map((p) => {
-      const [k, v] = p.split("=");
-      return [k, v];
-    }),
-  ) as { t?: string; v1?: string };
-  if (!parts.t || !parts.v1) return false;
-  const signed = `${parts.t}.${payload}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signed));
-  const hex = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  // timing-safe-ish compare
-  if (hex.length !== parts.v1.length) return false;
-  let ok = 0;
-  for (let i = 0; i < hex.length; i += 1) ok |= hex.charCodeAt(i) ^ parts.v1.charCodeAt(i);
-  const age = Math.abs(Date.now() / 1000 - Number(parts.t));
-  return ok === 0 && age < 60 * 5;
+  let timestamp = "";
+  const signatures: string[] = [];
+  for (const part of header.split(",")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const k = part.slice(0, eq).trim();
+    const v = part.slice(eq + 1).trim();
+    if (k === "t") timestamp = v;
+    if (k === "v1" && v) signatures.push(v);
+  }
+  if (!timestamp || signatures.length === 0) return false;
+  const age = Math.abs(Date.now() / 1000 - Number(timestamp));
+  if (!Number.isFinite(age) || age >= 60 * 5) return false;
+
+  const signed = `${timestamp}.${payload}`;
+  // Primary: Stripe official (base64 after whsec_). Fallback: raw UTF-8 of the full secret
+  // so older manual probes / mis-copied secrets still verify during rollout.
+  const candidates = [stripeWebhookKeyBytes(secret)];
+  if (secret.startsWith("whsec_")) {
+    candidates.push(new TextEncoder().encode(secret));
+  }
+  for (const keyBytes of candidates) {
+    const hex = await hmacHex(keyBytes, signed);
+    if (signatures.some((sig) => timingSafeEqualHex(hex, sig))) return true;
+  }
+  return false;
 }
 
 Deno.serve(async (req: Request) => {
@@ -372,7 +406,10 @@ async function handleRefund(
     .maybeSingle();
   if (!row?.user_id) return;
 
-  // Full refund of a lifetime/one-time purchase → revoke. Subscription refunds leave period handling to Stripe events.
+  // Product policy: only *full* refunds revoke one-time Pro / Pro Max.
+  // Partial refunds (`charge.refunded === false`) leave entitlements unchanged —
+  // the customer still paid a non-zero amount; tier changes for partials are support-only.
+  // Subscription plans skip here; Stripe subscription events own period/cancel state.
   const refunded = Boolean(charge.refunded);
   if (!refunded) return;
   if (row.plan === "monthly" || row.plan === "yearly" || row.plan === "trial") return;

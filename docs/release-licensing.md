@@ -117,5 +117,5 @@ Events: `checkout.session.completed`, `customer.subscription.updated`, `customer
 
 ## Verification backlog
 
-- **Stripe refund E2E** — **done (test mode, 2026-11-11):** full Pro refund revokes; monthly skipped; partial refund no-op confirmed. See [backlog.md](./backlog.md). Follow-up: fix webhook signature verify to Stripe’s base64 `whsec_` algorithm so native Stripe deliveries succeed.
+- **Stripe refund E2E** — **done (test mode, 2026-11-11):** full Pro refund revokes; monthly skipped; partial refunds intentionally leave entitlements unchanged. Webhook signatures use Stripe’s base64 `whsec_` algorithm (with raw-secret fallback). See [backlog.md](./backlog.md).
 
