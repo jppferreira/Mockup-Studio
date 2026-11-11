@@ -7,6 +7,25 @@ const APP_NAME = 'mokstudio';
 const AUTH_PROTOCOL = 'mokstudio';
 app.setName(APP_NAME);
 
+const { setupAutoUpdater, isMasBuild } = require('./updater.cjs');
+
+/** Separate app data so MAS and direct-download installs do not clobber each other. */
+function distributionChannel() {
+  if (isMasBuild()) return 'mac_mas';
+  if (process.env.MOCKUP_DISTRIBUTION === 'web') return 'web';
+  return 'mac_direct';
+}
+
+(() => {
+  const channel = distributionChannel();
+  const base = app.getPath('userData');
+  if (channel === 'mac_mas' && !base.endsWith('MAS')) {
+    app.setPath('userData', `${base}-MAS`);
+  } else if (channel === 'mac_direct' && !base.endsWith('-Direct') && process.env.MOCKUP_FORCE_DIRECT_USERDATA === '1') {
+    app.setPath('userData', `${base}-Direct`);
+  }
+})();
+
 const { decodeProjectFile, encodeProjectFile, isProjectFileName } = require('./projectFile.cjs');
 
 /** Absolute path Finder/Explorer asked us to open (macOS can fire before ready). */
@@ -209,7 +228,6 @@ function appIconFile() {
 const { registerAndroidMirrorIpc, stopAndroidMirrorSession } = require('./androidMirror.cjs');
 const { registerBlendConvertIpc } = require('./blendConvert.cjs');
 const { registerCloudLibraryIpc, getLibraryDir } = require('./cloudLibrary.cjs');
-const { setupAutoUpdater } = require('./updater.cjs');
 
 function createWindow() {
   const iconFile = appIconFile();
@@ -627,6 +645,31 @@ app.whenReady().then(() => {
   registerAndroidMirrorIpc(ipcMain);
   registerBlendConvertIpc(ipcMain);
   registerCloudLibraryIpc(ipcMain);
+
+  ipcMain.handle('distribution:channel', () => distributionChannel());
+  ipcMain.on('distribution:channel-sync', (event) => {
+    event.returnValue = distributionChannel();
+  });
+  ipcMain.handle('device:installId', async () => {
+    const file = path.join(app.getPath('userData'), 'install-device-id.txt');
+    try {
+      const existing = (await fs.readFile(file, 'utf8')).trim();
+      if (existing.length >= 16) return existing;
+    } catch {
+      /* create */
+    }
+    const { randomUUID } = require('node:crypto');
+    const next = randomUUID();
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, next, 'utf8');
+    return next;
+  });
+  /** StoreKit bridge lands with the MAS native helper; stub keeps UI wired. */
+  ipcMain.handle('iap:restore', async () => ({
+    ok: false,
+    error: 'StoreKit restore requires the Mac App Store build with the native IAP bridge configured.',
+  }));
+
   setupAutoUpdater();
 
   /** DEV-only: read src/data/shippedTemplates.json so successive promotes accumulate. */

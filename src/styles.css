@@ -8393,6 +8393,82 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
 @media (max-width: 900px) {
   .template-grid { grid-template-columns: 1fr; }
 }
+.account-licence-panel {
+  margin: 1.1rem 0 0.35rem;
+  padding: 0.95rem 1rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--stroke, #2a2d33) 80%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel, #14161a) 88%, transparent);
+}
+
+.account-licence-panel h3,
+.account-licence-panel h4 {
+  margin: 0 0 0.55rem;
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.account-licence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 1rem;
+  margin: 0 0 0.85rem;
+}
+
+.account-licence-grid div {
+  min-width: 0;
+}
+
+.account-licence-grid dt {
+  margin: 0;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.62;
+}
+
+.account-licence-grid dd {
+  margin: 0.12rem 0 0;
+  font-size: 0.88rem;
+  word-break: break-word;
+}
+
+.account-licence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-bottom: 0.65rem;
+}
+
+.account-licence-devices ul {
+  list-style: none;
+  margin: 0 0 0.55rem;
+  padding: 0;
+}
+
+.account-licence-devices li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid color-mix(in srgb, var(--stroke, #2a2d33) 70%, transparent);
+  font-size: 0.84rem;
+}
+
+.account-licence-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  opacity: 0.75;
+  line-height: 1.35;
+}
+
+@media (max-width: 720px) {
+  .account-licence-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .update-banner {
   position: fixed;
   z-index: 80;

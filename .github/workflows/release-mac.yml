@@ -1,0 +1,99 @@
+name: Release macOS (direct)
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish GitHub Release artifacts (dmg, zip, latest-mac.yml)'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc --noEmit
+
+  build-direct:
+    needs: test
+    runs-on: macos-14
+    env:
+      MOCKUP_DISTRIBUTION: mac_direct
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build renderer
+        run: MOCKUP_DISTRIBUTION=mac_direct npm run build
+      - name: Package signed direct Mac build
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            echo "CSC_LINK not set — building unsigned artifacts for CI validation only."
+            MOCKUP_DISTRIBUTION=mac_direct npx electron-builder --config electron-builder.direct.json --mac dmg zip --arm64 -c.mac.identity=null
+          else
+            MOCKUP_DISTRIBUTION=mac_direct npx electron-builder --config electron-builder.direct.json --mac dmg zip --arm64
+          fi
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mokstudio-direct-mac
+          path: |
+            release/direct/*.dmg
+            release/direct/*.zip
+            release/direct/latest-mac.yml
+            release/direct/*.blockmap
+      - name: Publish GitHub Release
+        if: ${{ github.event_name == 'push' || inputs.publish == 'true' }}
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            echo "Skipping publish — signing secrets are required for public releases."
+            exit 0
+          fi
+          MOCKUP_DISTRIBUTION=mac_direct npx electron-builder --config electron-builder.direct.json --mac dmg zip --arm64 --publish always
+
+  build-mas-prep:
+    needs: test
+    runs-on: macos-14
+    env:
+      MOCKUP_DISTRIBUTION: mac_mas
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build renderer (MAS channel)
+        run: MOCKUP_DISTRIBUTION=mac_mas npm run build
+      - name: Note MAS packaging requirements
+        run: |
+          echo "MAS packaging requires App Store distribution cert + build/mas.provisionprofile."
+          echo "Run locally: npm run dist:mac:mas"
+          echo "Do not auto-submit to App Store Connect from CI without explicit approval."

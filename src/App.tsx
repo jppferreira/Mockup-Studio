@@ -33,6 +33,7 @@ import FigmaConnectModal from './components/FigmaConnectModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
 import LicenseModal from './components/LicenseModal';
 import UpdateBanner from './components/UpdateBanner';
+import AccountLicencePanel from './components/AccountLicencePanel';
 import { getCheckoutConfig } from '@shared/checkout';
 import {
   APP_ABOUT_SUMMARY,
@@ -10710,10 +10711,18 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             <div className="modal-head"><div className="modal-icon"><Settings2 size={21} /></div>
               <button className="modal-close" aria-label="Close settings" onClick={() => setHelpOpen(false)}><X size={19} /></button></div>
             <h2 id="help-title">Settings</h2>
-            <p>Theme, shortcuts, and how the studio works.</p>
+            <p>Theme, account, licence, updates, and how the studio works.</p>
             <div className="help-appearance">
               <AccentThemePicker />
             </div>
+            <AccountLicencePanel
+              license={license}
+              onLicenseChange={setLicense}
+              onOpenPlans={() => {
+                setHelpOpen(false);
+                setLicenseOpen(true);
+              }}
+            />
             <div className="help-rows">
               <div><MousePointer2 size={17} /><span>Drag anywhere to orbit the camera — including over a device. Tap empty sky to set the surround colour in Look. Shift+drag slides a device; Alt+drag tumbles it. Right-drag or Space+drag pans the view. Scroll zooms. Rings and arrows still work for precise moves.</span></div>
               <div><ImagePlus size={17} /><span>Drop a screenshot onto the preview, or drop an FBX, DAE, OBJ, glTF, Blend, or C4D file to extract it as a device. Blend uses your local Blender install.</span></div>
@@ -10759,7 +10768,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             <div className="help-legal" id="settings-about">
               <h3>About</h3>
               <p>{APP_ABOUT_SUMMARY}</p>
-              <p>mokstudio · 0.1.0</p>
+              <p>mokstudio · {typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.1.1'}</p>
             </div>
             <div className="help-modal-actions">
               <button
@@ -10842,7 +10851,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         open={feedbackOpen}
         onClose={() => setFeedbackOpen(false)}
         onNotify={notify}
-        appVersion="0.1.0"
+        appVersion={typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.1.1'}
       />
       {templatePickerOpen && (
         <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setTemplatePickerOpen(false); }}>

@@ -6,3 +6,21 @@ verify_jwt = false
 
 [functions.bind-license]
 verify_jwt = false
+
+[functions.create-checkout]
+verify_jwt = false
+
+[functions.billing-portal]
+verify_jwt = false
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.bind-device]
+verify_jwt = false
+
+[functions.issue-offline-entitlement]
+verify_jwt = false
+
+[functions.apple-assn]
+verify_jwt = false
