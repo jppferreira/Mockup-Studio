@@ -101,9 +101,21 @@ Events: `checkout.session.completed`, `customer.subscription.updated`, `customer
 - MAS builds ignore the direct-download two-device seat cap.
 - Offline tokens expire after seven days and revalidate when online.
 
+## Secret hygiene
+
+- Never put `sk_test_` / `sk_live_` on a shell argv, in chat, or in commits.
+- If a secret was exposed, follow **[stripe-secret-rotation.md](./stripe-secret-rotation.md)** (stay on test mode until the live cutover checklist below).
+- Local Stripe REST calls: `./scripts/stripe-api.sh` with `STRIPE_SECRET_KEY` set in the environment.
+
 ## Remaining credential-blocked work
 
+- Rotate any leaked test secret (see stripe-secret-rotation.md), then update Supabase `STRIPE_SECRET_KEY` / `STRIPE_SECRET_KEY_TEST`
 - Fill `STRIPE_SECRET_KEY_LIVE`, `STRIPE_WEBHOOK_SECRET_LIVE`, live price IDs, and `VITE_STRIPE_PUBLISHABLE_KEY_LIVE`, then flip `STRIPE_MODE` / `VITE_STRIPE_MODE` to `live`
 - Apple StoreKit native bridge + production JWS certificate chain validation
 - Notarised CI signing secrets on GitHub Actions
 - Applying the v2 migration + deploying functions to the linked Supabase project (MCP SQL was unauthorized from this agent session — use CLI/dashboard)
+
+## Verification backlog
+
+- **Stripe refund E2E** — **done (test mode, 2026-11-11):** full Pro refund revokes; monthly skipped; partial refund no-op confirmed. See [backlog.md](./backlog.md). Follow-up: fix webhook signature verify to Stripe’s base64 `whsec_` algorithm so native Stripe deliveries succeed.
+

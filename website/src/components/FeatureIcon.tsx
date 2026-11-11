@@ -35,23 +35,25 @@ const FILES: Record<FeatureIlloStyle, Record<FeatureIconId, string>> = {
 };
 
 function assetUrl(file: string) {
-  return `${BASE}${file}?v=8`;
+  // Absolute-from-root URL so nested routes (/pricing, etc.) resolve correctly on Pages.
+  const path = file.replace(/^\//, '');
+  return `${BASE}${path}?v=9`;
 }
 
 const ALT: Record<FeatureIconId, string> = {
-  devices: 'Soft 3D charcoal phone illustration',
-  backgrounds: 'Soft 3D charcoal customizable backdrop panels',
-  lighting: 'Soft 3D charcoal studio light and reflections',
-  motion: 'Soft 3D charcoal phone with orbit rings',
-  templates: 'Soft 3D charcoal template card stack',
-  props: 'Soft 3D charcoal props and multi-device scene',
-  export: 'Soft 3D charcoal export and aspect frames',
-  local: 'Soft 3D charcoal local vault',
+  devices: 'Soft 3D phone illustration',
+  backgrounds: 'Soft 3D customizable backdrop panels',
+  lighting: 'Soft 3D studio light and reflections',
+  motion: 'Soft 3D phone with orbit rings',
+  templates: 'Soft 3D template card stack',
+  props: 'Soft 3D props and multi-device scene',
+  export: 'Soft 3D export and aspect frames',
+  local: 'Soft 3D local vault',
 };
 
 export function FeatureIcon({
   id,
-  style = 'charcoal',
+  style = 'mint',
 }: {
   id: FeatureIconId;
   size?: number;

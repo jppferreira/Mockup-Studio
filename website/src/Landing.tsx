@@ -32,8 +32,9 @@ export function Landing() {
     setBetaSource(source);
     setBetaOpen(true);
   };
-  const [heroLayout, setHeroLayout] = useState<HeroLayout>('stack');
-  const [illoStyle, setIlloStyle] = useState<FeatureIlloStyle>('charcoal');
+  // Mint illos on the dark marketing theme — charcoal assets blend into the background.
+  const illoStyle: FeatureIlloStyle = 'mint';
+  const heroLayout: HeroLayout = 'stack';
 
   return (
     <div className="site" data-theme="dark">
@@ -45,47 +46,6 @@ export function Landing() {
       </div>
 
       <SiteNav onBeta={() => openBeta('nav')} onContact={openContact} />
-
-      <div className="layout-tester-stack" aria-label="Design testers">
-        <div className="layout-tester" role="group" aria-label="Illustration style tester">
-          <span className="layout-tester-label">Illos</span>
-          <button
-            type="button"
-            className={`layout-tester-btn${illoStyle === 'charcoal' ? ' is-active' : ''}`}
-            onClick={() => setIlloStyle('charcoal')}
-            aria-pressed={illoStyle === 'charcoal'}
-          >
-            Charcoal
-          </button>
-          <button
-            type="button"
-            className={`layout-tester-btn${illoStyle === 'mint' ? ' is-active' : ''}`}
-            onClick={() => setIlloStyle('mint')}
-            aria-pressed={illoStyle === 'mint'}
-          >
-            Mint
-          </button>
-        </div>
-        <div className="layout-tester" role="group" aria-label="Hero layout tester">
-          <span className="layout-tester-label">Layout</span>
-          <button
-            type="button"
-            className={`layout-tester-btn${heroLayout === 'stack' ? ' is-active' : ''}`}
-            onClick={() => setHeroLayout('stack')}
-            aria-pressed={heroLayout === 'stack'}
-          >
-            Stacked
-          </button>
-          <button
-            type="button"
-            className={`layout-tester-btn${heroLayout === 'side' ? ' is-active' : ''}`}
-            onClick={() => setHeroLayout('side')}
-            aria-pressed={heroLayout === 'side'}
-          >
-            Side by side
-          </button>
-        </div>
-      </div>
 
       <main id="top">
         <section
