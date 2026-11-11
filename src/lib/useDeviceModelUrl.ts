@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { deviceAssetUrl } from './devices';
+import { bundledLocalModelUrl, isBundledLocalDevice } from './localDeviceModels';
 import {
   peekDeviceModelUrl,
   remoteModelsConfigured,
   resolveDeviceModelUrl,
   warmDeviceModels,
 } from './modelCache';
+import { prefetchDeviceModel } from './prefetchDeviceModel';
 
 type State = {
   url: string | null;
@@ -14,23 +16,28 @@ type State = {
 };
 
 /**
- * Resolve a GLB URL for a catalog device.
- * When Supabase delivery is configured, models download on demand into an encrypted cache.
- * Local public/models paths are only used when remote delivery is not configured — those
- * GLBs are gitignored, so falling back to them after a remote failure blacks out the canvas.
+ * Resolve a loadable GLB URL for a catalog device.
  *
- * Deliberately does not call useGLTF.preload here — parsing a multi‑MB GLB on the main
- * thread belongs to the canvas Suspense tree that actually mounts the mesh. Project-level
- * warming (below) still decrypts/downloads into the blob cache without forcing a parse.
+ * Hybrid delivery:
+ * - Free starters (`FREE_DEVICE_IDS`) → bundled Vite asset URLs (instant, no network).
+ * - Paid catalog → Supabase signed URL → encrypted IDB cache → blob URL.
+ * - When remote delivery is not configured, fall back to `public/models` paths.
+ *
+ * Deliberately does not call useGLTF.preload here — parsing stays with the canvas
+ * Suspense tree that mounts the mesh.
  */
 export function useDeviceModelUrl(
   deviceId: string | undefined,
   fallbackUrl: string | undefined,
 ): State {
-  const localUrl = deviceAssetUrl(fallbackUrl) ?? null;
+  const bundledUrl = bundledLocalModelUrl(deviceId);
+  const localFallback = deviceAssetUrl(fallbackUrl) ?? null;
   const remote = remoteModelsConfigured();
+
   const [state, setState] = useState<State>(() => {
-    if (!remote) return { url: localUrl, loading: false, error: null };
+    // Local free starters resolve synchronously — no loading flash on card tap.
+    if (bundledUrl) return { url: bundledUrl, loading: false, error: null };
+    if (!remote) return { url: localFallback, loading: false, error: null };
     const warm = peekDeviceModelUrl(deviceId);
     if (warm) return { url: warm, loading: false, error: null };
     return {
@@ -46,11 +53,20 @@ export function useDeviceModelUrl(
       return;
     }
 
+    // Path A — bundled free starter (instant).
+    const local = bundledLocalModelUrl(deviceId);
+    if (local) {
+      setState({ url: local, loading: false, error: null });
+      return;
+    }
+
+    // Path B — no Supabase config: relative public/models URL.
     if (!remoteModelsConfigured()) {
       setState({ url: deviceAssetUrl(fallbackUrl) ?? null, loading: false, error: null });
       return;
     }
 
+    // Path C — paid / catalog CDN (signed URL + cache).
     const warm = peekDeviceModelUrl(deviceId);
     if (warm) {
       setState({ url: warm, loading: false, error: null });
@@ -58,11 +74,7 @@ export function useDeviceModelUrl(
     }
 
     let cancelled = false;
-    setState((prev) => (
-      prev.url && !prev.loading && !prev.error
-        ? prev
-        : { ...prev, loading: true, error: null }
-    ));
+    setState({ url: null, loading: true, error: null });
     resolveDeviceModelUrl(deviceId)
       .then((url) => {
         if (cancelled) return;
@@ -71,8 +83,7 @@ export function useDeviceModelUrl(
       .catch((err: unknown) => {
         if (cancelled) return;
         const message = err instanceof Error ? err.message : 'Failed to load device model';
-        // Never fall back to missing public/models GLBs — Vite serves index.html for those
-        // 404s, useGLTF throws, and the whole canvas goes black.
+        console.error('[device-model]', deviceId, message);
         setState({ url: null, loading: false, error: message });
       });
 
@@ -85,14 +96,20 @@ export function useDeviceModelUrl(
 }
 
 /**
- * Decrypt/download project devices into the encrypted blob cache so the open scene
- * can resolve quickly. Does not preload into useGLTF — that parse stays with the
- * canvas that mounts each mesh (avoids duplicate main-thread GLB parses).
+ * Warm project devices before Suspense asks:
+ * - Free starters → meshopt decoder + useGLTF.preload on the bundled URL
+ * - Paid ids → decrypt/download into the encrypted blob cache (+ preload via prefetch)
  */
 export function warmProjectDeviceModels(deviceIds: string[]): void {
-  if (!remoteModelsConfigured()) return;
-  warmDeviceModels(deviceIds);
-  for (const deviceId of deviceIds) {
-    void resolveDeviceModelUrl(deviceId).catch(() => undefined);
+  const unique = [...new Set(deviceIds.filter(Boolean))];
+  if (!unique.length) return;
+
+  const remoteIds = unique.filter((id) => !isBundledLocalDevice(id));
+  if (remoteIds.length && remoteModelsConfigured()) {
+    warmDeviceModels(remoteIds);
+  }
+
+  for (const deviceId of unique) {
+    void prefetchDeviceModel(deviceId);
   }
 }

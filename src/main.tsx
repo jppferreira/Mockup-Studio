@@ -10,6 +10,7 @@ import { installNumberScrub } from './lib/numberScrub';
 import { clearOnboardingComplete, isOnboardingComplete } from './lib/onboarding';
 import { clearStudioTourComplete } from './lib/studioTour';
 import { prepareModelCache } from './lib/modelCache';
+import { warmGltfDecoders } from './lib/gltfDecoders';
 import { getAuthSnapshot } from './lib/supabaseClient';
 import './styles.css';
 
@@ -18,6 +19,8 @@ installNumberScrub();
 applyAccentTheme(readAccentTheme(), readAccentColor());
 // Open IndexedDB + AES key while the splash is up so the first GLB resolve is warm.
 prepareModelCache();
+// Meshopt wasm ready before the first compressed (or drei-default) GLTF parse.
+warmGltfDecoders();
 
 /** Bump when onboarding/tour content changes so returning users see the new flow once. */
 const GUIDE_VERSION = '3';

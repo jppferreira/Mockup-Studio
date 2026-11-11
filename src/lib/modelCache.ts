@@ -11,6 +11,7 @@ import {
   loadLicense,
   modelAccessLicenseKey,
 } from './license';
+import { bundledLocalModelUrl } from './localDeviceModels';
 import {
   isDeviceBlockedOnWeb,
   modelAccessSessionToken,
@@ -160,13 +161,20 @@ async function requestSignedUrl(deviceId: string, licenseKey: string | null): Pr
     }),
   });
   if (response.status === 403) {
-    const payload = await response.json().catch(() => ({})) as { error?: string };
+    const payload = await response.json().catch(() => ({})) as { error?: string; detail?: string };
     if (payload.error === 'license_review_required') {
       throw new Error(
         'This device model is not cleared for browser use yet — open it in the Mac app, or wait for licence review.',
       );
     }
-    throw new Error('This device requires Pro — upgrade to unlock the full library');
+    if (payload.error === 'license_required') {
+      throw new Error(
+        'This device requires Pro — sign in with a linked account or activate your license key to download the model',
+      );
+    }
+    throw new Error(
+      payload.detail || payload.error || 'This device requires Pro — upgrade to unlock the full library',
+    );
   }
   if (!response.ok) {
     const detail = await response.text().catch(() => '');
@@ -182,7 +190,20 @@ async function downloadModel(signedUrl: string): Promise<ArrayBuffer> {
   if (!response.ok) {
     throw new Error(`Model download failed (${response.status})`);
   }
-  return response.arrayBuffer();
+  const bytes = await response.arrayBuffer();
+  assertGlbBytes(bytes, 'download');
+  return bytes;
+}
+
+/** Reject HTML error pages / truncated rows before they hit useGLTF. */
+function assertGlbBytes(bytes: ArrayBuffer, source: string): void {
+  if (bytes.byteLength < 20) {
+    throw new Error(`Model ${source} too small (${bytes.byteLength} bytes)`);
+  }
+  const magic = new TextDecoder().decode(new Uint8Array(bytes, 0, 4));
+  if (magic !== 'glTF') {
+    throw new Error(`Model ${source} is not a GLB (got ${JSON.stringify(magic)})`);
+  }
 }
 
 function toBlobUrl(bytes: ArrayBuffer): string {
@@ -196,11 +217,13 @@ async function readCachedBlobUrl(deviceId: string): Promise<string | null> {
   if (!cached) return null;
   try {
     const plain = await decryptBytes(cached.iv, cached.cipher);
+    assertGlbBytes(plain, 'cache');
     const blobUrl = toBlobUrl(plain);
     liveUrls.set(deviceId, blobUrl);
     return blobUrl;
-  } catch {
-    // Machine-key drift or a truncated write — drop the bad row and re-fetch.
+  } catch (error) {
+    // Machine-key drift, truncated write, or non-GLB junk — drop and re-fetch.
+    console.warn('[model-cache] dropping bad cache row', deviceId, error);
     await idbDelete(key).catch(() => undefined);
     return null;
   }
@@ -229,12 +252,15 @@ export function peekDeviceModelUrl(deviceId: string | undefined): string | null 
 }
 
 /**
- * Resolve a loadable blob: URL for a catalog device GLB.
- * Pro / Pro Max download any catalog model into the encrypted app cache on first use.
- * Free tier may only fetch the starter devices.
+ * Resolve a loadable URL for a catalog device GLB.
+ * Free starters return the bundled Vite asset (no network).
+ * Pro / Pro Max paid catalog models use signed Supabase URLs + encrypted IDB cache.
  */
 export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
-  // Fastest path: already decrypted in this session.
+  const bundled = bundledLocalModelUrl(deviceId);
+  if (bundled) return bundled;
+
+  // Fastest remote path: already decrypted in this session.
   const existing = liveUrls.get(deviceId);
   if (existing) return existing;
 
@@ -279,6 +305,9 @@ export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
     liveUrls.set(deviceId, blobUrl);
     // Return immediately — encrypt/IndexedDB can finish after first paint.
     persistEncrypted(deviceId, plain);
+    if (import.meta.env.DEV || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('perf'))) {
+      console.info('[model-cache] resolved', deviceId, `${(plain.byteLength / 1e6).toFixed(2)} MB`);
+    }
     return blobUrl;
   })();
 
@@ -297,7 +326,8 @@ export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
 export function warmDeviceModels(deviceIds: string[]): void {
   if (!remoteModelsConfigured()) return;
   prepareModelCache();
-  const unique = [...new Set(deviceIds.filter(Boolean))];
+  // Bundled free starters resolve sync — only warm paid/CDN ids.
+  const unique = [...new Set(deviceIds.filter((id) => id && !bundledLocalModelUrl(id)))];
   for (const deviceId of unique) {
     void resolveDeviceModelUrl(deviceId).catch(() => undefined);
   }

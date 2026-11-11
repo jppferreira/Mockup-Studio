@@ -16,11 +16,13 @@ signing/*.pem
 .tools/
 .model-import/
 .model-library/
-# Licensed device meshes — served on demand from private Supabase Storage
+# Licensed / paid catalog meshes — served on demand from private Supabase Storage.
+# Free starters ship from src/assets/device-models (Vite-bundled) instead.
 public/models/*.glb
 public/models/*.gltf
 public/models/*.fbx
 public/models/*.bin
+!src/assets/device-models/
 .env.local
 .env.*.local
 supabase/.temp/

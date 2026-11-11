@@ -32,6 +32,8 @@ export default defineConfig(({ mode }) => {
       __DISTRIBUTION_CHANNEL__: JSON.stringify(env.MOCKUP_DISTRIBUTION || 'web'),
     },
     base: './',
+    // Free starter GLBs are imported with `?url` from src/assets/device-models.
+    assetsInclude: ['**/*.glb'],
     resolve: {
       alias: {
         '@shared': path.resolve(__dirname, 'shared'),
