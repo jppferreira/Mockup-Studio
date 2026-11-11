@@ -1,8 +1,7 @@
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import type * as THREE from 'three';
 import type { SceneLight } from '../types';
 import type { DeviceModel, DevicePlatform, DeviceUv, ScreenSize } from './devices';
-import { bundleMeshFiles, filesForMeshBundle, listMeshFiles } from './meshBundle';
+import { filesForMeshBundle, listMeshFiles } from './meshDrop';
 
 const META_KEY = 'mockup-studio.custom-devices.v1';
 const DB_NAME = 'mockup-studio-custom-devices';
@@ -283,7 +282,8 @@ export interface InspectedModel {
   suggestedGlassMats: string[];
 }
 
-function parseGltfData(data: ArrayBuffer | string): Promise<THREE.Group> {
+async function parseGltfData(data: ArrayBuffer | string): Promise<THREE.Group> {
+  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
   return new Promise((resolve, reject) => {
     const loader = new GLTFLoader();
     loader.parse(
@@ -365,6 +365,7 @@ async function importOneCustomDevice(
   }
 
   const asSceneSet = input.asSceneSet === true;
+  const { bundleMeshFiles } = await import('./meshBundle');
   const bundled = await bundleMeshFiles(files, { keepLights: asSceneSet });
   if (bundled.buffer.byteLength > MAX_BYTES) {
     throw new Error('Model is too large (max 80 MB, including textures).');

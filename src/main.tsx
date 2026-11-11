@@ -35,8 +35,8 @@ function shouldForceGuideReplay(): boolean {
   }
 }
 
-const SPLASH_MIN_MS = 1200;
-const SPLASH_FADE_MS = 420;
+const SPLASH_MIN_MS = 400;
+const SPLASH_FADE_MS = 280;
 
 function dismissSplash(immediate = false) {
   const splash = document.getElementById('app-splash');

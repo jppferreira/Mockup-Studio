@@ -1093,7 +1093,7 @@ import {
 export { isCustomDeviceId };
 
 /** Bump when replacing public/models GLBs so useGLTF / HTTP caches reload textures. */
-export const DEVICE_MODEL_PACK_VERSION = 'texpack3';
+export const DEVICE_MODEL_PACK_VERSION = 'texpack4-meshopt';
 
 /** Cache-bust relative model URLs; leave blob / absolute URLs alone. */
 export function deviceAssetUrl(url: string | undefined): string | undefined {

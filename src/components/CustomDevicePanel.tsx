@@ -8,7 +8,7 @@ import {
   type CustomDeviceMeta,
 } from '../lib/customDevices';
 import { isCustomDeviceId, screenSizeLabel, type DevicePlatform } from '../lib/devices';
-import { CUSTOM_MODEL_ACCEPT } from '../lib/meshBundle';
+import { CUSTOM_MODEL_ACCEPT } from '../lib/meshDrop';
 
 interface Props {
   selectedDeviceId: string;

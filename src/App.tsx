@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
   Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Bot, Box, Camera, Check, ChevronDown, Circle, CircleOff, Cuboid,
@@ -12,7 +12,6 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import AccentThemePicker from './components/AccentThemePicker';
 import AgentChatPanel, { type AgentChatMessage } from './components/AgentChatPanel';
-import AnimationPresetsPanel from './components/AnimationPresetsPanel';
 import AnimationTimeline from './components/AnimationTimeline';
 import ViewAxisGizmo from './components/ViewAxisGizmo';
 import CloudAccountPanel from './components/CloudAccountPanel';
@@ -25,9 +24,13 @@ import TemplateThumb from './components/TemplateThumb';
 import DeviceModelThumb from './components/DeviceModelThumb';
 import CropFocusOverlay from './components/CropFocusOverlay';
 import CustomDevicePanel, { type CustomDevicePanelHandle } from './components/CustomDevicePanel';
-import DeviceCanvas, { type CaptureApi, type DeviceSelectPayload, type MaterialPickPayload, type ViewGesture } from './components/DeviceCanvas';
+import type { CaptureApi, DeviceSelectPayload, MaterialPickPayload, ViewGesture } from './components/DeviceCanvas';
 import { type AnnotationMark } from './components/ModelAnnotations';
 import DualCanvasLayout from './components/DualCanvasLayout';
+
+/** Three.js / R3F studio surface — kept out of the dashboard entry chunk. */
+const DeviceCanvas = lazy(() => import('./components/DeviceCanvas'));
+const AnimationPresetsPanel = lazy(() => import('./components/AnimationPresetsPanel'));
 import FeedbackModal from './components/FeedbackModal';
 import FigmaConnectModal from './components/FigmaConnectModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
@@ -77,7 +80,7 @@ import {
   shipCompositionTemplate,
   subscribeRuntimePromoted,
 } from './lib/shippedTemplates';
-import { collectDroppedFiles, meshDropOffer, type MeshDropOffer } from './lib/meshBundle';
+import { collectDroppedFiles, meshDropOffer, type MeshDropOffer } from './lib/meshDrop';
 import { isPlaceholderScreenshot, placeholderForDevice } from './lib/demo';
 import { TONE_CLAY } from './lib/referenceTones';
 import { recordProjectChange, type ChangeLogEntry } from './lib/changeLog';
@@ -214,11 +217,11 @@ import {
   projectForEnvCanvas, refreshSplitPlaceholders, resolvePublishTarget, setPublishTarget,
 } from './lib/platformEnv';
 import {
-  STILL_FORMATS, VIDEO_CODEC_OPTIONS, VIDEO_FORMATS, codecsForFormats, encodeAnimationVideo,
+  STILL_FORMATS, VIDEO_CODEC_OPTIONS, VIDEO_FORMATS, codecsForFormats,
   isStillExport, isVideoExport, resolveCodecForFormat, stillFormatById, videoFormatById,
   videoFormatsForAlpha, videoSupportsSoundtrack,
   type ExportKind, type StillFormatId, type VideoCodecId, type VideoFormatId,
-} from './lib/videoExport';
+} from './lib/videoExportFormats';
 import {
   MAX_PROJECT_TABS, createProjectTab, tabLabel,
   type ProjectTab,
@@ -5072,6 +5075,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       ? (VIDEO_CODEC_OPTIONS.find((item) => item.id === codec)?.label ?? codec.toUpperCase())
       : null;
     setExportProgress(`Preparing ${platformTag ? `${platformTag} · ` : ''}${formatInfo.label}${codecLabel ? ` · ${codecLabel}` : ''}${scaleLabel !== '1x' ? ` · ${scaleLabel}` : ''}…`);
+    const { encodeAnimationVideo } = await import('./lib/videoExport');
     const blob = await encodeAnimationVideo({
       format,
       width,
@@ -7324,6 +7328,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               className={`canvas-render ${project.background === 'transparent' ? 'transparent-grid' : ''} ${isDualCanvas ? 'is-dual' : ''}`}
               data-tour="canvas"
             >
+              <Suspense fallback={<div className="canvas-render-fallback" aria-busy="true" aria-label="Loading 3D studio" />}>
               {isDualCanvas && iosDisplayProject && androidDisplayProject ? (
                 <DualCanvasLayout
                   ratio={previewAspect?.ratio ?? null}
@@ -7529,6 +7534,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   onPickMaterial={onPickMaterial}
                 />
               )}
+              </Suspense>
               <ProgressiveBlurOverlay
                 top={displayProject.edgeBlurTop ?? false}
                 bottom={displayProject.edgeBlurBottom ?? false}
@@ -8045,14 +8051,16 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           {rightWorkspaceTab === 'presets' ? (
             <div className="right-panel-scroll-shell">
               <div className="inspector-scroll right-presets-scroll">
-                <AnimationPresetsPanel
-                  onApply={applyMotionPreset}
-                  appliedId={appliedMotionPresetId}
-                  deviceId={displaySelected.deviceId}
-                  deviceColor={displaySelected.deviceColor ?? project.deviceColor}
-                  clayMode={displaySelected.clayMode ?? project.clayMode}
-                  screenshot={displaySelected.screenshot ?? null}
-                />
+                <Suspense fallback={<div className="anim-presets-panel" aria-busy="true" aria-label="Loading presets" />}>
+                  <AnimationPresetsPanel
+                    onApply={applyMotionPreset}
+                    appliedId={appliedMotionPresetId}
+                    deviceId={displaySelected.deviceId}
+                    deviceColor={displaySelected.deviceColor ?? project.deviceColor}
+                    clayMode={displaySelected.clayMode ?? project.clayMode}
+                    screenshot={displaySelected.screenshot ?? null}
+                  />
+                </Suspense>
               </div>
               <div className="right-panel-edge-fade" aria-hidden />
             </div>

@@ -37,6 +37,35 @@ export default defineConfig(({ mode }) => {
         '@shared': path.resolve(__dirname, 'shared'),
       },
     },
+    build: {
+      // Keep heavy studio chunks out of the dashboard cold-load preload set.
+      modulePreload: {
+        resolveDependencies(filename, deps) {
+          return deps.filter((dep) => !/(?:^|\/)(?:three|video-export|mesh-loaders|DeviceCanvas|AnimationPresetsPanel)-/.test(dep));
+        },
+      },
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules/three') || id.includes('node_modules/@react-three') || id.includes('node_modules/three-stdlib')) {
+              return 'three';
+            }
+            if (
+              id.includes('node_modules/mp4-muxer')
+              || id.includes('node_modules/webm-muxer')
+              || id.includes('node_modules/gifenc')
+              || id.includes('node_modules/mediabunny')
+            ) {
+              return 'video-export';
+            }
+            if (id.includes('/src/lib/videoExport.ts') || id.includes('/src/lib/videoExport.js')) {
+              return 'video-export';
+            }
+            return undefined;
+          },
+        },
+      },
+    },
     server: {
       port: 5173,
       strictPort: true,
