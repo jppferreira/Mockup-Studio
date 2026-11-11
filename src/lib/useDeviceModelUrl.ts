@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { useGLTF } from '@react-three/drei';
 import { deviceAssetUrl } from './devices';
 import {
   peekDeviceModelUrl,
@@ -19,6 +18,10 @@ type State = {
  * When Supabase delivery is configured, models download on demand into an encrypted cache.
  * Local public/models paths are only used when remote delivery is not configured — those
  * GLBs are gitignored, so falling back to them after a remote failure blacks out the canvas.
+ *
+ * Deliberately does not call useGLTF.preload here — parsing a multi‑MB GLB on the main
+ * thread belongs to the canvas Suspense tree that actually mounts the mesh. Project-level
+ * warming (below) still decrypts/downloads into the blob cache without forcing a parse.
  */
 export function useDeviceModelUrl(
   deviceId: string | undefined,
@@ -51,7 +54,6 @@ export function useDeviceModelUrl(
     const warm = peekDeviceModelUrl(deviceId);
     if (warm) {
       setState({ url: warm, loading: false, error: null });
-      try { useGLTF.preload(warm); } catch { /* ignore */ }
       return;
     }
 
@@ -64,7 +66,6 @@ export function useDeviceModelUrl(
     resolveDeviceModelUrl(deviceId)
       .then((url) => {
         if (cancelled) return;
-        try { useGLTF.preload(url); } catch { /* ignore */ }
         setState({ url, loading: false, error: null });
       })
       .catch((err: unknown) => {
@@ -83,15 +84,15 @@ export function useDeviceModelUrl(
   return state;
 }
 
-/** Start decrypt/download + GLTF parse for the devices in the open project. */
+/**
+ * Decrypt/download project devices into the encrypted blob cache so the open scene
+ * can resolve quickly. Does not preload into useGLTF — that parse stays with the
+ * canvas that mounts each mesh (avoids duplicate main-thread GLB parses).
+ */
 export function warmProjectDeviceModels(deviceIds: string[]): void {
   if (!remoteModelsConfigured()) return;
   warmDeviceModels(deviceIds);
   for (const deviceId of deviceIds) {
-    void resolveDeviceModelUrl(deviceId)
-      .then((url) => {
-        try { useGLTF.preload(url); } catch { /* ignore */ }
-      })
-      .catch(() => undefined);
+    void resolveDeviceModelUrl(deviceId).catch(() => undefined);
   }
 }

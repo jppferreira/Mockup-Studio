@@ -213,15 +213,20 @@ function PresetPreviewScene({
 
 function useCardVisible() {
   const ref = useRef<HTMLDivElement>(null);
-  // Start visible so the first paint mounts a canvas immediately.
-  const [visible, setVisible] = useState(true);
+  // Start hidden so off-screen preset cards do not each fetch/parse the device GLB
+  // (and spin up a WebGL context) on panel open. IntersectionObserver turns them on.
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     const el = ref.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
+    if (!el) return undefined;
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return undefined;
+    }
     const root = el.closest('.inspector-scroll, .right-presets-scroll');
     const observer = new IntersectionObserver(
-      ([entry]) => setVisible(entry.isIntersecting),
+      ([entry]) => setVisible(Boolean(entry?.isIntersecting)),
       { root: root instanceof Element ? root : null, rootMargin: '120px 0px', threshold: 0.01 },
     );
     observer.observe(el);
