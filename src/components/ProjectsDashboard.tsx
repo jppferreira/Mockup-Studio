@@ -55,13 +55,12 @@ import {
 import { formatSyncedClock, lastSyncedStatus, useLastSyncedAt, type SyncConflict } from '../lib/cloudSync';
 import type { RecentScreenshot } from '../lib/recentScreenshots';
 import {
-  templatesByCategory,
+  templatesVisibleForTier,
   type CompositionTemplate,
   type TemplateCategory,
 } from '../lib/templates';
 import type { MockupProject } from '../types';
-import type { LicenseState } from '../lib/license';
-import { isFreeDevice, planLabel } from '../lib/license';
+import { canUseProMaxTemplates, isFreeDevice, planLabel, type LicenseState } from '../lib/license';
 import DeviceModelThumb from './DeviceModelThumb';
 import TemplateThumb, { ProjectThumb } from './TemplateThumb';
 import newProjectArt from '../assets/dashboard/new-project.svg';
@@ -509,9 +508,16 @@ export default function ProjectsDashboard({
     () => filterDevicesByCategory(devices, deviceFilter),
     [devices, deviceFilter],
   );
-  const visibleTemplates = templateCategory === 'saved'
+  const canUseProMaxPack = canUseProMaxTemplates(license.tier) || Boolean(isDeveloperToolset);
+  const effectiveTemplateCategory: TemplateCategory = (
+    templateCategory === 'scenes' && !canUseProMaxPack ? 'devices' : templateCategory
+  );
+  const visibleTemplates = effectiveTemplateCategory === 'saved'
     ? savedCompositions
-    : templatesByCategory(templateCategory);
+    : templatesVisibleForTier(effectiveTemplateCategory, {
+      canUseProMaxPack,
+      includeAll: Boolean(isDeveloperToolset),
+    });
 
   const heading = section === 'projects'
     ? { kicker: 'Workspace', title: 'Your projects', sub: 'Open a project or create something new.' }
@@ -917,9 +923,11 @@ export default function ProjectsDashboard({
                   <button type="button" role="tab" aria-selected={templateCategory === 'devices'} className={templateCategory === 'devices' ? 'is-active' : ''} onClick={() => setTemplateCategory('devices')}>
                     Device layouts
                   </button>
-                  <button type="button" role="tab" aria-selected={templateCategory === 'scenes'} className={templateCategory === 'scenes' ? 'is-active' : ''} onClick={() => setTemplateCategory('scenes')}>
-                    {toolsetSwitchAvailable ? 'Compositions' : 'Pre-compositions'}
-                  </button>
+                  {canUseProMaxPack && (
+                    <button type="button" role="tab" aria-selected={templateCategory === 'scenes'} className={templateCategory === 'scenes' ? 'is-active' : ''} onClick={() => setTemplateCategory('scenes')}>
+                      {toolsetSwitchAvailable ? 'Compositions' : 'Pre-compositions'}
+                    </button>
+                  )}
                   <button type="button" role="tab" aria-selected={templateCategory === 'saved'} className={templateCategory === 'saved' ? 'is-active' : ''} onClick={() => setTemplateCategory('saved')}>
                     Your templates
                   </button>
@@ -938,32 +946,32 @@ export default function ProjectsDashboard({
                   </button>
                 )}
               </div>
-              {templateCategory === 'saved' && visibleTemplates.length === 0 ? (
+              {effectiveTemplateCategory === 'saved' && visibleTemplates.length === 0 ? (
                 <p className="dash-empty">Save as template from the File menu or Transform while a project is open. Signed-in accounts sync templates with your cloud projects.</p>
               ) : (
               <div className="dash-grid">
-                {toolsetSwitchAvailable && templateCategory !== 'saved' && onAddShippedTemplate && (
+                {toolsetSwitchAvailable && effectiveTemplateCategory !== 'saved' && onAddShippedTemplate && (
                   <button
                     type="button"
                     className="dash-template-create"
-                    title={templateCategory === 'scenes' ? 'New composition' : 'New layout'}
-                    aria-label={templateCategory === 'scenes' ? 'New composition' : 'New layout'}
+                    title={effectiveTemplateCategory === 'scenes' ? 'New composition' : 'New layout'}
+                    aria-label={effectiveTemplateCategory === 'scenes' ? 'New composition' : 'New layout'}
                     onClick={() => {
                       if (!isDeveloperToolset) onSetToolset?.('developer');
-                      onAddShippedTemplate(templateCategory === 'scenes' ? 'scenes' : 'devices');
+                      onAddShippedTemplate(effectiveTemplateCategory === 'scenes' ? 'scenes' : 'devices');
                     }}
                   >
                     <img src={iconPlus} alt="" width={28} height={28} />
                     <strong>
-                      {templateCategory === 'scenes' ? 'New composition' : 'New layout'}
+                      {effectiveTemplateCategory === 'scenes' ? 'New composition' : 'New layout'}
                     </strong>
                   </button>
                 )}
                 {visibleTemplates.map((template) => {
                   const menuKey = `template:${template.id}`;
-                  const canManageShipped = Boolean(toolsetSwitchAvailable) && templateCategory !== 'saved';
-                  const canDelete = templateCategory === 'saved' || canManageShipped;
-                  const canRename = templateCategory === 'saved' || canManageShipped;
+                  const canManageShipped = Boolean(toolsetSwitchAvailable) && effectiveTemplateCategory !== 'saved';
+                  const canDelete = effectiveTemplateCategory === 'saved' || canManageShipped;
+                  const canRename = effectiveTemplateCategory === 'saved' || canManageShipped;
                   return (
                     <article
                       key={template.id}

@@ -3,18 +3,14 @@
  * Secret key stays server-side. Client only receives the hosted Checkout URL.
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import {
+  allCheckoutSkus,
+  stripeMode,
+  stripePriceId,
+  stripeSecretKey,
+  type CheckoutSku,
+} from "../_shared/stripeConfig.ts";
 import { corsHeaders, json, recordEvent, requireUser } from "../_shared/supabaseAdmin.ts";
-
-type CheckoutSku = "pro" | "pro_max" | "update_pass" | "monthly" | "yearly" | "lifetime";
-
-const SKU_ENV: Record<CheckoutSku, string> = {
-  pro: "STRIPE_PRICE_PRO",
-  pro_max: "STRIPE_PRICE_PRO_MAX",
-  update_pass: "STRIPE_PRICE_UPDATE_PASS",
-  monthly: "STRIPE_PRICE_MONTHLY",
-  yearly: "STRIPE_PRICE_YEARLY",
-  lifetime: "STRIPE_PRICE_LIFETIME",
-};
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -23,8 +19,9 @@ Deno.serve(async (req: Request) => {
   const auth = await requireUser(req);
   if (auth instanceof Response) return auth;
 
-  const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY");
-  if (!stripeSecret) return json({ error: "stripe_not_configured" }, 503);
+  const mode = stripeMode();
+  const stripeSecret = stripeSecretKey(mode);
+  if (!stripeSecret) return json({ error: "stripe_not_configured", mode }, 503);
 
   let body: { sku?: string; successUrl?: string; cancelUrl?: string };
   try {
@@ -34,10 +31,10 @@ Deno.serve(async (req: Request) => {
   }
 
   const sku = String(body.sku ?? "pro") as CheckoutSku;
-  if (!(sku in SKU_ENV)) return json({ error: "invalid_sku" }, 400);
+  if (!allCheckoutSkus().includes(sku)) return json({ error: "invalid_sku" }, 400);
 
-  const priceId = Deno.env.get(SKU_ENV[sku]);
-  if (!priceId) return json({ error: "price_not_configured", sku }, 503);
+  const priceId = stripePriceId(sku, mode);
+  if (!priceId) return json({ error: "price_not_configured", sku, mode }, 503);
 
   const siteUrl = (Deno.env.get("SITE_URL") || "https://mokstudio.io").replace(/\/$/, "");
   const successUrl = String(body.successUrl || `${siteUrl}/thanks?session_id={CHECKOUT_SESSION_ID}`);
@@ -50,10 +47,10 @@ Deno.serve(async (req: Request) => {
     .eq("user_id", auth.userId)
     .maybeSingle();
 
-  const mode = sku === "monthly" || sku === "yearly" ? "subscription" : "payment";
+  const checkoutMode = sku === "monthly" || sku === "yearly" ? "subscription" : "payment";
 
   const form = new URLSearchParams();
-  form.set("mode", mode);
+  form.set("mode", checkoutMode);
   form.set("success_url", successUrl);
   form.set("cancel_url", cancelUrl);
   form.set("client_reference_id", auth.userId);
@@ -67,7 +64,7 @@ Deno.serve(async (req: Request) => {
     form.set("customer", existing.stripe_customer_id);
     form.delete("customer_email");
   }
-  if (mode === "subscription") {
+  if (checkoutMode === "subscription") {
     form.set("subscription_data[metadata][supabase_user_id]", auth.userId);
     form.set("subscription_data[metadata][sku]", sku);
   } else {

@@ -6,6 +6,7 @@
 
 import { ensureFreshSession, getSupabase, getAuthSnapshot } from './supabaseClient';
 import {
+  canUseProMaxTemplates,
   isDeviceUnlocked,
   loadLicense,
   modelAccessLicenseKey,
@@ -14,6 +15,8 @@ import {
   type LicenseState,
   type LicenseTier,
 } from './license';
+
+export { canUseProMaxTemplates };
 import { isNeedsReviewDeviceId } from '@shared/deviceLicenseGate';
 import { isEntitlementActive, type EntitlementPlan, type EntitlementProvider, type EntitlementStatus } from '@shared/entitlementModel';
 import { getDistributionChannel, supportsDeviceSeats } from './distribution';

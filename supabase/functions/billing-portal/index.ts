@@ -2,6 +2,7 @@
  * Stripe Customer Portal session for the signed-in Mokup Studio account.
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { stripeMode, stripeSecretKey } from "../_shared/stripeConfig.ts";
 import { corsHeaders, json, requireUser } from "../_shared/supabaseAdmin.ts";
 
 Deno.serve(async (req: Request) => {
@@ -11,8 +12,9 @@ Deno.serve(async (req: Request) => {
   const auth = await requireUser(req);
   if (auth instanceof Response) return auth;
 
-  const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY");
-  if (!stripeSecret) return json({ error: "stripe_not_configured" }, 503);
+  const mode = stripeMode();
+  const stripeSecret = stripeSecretKey(mode);
+  if (!stripeSecret) return json({ error: "stripe_not_configured", mode }, 503);
 
   const { data: row } = await auth.admin
     .from("mokstudio_entitlements")

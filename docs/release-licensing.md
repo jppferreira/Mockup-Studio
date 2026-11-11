@@ -24,12 +24,17 @@ Apple subscriptions stay managed in Apple; Stripe subscriptions stay managed in 
 
 ### Supabase Edge Functions
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `STRIPE_SECRET_KEY`
-- `STRIPE_WEBHOOK_SECRET`
-- `STRIPE_PRICE_PRO` / `STRIPE_PRICE_PRO_MAX` / `STRIPE_PRICE_UPDATE_PASS`
-- `STRIPE_PRICE_MONTHLY` / `STRIPE_PRICE_YEARLY` / `STRIPE_PRICE_LIFETIME`
+- `STRIPE_MODE` (`test` | `live`; default `test`)
+- `STRIPE_SECRET_KEY_TEST` / `STRIPE_SECRET_KEY_LIVE` (live required when mode is live; legacy `STRIPE_SECRET_KEY` still works for test)
+- `STRIPE_WEBHOOK_SECRET_TEST` / `STRIPE_WEBHOOK_SECRET_LIVE` (legacy `STRIPE_WEBHOOK_SECRET` for test)
+- `STRIPE_PUBLISHABLE_KEY_TEST` / `STRIPE_PUBLISHABLE_KEY_LIVE` (optional server-side; website uses `VITE_*`)
+- `STRIPE_PRICE_*_TEST` / `STRIPE_PRICE_*_LIVE` (or legacy unprefixed `STRIPE_PRICE_PRO` / `_PRO_MAX` / `_UPDATE_PASS` / `_MONTHLY` / `_YEARLY` / `_LIFETIME`)
 - `SITE_URL`
 - `LICENSE_PRIVATE_KEY_PEM` (offline entitlement signing; same key family as licence keys)
+
+### Marketing website (`website/.env.*`)
+- `VITE_STRIPE_MODE` (`test` | `live`; default `test`)
+- `VITE_STRIPE_PUBLISHABLE_KEY_TEST` / `VITE_STRIPE_PUBLISHABLE_KEY_LIVE`
 
 ### Direct Mac signing & updates
 - Developer ID Application certificate (`CSC_LINK` / Keychain)
@@ -98,7 +103,7 @@ Events: `checkout.session.completed`, `customer.subscription.updated`, `customer
 
 ## Remaining credential-blocked work
 
-- Live Stripe price IDs + webhook signing secret in the Supabase project
+- Fill `STRIPE_SECRET_KEY_LIVE`, `STRIPE_WEBHOOK_SECRET_LIVE`, live price IDs, and `VITE_STRIPE_PUBLISHABLE_KEY_LIVE`, then flip `STRIPE_MODE` / `VITE_STRIPE_MODE` to `live`
 - Apple StoreKit native bridge + production JWS certificate chain validation
 - Notarised CI signing secrets on GitHub Actions
 - Applying the v2 migration + deploying functions to the linked Supabase project (MCP SQL was unauthorized from this agent session — use CLI/dashboard)

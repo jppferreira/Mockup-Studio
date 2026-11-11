@@ -50,7 +50,7 @@ export function tierFromPlan(plan: EntitlementPlan): 'free' | 'pro' | 'pro_max' 
 
 export function defaultMaxDevicesForTier(tier: 'free' | 'pro' | 'pro_max'): number {
   if (tier === 'pro_max') return 2;
-  if (tier === 'pro') return 2;
+  if (tier === 'pro') return 1;
   return 0;
 }
 
@@ -91,16 +91,16 @@ export function stripeSkuToGrant(sku: CheckoutSku): {
     return { tier: 'pro_max', plan: 'pro_max', maxDevices: 2, lifetime: true };
   }
   if (sku === 'lifetime' || sku === 'pro') {
-    return { tier: 'pro', plan: sku === 'lifetime' ? 'lifetime' : 'pro', maxDevices: 2, lifetime: true };
+    return { tier: 'pro', plan: sku === 'lifetime' ? 'lifetime' : 'pro', maxDevices: 1, lifetime: true };
   }
   if (sku === 'yearly') {
-    return { tier: 'pro', plan: 'yearly', maxDevices: 2, lifetime: false };
+    return { tier: 'pro', plan: 'yearly', maxDevices: 1, lifetime: false };
   }
   if (sku === 'monthly') {
-    return { tier: 'pro', plan: 'monthly', maxDevices: 2, lifetime: false };
+    return { tier: 'pro', plan: 'monthly', maxDevices: 1, lifetime: false };
   }
   // update_pass does not raise tier by itself — callers extend updates_until.
-  return { tier: 'pro', plan: 'update_pass', maxDevices: 2, lifetime: false };
+  return { tier: 'pro', plan: 'update_pass', maxDevices: 1, lifetime: false };
 }
 
 /** Offline entitlement grace: 7 days. */

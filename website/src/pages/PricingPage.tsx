@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom';
-import { isCheckoutConfigured } from '@shared/checkout';
 import {
   BUYER_GUIDE,
   PLANS,
@@ -9,11 +8,11 @@ import {
 import { CheckoutButton } from '../components/CheckoutButton';
 import { Reveal } from '../components/Reveal';
 import { SiteChrome } from '../components/SiteChrome';
+import { isWebsiteAuthConfigured } from '../lib/supabaseAuth';
 
 export function PricingPage() {
   const matrixRows = PLANS[0].features.map((f) => f.label);
-  const liveCheckout =
-    isCheckoutConfigured('pro') || isCheckoutConfigured('pro_max') || isCheckoutConfigured('update_pass');
+  const liveCheckout = isWebsiteAuthConfigured();
 
   return (
     <SiteChrome>
@@ -135,8 +134,8 @@ export function PricingPage() {
         <Reveal as="section" className="page-note" id="checkout">
           <p>
             {liveCheckout
-              ? 'Checkout opens in a secure payment window. After purchase you get a license key by email — paste it in the Mac app under License. Prices in GBP; VAT may apply at checkout.'
-              : 'Payment links are not configured yet — Buy buttons email sales for now. Add VITE_CHECKOUT_PRO_URL / VITE_CHECKOUT_PRO_MAX_URL from .env.example to go live. Prices in GBP; VAT may apply at checkout.'}
+              ? 'Buy opens a short email sign-in (or uses your existing mokstudio session), then Stripe Checkout. After payment, Pro unlocks on your account in the Mac app and web studio. Prices in GBP; VAT may apply at checkout.'
+              : 'Stripe checkout needs VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY on the website. Prices in GBP; VAT may apply at checkout.'}
           </p>
         </Reveal>
 

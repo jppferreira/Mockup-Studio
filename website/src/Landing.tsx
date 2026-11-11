@@ -10,7 +10,7 @@ import { CheckoutButton } from './components/CheckoutButton';
 import { BetaSignupForm } from './components/BetaSignupForm';
 import { BetaSignupModal } from './components/BetaSignupModal';
 import { FeatureIcon, type FeatureIlloStyle } from './components/FeatureIcon';
-import { FEATURES, HEADLINE_OPTIONS, STEPS } from './content';
+import { FEATURES, HEADLINE_OPTIONS, SHOW_RELEASE_DOWNLOADS, STEPS } from './content';
 import { useHeroTilt } from './hooks/useHeroTilt';
 import { useParallax } from './hooks/useParallax';
 
@@ -246,7 +246,7 @@ export function Landing() {
           <Link to="/features">Features</Link>
           <Link to="/workflow">Workflow</Link>
           <Link to="/pricing">Pricing</Link>
-          <Link to="/releases">Releases</Link>
+          {SHOW_RELEASE_DOWNLOADS ? <Link to="/releases">Releases</Link> : null}
           <Link to="/privacy">Privacy</Link>
           <Link to="/terms">Terms</Link>
           <Link to="/credits">Credits</Link>

@@ -172,6 +172,7 @@ import {
   LICENSING_DISABLED,
   PLAN_PRICES_GBP,
   canExportVideo,
+  canUseProMaxTemplates,
   formatGbp,
   isFreeDevice,
   isResolutionAllowed,
@@ -179,6 +180,7 @@ import {
   maxDevicesFor,
   planLabel,
   upgradeCopy,
+  upgradeCopyProMax,
   type LicenseState,
 } from './lib/license';
 import { canUseDevice as isDeviceUnlocked, syncLicenseWithAccount } from './lib/entitlements';
@@ -265,7 +267,8 @@ import {
   type SavedAngle, type SavedAssetSize,
 } from './lib/userLibrary';
 import {
-  applyCompositionKeepingDevices, getCompositionTemplate, isDevEditableTemplateId, projectFromTemplate, templatesByCategory,
+  applyCompositionKeepingDevices, getCompositionTemplate, isDevEditableTemplateId, isProMaxPackTemplate,
+  projectFromTemplate, templatesVisibleForTier,
   type CompositionTemplate, type TemplateCategory,
 } from './lib/templates';
 import {
@@ -3128,6 +3131,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const startFromTemplate = (template: CompositionTemplate) => {
+    if (
+      isProMaxPackTemplate(template)
+      && !canUseProMaxTemplates(license.tier)
+      && !isDeveloperToolset
+    ) {
+      notify(upgradeCopyProMax('The Pro Max template & motion pack'));
+      setLicenseOpen(true);
+      return;
+    }
     const needsPro = template.devices.length > 1
       || template.compositionMode === 'split'
       || template.devices.some((d) => !isDeviceUnlocked(license.tier, d.deviceId));
@@ -6274,13 +6286,20 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     setTemplatesTick((n) => n + 1);
   }), []);
 
+  const canUseProMaxPack = canUseProMaxTemplates(license.tier) || isDeveloperToolset;
   const sceneCompositions = useMemo(
-    () => templatesByCategory('scenes'),
-    [templatesTick],
+    () => templatesVisibleForTier('scenes', {
+      canUseProMaxPack,
+      includeAll: isDeveloperToolset,
+    }),
+    [templatesTick, canUseProMaxPack, isDeveloperToolset],
   );
   const deviceCompositions = useMemo(
-    () => templatesByCategory('devices'),
-    [templatesTick],
+    () => templatesVisibleForTier('devices', {
+      canUseProMaxPack,
+      includeAll: isDeveloperToolset,
+    }),
+    [templatesTick, canUseProMaxPack, isDeveloperToolset],
   );
   const mainShipTargets = useMemo(
     () => [...deviceCompositions, ...sceneCompositions],
@@ -6317,6 +6336,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const onApplyComposition = (template: CompositionTemplate) => {
     const tabId = workspace.activeId;
     if (!tabId) return;
+    if (
+      isProMaxPackTemplate(template)
+      && !canUseProMaxTemplates(license.tier)
+      && !isDeveloperToolset
+    ) {
+      notify(upgradeCopyProMax('The Pro Max template & motion pack'));
+      setLicenseOpen(true);
+      return;
+    }
     applyTemplateCameraOrbit(template);
     // Dev can override the phones in the open file; User keeps current models.
     const replaceDevices = isDeveloperToolset && template.category !== 'scenes';
@@ -10911,15 +10939,17 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               >
                 <Smartphone size={14} /> Device templates
               </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={templateCategory === 'scenes'}
-                className={templateCategory === 'scenes' ? 'active' : ''}
-                onClick={() => setTemplateCategory('scenes')}
-              >
-                <Sparkles size={14} /> Pre-compositions
-              </button>
+              {canUseProMaxPack && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={templateCategory === 'scenes'}
+                  className={templateCategory === 'scenes' ? 'active' : ''}
+                  onClick={() => setTemplateCategory('scenes')}
+                >
+                  <Sparkles size={14} /> Pre-compositions
+                </button>
+              )}
               <button
                 type="button"
                 role="tab"
@@ -11000,7 +11030,13 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               </div>
             )}
             <div className="template-grid">
-              {(templateCategory === 'saved' ? savedCompositions : templatesByCategory(templateCategory)).map((template) => {
+              {(templateCategory === 'saved'
+                ? savedCompositions
+                : templatesVisibleForTier(templateCategory, {
+                  canUseProMaxPack,
+                  includeAll: isDeveloperToolset,
+                })
+              ).map((template) => {
                 const editable = isDeveloperToolset && templateCategory !== 'saved';
                 return (
                   <div key={template.id} className={`template-card-wrap${editable ? ' is-dev-editable' : ''}`}>

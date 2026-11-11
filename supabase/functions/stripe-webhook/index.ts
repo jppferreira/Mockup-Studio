@@ -4,27 +4,21 @@
  */
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import {
+  allCheckoutSkus,
+  stripeMode,
+  stripePriceId,
+  stripeSecretKey,
+  stripeWebhookSecret,
+  type CheckoutSku,
+} from "../_shared/stripeConfig.ts";
 import { corsHeaders, json, recordEvent } from "../_shared/supabaseAdmin.ts";
-
-type CheckoutSku = "pro" | "pro_max" | "update_pass" | "monthly" | "yearly" | "lifetime";
-
-function envPrice(sku: CheckoutSku): string | undefined {
-  const map: Record<CheckoutSku, string> = {
-    pro: "STRIPE_PRICE_PRO",
-    pro_max: "STRIPE_PRICE_PRO_MAX",
-    update_pass: "STRIPE_PRICE_UPDATE_PASS",
-    monthly: "STRIPE_PRICE_MONTHLY",
-    yearly: "STRIPE_PRICE_YEARLY",
-    lifetime: "STRIPE_PRICE_LIFETIME",
-  };
-  return Deno.env.get(map[sku]) || undefined;
-}
 
 function skuFromPriceId(priceId: string | null | undefined): CheckoutSku | null {
   if (!priceId) return null;
-  const entries: CheckoutSku[] = ["pro", "pro_max", "update_pass", "monthly", "yearly", "lifetime"];
-  for (const sku of entries) {
-    if (envPrice(sku) === priceId) return sku;
+  const mode = stripeMode();
+  for (const sku of allCheckoutSkus()) {
+    if (stripePriceId(sku, mode) === priceId) return sku;
   }
   return null;
 }
@@ -40,18 +34,18 @@ function grantForSku(sku: CheckoutSku): {
     return { tier: "pro_max", plan: "pro_max", maxDevices: 2, lifetime: true, updatesOnly: false };
   }
   if (sku === "lifetime") {
-    return { tier: "pro", plan: "lifetime", maxDevices: 2, lifetime: true, updatesOnly: false };
+    return { tier: "pro", plan: "lifetime", maxDevices: 1, lifetime: true, updatesOnly: false };
   }
   if (sku === "pro") {
-    return { tier: "pro", plan: "pro", maxDevices: 2, lifetime: true, updatesOnly: false };
+    return { tier: "pro", plan: "pro", maxDevices: 1, lifetime: true, updatesOnly: false };
   }
   if (sku === "yearly") {
-    return { tier: "pro", plan: "yearly", maxDevices: 2, lifetime: false, updatesOnly: false };
+    return { tier: "pro", plan: "yearly", maxDevices: 1, lifetime: false, updatesOnly: false };
   }
   if (sku === "monthly") {
-    return { tier: "pro", plan: "monthly", maxDevices: 2, lifetime: false, updatesOnly: false };
+    return { tier: "pro", plan: "monthly", maxDevices: 1, lifetime: false, updatesOnly: false };
   }
-  return { tier: "pro", plan: "update_pass", maxDevices: 2, lifetime: false, updatesOnly: true };
+  return { tier: "pro", plan: "update_pass", maxDevices: 1, lifetime: false, updatesOnly: true };
 }
 
 async function verifyStripeSignature(
@@ -89,12 +83,13 @@ Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
-  const stripeSecret = Deno.env.get("STRIPE_SECRET_KEY");
-  const webhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET");
+  const mode = stripeMode();
+  const stripeSecret = stripeSecretKey(mode);
+  const webhookSecret = stripeWebhookSecret(mode);
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!stripeSecret || !webhookSecret || !supabaseUrl || !serviceKey) {
-    return json({ error: "server_misconfigured" }, 500);
+    return json({ error: "server_misconfigured", mode }, 500);
   }
 
   const payload = await req.text();
@@ -205,7 +200,7 @@ async function handleCheckoutCompleted(
       stripe_checkout_session_id: sessionId,
       updates_until: next.toISOString(),
       activated_at: now.toISOString(),
-      max_devices: current?.max_devices ?? 2,
+      max_devices: current?.max_devices ?? 1,
       period_end: null,
     }, { onConflict: "user_id" });
     await recordEvent(admin, {

@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { BetaSignupModal } from './BetaSignupModal';
 import { ContactModal, type ContactIntent } from './ContactModal';
+import { SHOW_RELEASE_DOWNLOADS } from '../content';
 import { Logo } from './Logo';
 import { SiteNav } from './SiteNav';
 import { useParallax } from '../hooks/useParallax';
@@ -40,7 +41,7 @@ export function SiteChrome({ children }: { children: ReactNode }) {
           <Link to="/features">Features</Link>
           <Link to="/workflow">Workflow</Link>
           <Link to="/pricing">Pricing</Link>
-          <Link to="/releases">Releases</Link>
+          {SHOW_RELEASE_DOWNLOADS ? <Link to="/releases">Releases</Link> : null}
           <Link to="/privacy">Privacy</Link>
           <Link to="/terms">Terms</Link>
           <Link to="/credits">Credits</Link>

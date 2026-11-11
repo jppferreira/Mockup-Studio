@@ -13,7 +13,7 @@ import {
   type AccountEntitlement,
   type DeviceSeat,
 } from '../lib/entitlements';
-import { loadLicense, planLabel, type LicenseState } from '../lib/license';
+import { formatGbp, loadLicense, planLabel, PLAN_PRICES_GBP, type LicenseState } from '../lib/license';
 import {
   getDistributionChannel,
   supportsAppleIap,
@@ -22,6 +22,7 @@ import {
   supportsStripeBilling,
 } from '../lib/distribution';
 import { openBillingPortal, startStripeCheckout } from '../lib/stripeCheckout';
+import type { CheckoutSku } from '@shared/entitlementModel';
 
 type UpdateStatus = {
   state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error' | 'up-to-date';
@@ -121,6 +122,25 @@ export default function AccountLicencePanel({
         ? `Updates included until ${new Date(license.updatesUntil).toLocaleDateString()}`
         : null;
 
+  const startCheckout = async (sku: CheckoutSku) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      if (!email) {
+        setMessage('Sign in to continue to checkout.');
+        return;
+      }
+      const result = await startStripeCheckout(sku);
+      if (!result.ok) {
+        setMessage(result.error);
+        return;
+      }
+      await openUrl(result.url);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="account-licence-panel" aria-label="Account and licence">
       <h3>Account &amp; licence</h3>
@@ -170,21 +190,25 @@ export default function AccountLicencePanel({
               type="button"
               className="button subtle-button"
               disabled={busy || !email}
-              onClick={() => {
-                void (async () => {
-                  setBusy(true);
-                  setMessage(null);
-                  const result = await startStripeCheckout('pro');
-                  setBusy(false);
-                  if (!result.ok) {
-                    setMessage(result.error);
-                    return;
-                  }
-                  await openUrl(result.url);
-                })();
-              }}
+              onClick={() => void startCheckout('pro')}
             >
-              Upgrade with Stripe
+              Upgrade to Pro · {formatGbp(PLAN_PRICES_GBP.pro)}
+            </button>
+            <button
+              type="button"
+              className="button subtle-button"
+              disabled={busy || !email}
+              onClick={() => void startCheckout('pro_max')}
+            >
+              Upgrade to Pro Max · {formatGbp(PLAN_PRICES_GBP.pro_max)}
+            </button>
+            <button
+              type="button"
+              className="button subtle-button"
+              disabled={busy || !email}
+              onClick={() => void startCheckout('update_pass')}
+            >
+              Update Pass · {formatGbp(PLAN_PRICES_GBP.update_pass)}/year
             </button>
             <button
               type="button"

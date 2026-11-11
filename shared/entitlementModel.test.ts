@@ -26,15 +26,16 @@ describe('entitlementModel', () => {
     expect(isEntitlementActive({ tier: 'pro', status: 'revoked', periodEnd: null })).toBe(false);
   });
 
-  it('defaults dual seats for paid direct-download tiers', () => {
-    expect(defaultMaxDevicesForTier('pro')).toBe(2);
+  it('defaults one seat for Pro and two for Pro Max', () => {
+    expect(defaultMaxDevicesForTier('pro')).toBe(1);
     expect(defaultMaxDevicesForTier('pro_max')).toBe(2);
     expect(defaultMaxDevicesForTier('free')).toBe(0);
   });
 
   it('maps stripe SKUs', () => {
-    expect(stripeSkuToGrant('yearly')).toMatchObject({ plan: 'yearly', lifetime: false });
-    expect(stripeSkuToGrant('lifetime')).toMatchObject({ plan: 'lifetime', lifetime: true });
-    expect(stripeSkuToGrant('pro_max')).toMatchObject({ tier: 'pro_max' });
+    expect(stripeSkuToGrant('yearly')).toMatchObject({ plan: 'yearly', lifetime: false, maxDevices: 1 });
+    expect(stripeSkuToGrant('lifetime')).toMatchObject({ plan: 'lifetime', lifetime: true, maxDevices: 1 });
+    expect(stripeSkuToGrant('pro')).toMatchObject({ tier: 'pro', maxDevices: 1 });
+    expect(stripeSkuToGrant('pro_max')).toMatchObject({ tier: 'pro_max', maxDevices: 2 });
   });
 });

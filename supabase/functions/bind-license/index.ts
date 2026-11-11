@@ -117,7 +117,7 @@ Deno.serve(async (req: Request) => {
         activated_at: new Date().toISOString(),
         period_end: null,
         canceled_at: null,
-        max_devices: verified.tier === "pro_max" ? 2 : 2,
+        max_devices: verified.tier === "pro_max" ? 2 : 1,
       },
       { onConflict: "user_id" },
     )

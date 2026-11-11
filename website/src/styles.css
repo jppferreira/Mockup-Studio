@@ -111,6 +111,78 @@ body {
   overflow-x: clip;
 }
 
+/* Launch password gate — sits in front of every marketing route */
+.password-gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.password-gate-card {
+  width: min(100%, 360px);
+  display: grid;
+  gap: 12px;
+}
+
+.password-gate-brand {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: var(--muted);
+}
+
+.password-gate-card h1 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.password-gate-copy {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.password-gate-card input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--ink);
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.password-gate-card button {
+  border: 0;
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--bg);
+  padding: 12px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.password-gate-card button:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.password-gate-error {
+  margin: 0;
+  color: #f87171;
+  font-size: 0.9rem;
+}
+
 a {
   color: inherit;
   text-decoration: none;
@@ -2737,6 +2809,13 @@ a {
   margin-top: auto;
   justify-content: center;
   text-align: center;
+}
+
+.checkout-button-error {
+  margin: 8px 0 0;
+  color: #b42318;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .update-pass-inline {

@@ -172,13 +172,13 @@ function mapAppleProduct(productId: string): {
     return { tier: "pro_max", plan: "pro_max", maxDevices: 2, lifetime: true };
   }
   if (id.includes("lifetime")) {
-    return { tier: "pro", plan: "lifetime", maxDevices: 2, lifetime: true };
+    return { tier: "pro", plan: "lifetime", maxDevices: 1, lifetime: true };
   }
   if (id.includes("year")) {
-    return { tier: "pro", plan: "yearly", maxDevices: 2, lifetime: false };
+    return { tier: "pro", plan: "yearly", maxDevices: 1, lifetime: false };
   }
   if (id.includes("month")) {
-    return { tier: "pro", plan: "monthly", maxDevices: 2, lifetime: false };
+    return { tier: "pro", plan: "monthly", maxDevices: 1, lifetime: false };
   }
-  return { tier: "pro", plan: "pro", maxDevices: 2, lifetime: true };
+  return { tier: "pro", plan: "pro", maxDevices: 1, lifetime: true };
 }
