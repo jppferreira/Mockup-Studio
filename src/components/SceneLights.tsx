@@ -25,9 +25,12 @@ function useAdaptiveShadowMap(
   useEffect(() => {
     const light = lightRef.current as (THREE.Light & { shadow?: THREE.LightShadow }) | null;
     if (!light?.shadow || !castShadow) return;
-    const size = resolveSceneLightShadowMapSize(mode, false, gl.capabilities.maxTextureSize || 2048);
+    // Stable size across interactive↔studio — avoid atlas thrash on orbit.
+    const size = resolveSceneLightShadowMapSize('studio', false, gl.capabilities.maxTextureSize || 2048);
     light.shadow.mapSize.set(size, size);
-    light.shadow.needsUpdate = true;
+    light.shadow.autoUpdate = mode !== 'interactive';
+    light.shadow.needsUpdate = mode !== 'interactive';
+    light.shadow.blurSamples = 4;
     if (light.shadow.map && (light.shadow.map.width !== size || light.shadow.map.height !== size)) {
       light.shadow.map.dispose();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

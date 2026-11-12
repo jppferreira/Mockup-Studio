@@ -10865,6 +10865,57 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
   font-size: 13px;
   line-height: 18px;
 }
+.dash-select-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.dash-select-bar > span {
+  color: var(--dash-text);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 600;
+}
+.dash-select-cancel,
+.dash-select-delete {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--dash-border);
+  background: var(--dash-panel-2);
+  color: var(--dash-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  cursor: pointer;
+}
+.dash-select-cancel:hover {
+  border-color: #4c5362;
+}
+.dash-select-delete {
+  border-color: transparent;
+  background: #5a2d2d;
+  color: #f0b4b4;
+}
+.dash-select-delete:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.dash-select-delete:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.dash-select-hint {
+  max-width: 1201px;
+  margin: -8px 0 14px;
+  color: var(--dash-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
 .dash-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -10889,6 +10940,30 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
 .dash-card.is-renaming {
   overflow: visible;
   z-index: 6;
+}
+.dash-card.is-selecting.is-selected {
+  border-color: color-mix(in srgb, var(--accent, #8fb59a) 70%, #4c5362);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent, #8fb59a) 55%, transparent);
+}
+.dash-card-check {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  background: rgba(20, 24, 28, 0.72);
+  color: #101418;
+  pointer-events: none;
+}
+.dash-card-check.is-on {
+  border-color: transparent;
+  background: var(--accent, #8fb59a);
+  color: var(--accent-ink, #10231c);
 }
 .dash-card-rename {
   display: block;

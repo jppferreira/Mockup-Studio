@@ -21,7 +21,9 @@ import CompositionSwitcher from './components/CompositionSwitcher';
 import SceneHierarchy, { sameLayerSelection, type SceneLayerSelection } from './components/SceneHierarchy';
 import StudioTour, { type StudioTourStep } from './components/StudioTour';
 import TemplateThumb from './components/TemplateThumb';
+import DeviceCardGrid, { DEVICE_DRAG_MIME, type DeviceCardPreviewLayout } from './components/DeviceCardGrid';
 import DeviceModelThumb from './components/DeviceModelThumb';
+import FinishDots from './components/FinishDots';
 import CropFocusOverlay from './components/CropFocusOverlay';
 import CustomDevicePanel, { type CustomDevicePanelHandle } from './components/CustomDevicePanel';
 import type { CaptureApi, DeviceSelectPayload, MaterialPickPayload, ViewGesture } from './components/DeviceCanvas';
@@ -191,7 +193,6 @@ import {
   canonicalProjectJson, isPathInsideLibrary, projectFromCloudRow, projectFromStoredJson,
   type CloudLibraryStatus, type CloudProjectEntry,
 } from './lib/cloudLibrary';
-import { warmProjectDeviceModels } from './lib/useDeviceModelUrl';
 import { downloadBlob, keepSessionPose, safeFilename, validateProject } from './lib/project';
 import {
   encodeMockupFile, encodeProjectJson, isProjectFileName, mockupDownloadName, MOCKUP_MIME,
@@ -250,6 +251,8 @@ import {
   loadSessionWorkspace, sanitizeSessionFrameSize, saveSessionWorkspace,
   type SessionFrameSize,
 } from './lib/sessionWorkspace';
+import { scheduleIdle } from './lib/scheduleIdle';
+import { logPerfSummary, perfMark, perfMeasure } from './lib/perfDiagnostics';
 import {
   clearStudioTourComplete, isStudioTourComplete,
 } from './lib/studioTour';
@@ -318,7 +321,6 @@ const VIEW_GESTURES: { id: ViewGesture; label: string; icon: LucideIcon }[] = [
 ];
 
 /** Drag payload when pulling a library model from the Device panel onto the canvas. */
-const DEVICE_DRAG_MIME = 'application/x-mockup-device';
 
 const INSERT_SHAPES: { kind: ScenePropKind; label: string; icon: LucideIcon }[] = [
   { kind: 'clay_cube', label: 'Cube', icon: Box },
@@ -668,131 +670,6 @@ function DeviceCategoryBar({
           >
             <Icon size={14} strokeWidth={1.8} aria-hidden />
             <span>{tab.label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function FinishDots({
-  ariaLabel,
-  color,
-  clayMode,
-  onPick,
-}: {
-  ariaLabel: string;
-  color: DeviceColor;
-  clayMode: boolean;
-  onPick: (color: DeviceColor) => void;
-}) {
-  return (
-    <div className="device-finish-grid" role="group" aria-label={ariaLabel}>
-      {DEVICE_COLORS.map((swatch) => {
-        const selected = color === swatch.id || (swatch.id === 'clay' && clayMode);
-        return (
-          <button
-            key={swatch.id}
-            type="button"
-            className={`device-finish-swatch ${selected ? 'selected' : ''}`}
-            title={swatch.label}
-            aria-label={swatch.label}
-            aria-pressed={selected}
-            onClick={() => onPick(swatch.id)}
-          >
-            <span style={{ background: swatch.hex }} />
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-type DeviceCardPreviewLayout = 'crop' | 'fit';
-
-function DeviceCardGrid({
-  devices,
-  isSelected,
-  isUnlocked,
-  onPick,
-  onLibraryDragStart,
-  onLibraryDragEnd,
-  previewLayout = 'fit',
-}: {
-  devices: DeviceModel[];
-  isSelected: (id: string) => boolean;
-  isUnlocked: (id: string) => boolean;
-  onPick: (device: DeviceModel, unlocked: boolean) => void;
-  onLibraryDragStart?: (deviceId: string) => void;
-  onLibraryDragEnd?: () => void;
-  previewLayout?: DeviceCardPreviewLayout;
-}) {
-  const dragStarted = useRef(false);
-
-  if (devices.length === 0) {
-    return <div className="device-card-empty">No devices in this category</div>;
-  }
-
-  return (
-    <div
-      className={`device-card-grid is-preview-${previewLayout}`}
-      role="listbox"
-      aria-label="Devices"
-      data-preview-layout={previewLayout}
-    >
-      {devices.map((device) => {
-        const unlocked = isUnlocked(device.id);
-        const selected = isSelected(device.id);
-        const category = categoryOfDevice(device);
-        const proFeature = !isFreeDevice(device.id);
-        return (
-          <button
-            key={device.id}
-            type="button"
-            role="option"
-            aria-selected={selected}
-            draggable={unlocked}
-            data-category={category}
-            className={`device-model-card ${selected ? 'is-selected' : ''} ${unlocked ? '' : 'is-locked'} ${proFeature ? 'is-pro-feature' : ''}`}
-            title={unlocked
-              ? `${device.subtitle} · ${screenSizeLabel(device.screenSize)} · Drag onto the canvas to place`
-              : `Pro ${formatGbp(PLAN_PRICES_GBP.pro)} — unlock full device library`}
-            onDragStart={(event) => {
-              if (!unlocked) {
-                event.preventDefault();
-                return;
-              }
-              dragStarted.current = true;
-              event.dataTransfer.setData(DEVICE_DRAG_MIME, device.id);
-              event.dataTransfer.setData('text/plain', device.label);
-              event.dataTransfer.effectAllowed = 'copy';
-              onLibraryDragStart?.(device.id);
-              const thumb = event.currentTarget.querySelector('.device-model-card-thumb');
-              if (thumb instanceof HTMLElement) {
-                event.dataTransfer.setDragImage(thumb, thumb.clientWidth / 2, thumb.clientHeight / 2);
-              }
-            }}
-            onDragEnd={() => {
-              onLibraryDragEnd?.();
-              window.setTimeout(() => { dragStarted.current = false; }, 0);
-            }}
-            onClick={() => {
-              if (dragStarted.current) {
-                dragStarted.current = false;
-                return;
-              }
-              onPick(device, unlocked);
-            }}
-          >
-            {!unlocked ? <span className="pro-feature-tag" aria-label="Locked">Locked</span> : null}
-            <span className="device-model-card-thumb" aria-hidden>
-              <DeviceModelThumb deviceId={device.id} />
-            </span>
-            <span className="device-model-card-copy">
-              <strong>{device.label}</strong>
-              <span>{screenSizeLabel(device.screenSize)}</span>
-            </span>
-            {selected ? <Check size={12} className="device-model-card-check" aria-hidden /> : null}
           </button>
         );
       })}
@@ -1615,21 +1492,27 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     );
   }, []);
 
-  const removeTrackedProject = useCallback((id: string) => {
-    const entry = loadRecentProjects().find((item) => item.id === id);
-    const name = entry?.name?.trim() || 'this project';
-    if (!window.confirm(
-      `Delete “${name}” permanently?\n\nThis cannot be undone. You won’t be able to recover this project.`,
-    )) {
-      return;
-    }
+  const removeTrackedProjects = useCallback((ids: string[]): boolean => {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (!unique.length) return false;
+    const recent = loadRecentProjects();
+    const nameFor = (id: string) => recent.find((item) => item.id === id)?.name?.trim() || 'this project';
+    const confirmMessage = unique.length === 1
+      ? `Delete “${nameFor(unique[0])}” permanently?\n\nThis cannot be undone. You won’t be able to recover this project.`
+      : `Delete ${unique.length} projects permanently?\n\nThis cannot be undone. You won’t be able to recover these projects.`;
+    if (!window.confirm(confirmMessage)) return false;
 
-    // Close open tabs for this document without re-adding it to Recent.
+    const doomed = new Set(unique);
+    // Close open tabs for these documents without re-adding them to Recent.
     setWorkspace((ws) => {
-      const tabs = ws.tabs.filter((tab) => tab.documentId !== id);
+      const tabs = ws.tabs.filter((tab) => {
+        const docId = tab.documentId;
+        return !docId || !doomed.has(docId);
+      });
       if (tabs.length === ws.tabs.length) return ws;
       for (const tab of ws.tabs) {
-        if (tab.documentId === id) changeLogsRef.current.delete(tab.id);
+        const docId = tab.documentId;
+        if (docId && doomed.has(docId)) changeLogsRef.current.delete(tab.id);
       }
       if (!tabs.length) return { tabs: [], activeId: null };
       const activeStillOpen = tabs.some((tab) => tab.id === ws.activeId);
@@ -1642,11 +1525,24 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     setRenamingTabId(null);
     setExportOpen(false);
 
-    setRecentProjects(removeRecentProject(id));
-    void deleteCloudProject(id).catch(() => undefined);
+    let next = recent;
+    for (const id of unique) {
+      next = removeRecentProject(id);
+      void deleteCloudProject(id).catch(() => undefined);
+    }
+    setRecentProjects(next);
     scheduleCloudSyncRef.current(400);
-    notifyRef.current(`Deleted “${name}”`);
+    notifyRef.current(
+      unique.length === 1
+        ? `Deleted “${nameFor(unique[0])}”`
+        : `Deleted ${unique.length} projects`,
+    );
+    return true;
   }, []);
+
+  const removeTrackedProject = useCallback((id: string) => {
+    removeTrackedProjects([id]);
+  }, [removeTrackedProjects]);
 
   const applyOpenProjectName = useCallback((id: string, nextName: string) => {
     setWorkspace((ws) => {
@@ -1884,7 +1780,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     void getAuthSnapshot().then((snap) => {
       if (!cancelled) rememberAccount(snap.user?.email);
     }).catch(() => undefined);
-    void syncIfSignedIn().catch(() => undefined);
+    // Stage C — do not block the editor on Supabase. Local session restore owns
+    // first paint; cloud reconcile runs after sessionReady (or on auth/visibility).
+    const cancelDeferredSync = scheduleIdle(() => {
+      if (cancelled) return;
+      void syncIfSignedIn().catch(() => undefined);
+    }, 2800);
     const stopAuth = onAuthChange((snap) => {
       rememberAccount(snap.user?.email);
       if (!snap.user) {
@@ -1909,6 +1810,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
     return () => {
       cancelled = true;
+      cancelDeferredSync();
       stopAuth();
       window.clearTimeout(syncTimer);
       window.clearInterval(interval);
@@ -1928,61 +1830,103 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
   useEffect(() => {
     let cancelled = false;
+    let cancelCloudReconcile: (() => void) | undefined;
     void (async () => {
+      perfMark('boot');
       const [saved, shots, projects] = await Promise.all([
         loadSessionWorkspace().catch(() => null),
         hydrateRecentScreenshots().catch(() => [] as RecentScreenshot[]),
         hydrateRecentProjects().catch(() => loadRecentProjects()),
       ]);
       if (cancelled) return;
-      // Restore open tabs + the active tab across reloads and app relaunches
-      // so a crash / reopen lands back where you were in the workspace.
+      // Stage A/B — restore open tabs from local IDB + session blob only.
+      // Cloud revision checks run after the editor is interactive (Stage C).
       let resumed = projects;
+      const pendingCloudTabs: Array<{
+        tabId: string;
+        docId: string;
+        stored: Awaited<ReturnType<typeof getProjectDocument>>;
+      }> = [];
       if (saved?.tabs.length && !skipSessionRestoreRef.current && !workspaceRef.current.tabs.length) {
-        for (const tab of saved.tabs) {
+        // Parallel local IDB reads — no cloud awaits on the critical path.
+        const localTabs = await Promise.all(saved.tabs.map(async (tab) => {
           const docId = tab.documentId?.trim() || createDocumentId();
-          tab.documentId = docId;
           const stored = await getProjectDocument(docId).catch(() => null);
+          return { tab, docId, stored };
+        }));
+        if (cancelled) return;
+        for (const { tab, docId, stored } of localTabs) {
+          tab.documentId = docId;
           let project = stored?.scene ?? tab.project;
-          let adoptedCloud = false;
-          try {
-            const meta = await fetchCloudProjectMeta(docId);
-            const remoteRevision = meta && !meta.deleted_at && typeof meta.revision === 'number'
-              ? meta.revision
-              : 0;
-            if (shouldAdoptRemoteDocument(
-              stored ? { revision: stored.revision, baseRevision: stored.baseRevision } : null,
-              remoteRevision,
-            )) {
-              const row = await fetchCloudProjectRow(docId);
-              if (row && !row.deleted_at) {
-                const remoteDoc = await cloudRowToDocument(row);
-                await putProjectDocument(remoteDoc, { id: remoteDoc.id, enqueueOutbox: false });
-                project = remoteDoc.scene;
-                adoptedCloud = true;
-              }
-            }
-          } catch {
-            project = stored?.scene ?? tab.project;
-            adoptedCloud = false;
-          }
-          if (!adoptedCloud) project = keepSessionPose(project, tab.project);
+          project = keepSessionPose(project, tab.project);
           tab.project = project;
           baselineRef.current.set(tab.id, canonicalProjectJson(project));
           resumed = rememberRecentProject(project, { id: docId, persist: false });
+          pendingCloudTabs.push({ tabId: tab.id, docId, stored });
         }
         const restored = { tabs: saved.tabs, activeId: saved.activeId };
         workspaceRef.current = restored;
         activeIdRef.current = restored.activeId;
         setWorkspace(restored);
+        perfMark('session-local');
+        perfMeasure('session-local-ms', 'boot', 'session-local');
         const active = restored.tabs.find((tab) => tab.id === restored.activeId) ?? restored.tabs[0];
-        // Start decrypting the active scene's GLBs during splash / gate, not after first canvas mount.
-        if (active?.project?.devices?.length) {
-          warmProjectDeviceModels(active.project.devices.map((device) => device.deviceId));
-        }
         if (active?.shippedTemplateId && isDevEditableTemplateId(active.shippedTemplateId)) {
           setCompositionPick({ tabId: active.id, templateId: active.shippedTemplateId });
         }
+
+        // Stage C — reconcile cloud revisions without blocking first interaction.
+        cancelCloudReconcile = scheduleIdle(() => {
+          if (cancelled) return;
+          void (async () => {
+            for (const pending of pendingCloudTabs) {
+              if (cancelled) return;
+              const tab = workspaceRef.current.tabs.find((item) => item.id === pending.tabId);
+              if (!tab) continue;
+              // Never overwrite unsynced local edits.
+              const liveBaseline = baselineRef.current.get(tab.id);
+              const liveJson = canonicalProjectJson(tab.project);
+              if (liveBaseline && liveJson !== liveBaseline) continue;
+              try {
+                const meta = await fetchCloudProjectMeta(pending.docId);
+                const remoteRevision = meta && !meta.deleted_at && typeof meta.revision === 'number'
+                  ? meta.revision
+                  : 0;
+                if (!shouldAdoptRemoteDocument(
+                  pending.stored
+                    ? { revision: pending.stored.revision, baseRevision: pending.stored.baseRevision }
+                    : null,
+                  remoteRevision,
+                )) {
+                  continue;
+                }
+                const row = await fetchCloudProjectRow(pending.docId);
+                if (!row || row.deleted_at) continue;
+                const remoteDoc = await cloudRowToDocument(row);
+                await putProjectDocument(remoteDoc, { id: remoteDoc.id, enqueueOutbox: false });
+                if (cancelled) return;
+                // Re-check dirty after await — user may have edited meanwhile.
+                const still = workspaceRef.current.tabs.find((item) => item.id === pending.tabId);
+                if (!still) continue;
+                const stillBaseline = baselineRef.current.get(still.id);
+                if (stillBaseline && canonicalProjectJson(still.project) !== stillBaseline) continue;
+                const nextProject = remoteDoc.scene;
+                baselineRef.current.set(still.id, canonicalProjectJson(nextProject));
+                setWorkspace((ws) => {
+                  const tabs = ws.tabs.map((item) => (
+                    item.id === pending.tabId ? { ...item, project: nextProject } : item
+                  ));
+                  const next = { ...ws, tabs };
+                  workspaceRef.current = next;
+                  if (ws.activeId === pending.tabId) liveProjectRef.current = nextProject;
+                  return next;
+                });
+              } catch {
+                /* offline / auth — keep local session pose */
+              }
+            }
+          })();
+        }, 1200);
       }
       const frame = saved?.frameSize ? sanitizeSessionFrameSize(saved.frameSize) : null;
       if (frame && !skipSessionRestoreRef.current) {
@@ -2022,9 +1966,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         return [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_RECENT);
       });
       sessionReadyRef.current = true;
+      perfMark('session-ready');
+      perfMeasure('session-ready-ms', 'boot', 'session-ready');
+      perfMark('first-interactive');
+      logPerfSummary('session-ready');
     })();
     return () => {
       cancelled = true;
+      cancelCloudReconcile?.();
     };
   }, []);
 
@@ -2130,27 +2079,34 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     }
   }
 
+  const dirtyTabsRef = useRef(new Set<string>());
+  const sessionDirtyRef = useRef(false);
+
   const setProject = useCallback((updater: MockupProject | ((current: MockupProject) => MockupProject)) => {
     if (!sessionReadyRef.current) skipSessionRestoreRef.current = true;
     const tabId = activeIdRef.current;
     if (!tabId) return;
     const current = liveProjectRef.current;
     const nextRaw = typeof updater === 'function' ? updater(current) : updater;
-    const next = nextRaw === current ? current : commitActiveScene(nextRaw);
-    if (next !== current) {
-      liveProjectRef.current = next;
-      workspaceRef.current = {
-        ...workspaceRef.current,
-        tabs: workspaceRef.current.tabs.map((tab) => (
-          tab.id === tabId ? { ...tab, project: next } : tab
-        )),
-      };
-      const existing = changeLogsRef.current.get(tabId) ?? [];
-      const recorded = recordProjectChange(existing, current, next);
-      if (recorded !== existing) {
-        changeLogsRef.current.set(tabId, recorded);
-        setChangeLogVersion((version) => version + 1);
-      }
+    // Skip no-ops — previously always called setWorkspace and re-rendered App.
+    if (nextRaw === current) return;
+    // Do not commitActiveScene here: that deep-clones every device into scenes[]
+    // on each keystroke. Scene switch / save / cloud push still seal via commit.
+    const next = nextRaw;
+    liveProjectRef.current = next;
+    workspaceRef.current = {
+      ...workspaceRef.current,
+      tabs: workspaceRef.current.tabs.map((tab) => (
+        tab.id === tabId ? { ...tab, project: next } : tab
+      )),
+    };
+    dirtyTabsRef.current.add(tabId);
+    sessionDirtyRef.current = true;
+    const existing = changeLogsRef.current.get(tabId) ?? [];
+    const recorded = recordProjectChange(existing, current, next);
+    if (recorded !== existing) {
+      changeLogsRef.current.set(tabId, recorded);
+      setChangeLogVersion((version) => version + 1);
     }
     setWorkspace((ws) => ({
       ...ws,
@@ -2331,19 +2287,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     if (!isDualCanvas) return null;
     return projectForEnvCanvas(displayProject, 'android');
   }, [isDualCanvas, displayProject]);
-  // Decrypt / preload GLBs for the open scene before Suspense asks for them.
-  useEffect(() => {
-    const ids = [
-      ...displayProject.devices.map((device) => device.deviceId),
-      ...(iosDisplayProject?.devices.map((device) => device.deviceId) ?? []),
-      ...(androidDisplayProject?.devices.map((device) => device.deviceId) ?? []),
-    ];
-    warmProjectDeviceModels(ids);
-  }, [
-    displayProject.devices,
-    iosDisplayProject?.devices,
-    androidDisplayProject?.devices,
-  ]);
   const platformRecentScreenshots = useMemo(
     () => recentForPlatform(recentScreenshots, activePublishTarget),
     [recentScreenshots, activePublishTarget],
@@ -2511,21 +2454,13 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     ));
   }, [setProject]);
 
-  const orbitReactRafRef = useRef<number | null>(null);
   const rememberCameraOrbit = useCallback((orbit: { offset: Vec3; lookOffset?: Vec3 } | null) => {
     if (!orbit?.offset || suppressOrbitSaveRef.current || pickingCameraViewRef.current) return;
     sharedOrbitRef.current = orbit;
-    // Coalesce React orbit state to one update/frame — dual-pane live sync uses liveOrbit bus.
-    if (orbitReactRafRef.current == null) {
-      orbitReactRafRef.current = requestAnimationFrame(() => {
-        orbitReactRafRef.current = null;
-        const latest = sharedOrbitRef.current;
-        if (!latest?.offset) return;
-        setSharedOrbit((prev) => (
-          cameraOrbitKey(prev) === cameraOrbitKey(latest) ? prev : latest
-        ));
-      });
-    }
+    // Called on orbit settle (not per-frame). Mid-drag dual-pane uses liveOrbit bus.
+    setSharedOrbit((prev) => (
+      cameraOrbitKey(prev) === cameraOrbitKey(orbit) ? prev : orbit
+    ));
     if (orbitSaveTimerRef.current != null) window.clearTimeout(orbitSaveTimerRef.current);
     orbitSaveTimerRef.current = window.setTimeout(() => {
       orbitSaveTimerRef.current = null;
@@ -6775,6 +6710,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           licensingDisabled={LICENSING_DISABLED}
           onOpenProject={openRecentProject}
           onRemoveProject={removeTrackedProject}
+          onRemoveProjects={removeTrackedProjects}
           onRenameProject={renameTrackedProject}
           onMergeCloudProjects={mergeCloudProjects}
           onApplyCloudDeletes={applyCloudDeletes}

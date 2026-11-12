@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  Cuboid, Glasses, Headphones, Laptop, LayoutGrid, Monitor, Smartphone, Tablet, UserRound, Watch, Wrench,
+  Check, Cuboid, Glasses, Headphones, Laptop, LayoutGrid, Monitor, Smartphone, Tablet, Trash2, UserRound, Watch, Wrench, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { hasAnimation } from '../lib/animation';
@@ -78,6 +78,9 @@ import iconDots from '../assets/dashboard/icon-dots.svg';
 
 type DashSection = 'projects' | 'models' | 'templates' | 'assets' | 'settings';
 type SortMode = 'edited' | 'name';
+
+const LONG_PRESS_MS = 480;
+const LONG_PRESS_MOVE_PX = 12;
 
 const NAV: { id: DashSection; label: string; icon: string }[] = [
   { id: 'projects', label: 'Projects', icon: iconGrid },
@@ -189,6 +192,7 @@ export default function ProjectsDashboard({
   licensingDisabled,
   onOpenProject,
   onRemoveProject,
+  onRemoveProjects,
   onRenameProject,
   onNewProject,
   onBlankFile,
@@ -222,6 +226,7 @@ export default function ProjectsDashboard({
   licensingDisabled: boolean;
   onOpenProject: (entry: RecentProjectEntry, options?: { alreadySynced?: boolean }) => void;
   onRemoveProject: (id: string) => void;
+  onRemoveProjects?: (ids: string[]) => boolean | void;
   onRenameProject: (
     id: string,
     name: string,
@@ -259,9 +264,19 @@ export default function ProjectsDashboard({
   const [sortOpen, setSortOpen] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deviceFilter, setDeviceFilter] = useState<DeviceCategoryFilter>(rememberedTabs.deviceFilter);
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>(rememberedTabs.templateCategory);
   const syncMenuRef = useRef<HTMLDivElement>(null);
+  const longPressRef = useRef<{
+    id: string;
+    pointerId: number;
+    x: number;
+    y: number;
+    timer: number;
+  } | null>(null);
+  const suppressOpenRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -375,6 +390,64 @@ export default function ProjectsDashboard({
     window.addEventListener('pointerdown', close);
     return () => window.removeEventListener('pointerdown', close);
   }, [syncMenuOpen]);
+
+  const clearLongPress = useCallback(() => {
+    if (!longPressRef.current) return;
+    window.clearTimeout(longPressRef.current.timer);
+    longPressRef.current = null;
+  }, []);
+
+  const exitSelectMode = useCallback(() => {
+    clearLongPress();
+    setSelectMode(false);
+    setSelectedIds([]);
+    setMenuId(null);
+  }, [clearLongPress]);
+
+  const enterSelectMode = useCallback((id: string) => {
+    setMenuId(null);
+    setSelectMode(true);
+    setSelectedIds((current) => (current.includes(id) ? current : [...current, id]));
+  }, []);
+
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds((current) => (
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id]
+    ));
+  }, []);
+
+  useEffect(() => {
+    if (section !== 'projects' && selectMode) exitSelectMode();
+  }, [section, selectMode, exitSelectMode]);
+
+  useEffect(() => {
+    if (!selectMode) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        exitSelectMode();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectMode, exitSelectMode]);
+
+  useEffect(() => () => clearLongPress(), [clearLongPress]);
+
+  const deleteSelectedProjects = useCallback(() => {
+    if (!selectedIds.length) return;
+    const ids = [...selectedIds];
+    if (onRemoveProjects) {
+      const removed = onRemoveProjects(ids);
+      if (removed === false) return;
+    } else {
+      ids.forEach((id) => onRemoveProject(id));
+    }
+    setCloudRows((rows) => rows.filter((row) => !ids.includes(row.local_id)));
+    exitSelectMode();
+  }, [selectedIds, onRemoveProjects, onRemoveProject, exitSelectMode]);
 
   const projects = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -724,20 +797,48 @@ export default function ProjectsDashboard({
           {section === 'projects' && (
             <>
               <div className="dash-section-row">
-                <h2>{accountEmail ? 'Synced projects' : 'Recent projects'}</h2>
-                <span>{projects.length === 1 ? '1 project' : `${projects.length} projects`}</span>
+                <h2>{selectMode ? 'Select projects' : accountEmail ? 'Synced projects' : 'Recent projects'}</h2>
+                {selectMode ? (
+                  <div className="dash-select-bar" role="toolbar" aria-label="Selected projects">
+                    <span>
+                      {selectedIds.length === 1
+                        ? '1 selected'
+                        : `${selectedIds.length} selected`}
+                    </span>
+                    <button type="button" className="dash-select-cancel" onClick={exitSelectMode}>
+                      <X size={14} strokeWidth={2.2} aria-hidden />
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="dash-select-delete"
+                      disabled={selectedIds.length === 0}
+                      onClick={deleteSelectedProjects}
+                    >
+                      <Trash2 size={14} strokeWidth={2.2} aria-hidden />
+                      Delete
+                    </button>
+                  </div>
+                ) : (
+                  <span>{projects.length === 1 ? '1 project' : `${projects.length} projects`}</span>
+                )}
               </div>
-              <div className="dash-grid">
-                <button type="button" className="dash-card dash-card-create" onClick={onNewProject}>
-                  <span className="dash-card-art">
-                    <img src={newProjectArt} alt="" width={381} height={180} />
-                  </span>
-                  <span className="dash-card-copy">
-                    <strong>New from template</strong>
-                    <span>Start with a device layout or pre-composition</span>
-                    <img className="dash-card-chevron" src={iconChevron} alt="" width={21} height={21} />
-                  </span>
-                </button>
+              {selectMode && (
+                <p className="dash-select-hint">Tap cards to select or deselect. Long-press another card to keep selecting.</p>
+              )}
+              <div className={`dash-grid${selectMode ? ' is-selecting' : ''}`}>
+                {!selectMode && (
+                  <button type="button" className="dash-card dash-card-create" onClick={onNewProject}>
+                    <span className="dash-card-art">
+                      <img src={newProjectArt} alt="" width={381} height={180} />
+                    </span>
+                    <span className="dash-card-copy">
+                      <strong>New from template</strong>
+                      <span>Start with a device layout or pre-composition</span>
+                      <img className="dash-card-chevron" src={iconChevron} alt="" width={21} height={21} />
+                    </span>
+                  </button>
+                )}
 
                 {projects.map((entry) => {
                   const openEntry = () => {
@@ -754,6 +855,7 @@ export default function ProjectsDashboard({
                       : entry);
                   };
                   const renaming = renamingId === entry.key;
+                  const selected = selectedIds.includes(entry.key);
                   const where = syncWhereLabel(
                     cloudIds.has(entry.key) || Boolean(entry.cloudOnly),
                     accountEmail,
@@ -791,17 +893,80 @@ export default function ProjectsDashboard({
                       <span className={`dash-sync-where is-${where.kind}`}>{where.text}</span>
                     </span>
                   );
+                  const beginLongPress = (event: ReactPointerEvent<HTMLButtonElement>) => {
+                    if (event.button !== 0 || renaming || selectMode) return;
+                    clearLongPress();
+                    const pointerId = event.pointerId;
+                    const x = event.clientX;
+                    const y = event.clientY;
+                    longPressRef.current = {
+                      id: entry.key,
+                      pointerId,
+                      x,
+                      y,
+                      timer: window.setTimeout(() => {
+                        longPressRef.current = null;
+                        suppressOpenRef.current = true;
+                        enterSelectMode(entry.key);
+                      }, LONG_PRESS_MS),
+                    };
+                  };
+                  const moveLongPress = (event: ReactPointerEvent<HTMLButtonElement>) => {
+                    const press = longPressRef.current;
+                    if (!press || press.pointerId !== event.pointerId) return;
+                    const dx = event.clientX - press.x;
+                    const dy = event.clientY - press.y;
+                    if ((dx * dx) + (dy * dy) > LONG_PRESS_MOVE_PX * LONG_PRESS_MOVE_PX) {
+                      clearLongPress();
+                    }
+                  };
+                  const endLongPress = (event: ReactPointerEvent<HTMLButtonElement>) => {
+                    const press = longPressRef.current;
+                    if (!press || press.pointerId !== event.pointerId) return;
+                    clearLongPress();
+                  };
                   return (
                     <article
                       key={entry.key}
-                      className={`dash-card${menuId === entry.key ? ' is-menu-open' : ''}${renaming ? ' is-renaming' : ''}`}
+                      className={`dash-card${menuId === entry.key ? ' is-menu-open' : ''}${renaming ? ' is-renaming' : ''}${selectMode ? ' is-selecting' : ''}${selected ? ' is-selected' : ''}`}
+                      aria-selected={selectMode ? selected : undefined}
                     >
                       <button
                         type="button"
                         className="dash-card-open"
-                        onClick={openEntry}
-                        title={openingId === entry.key ? `Opening ${entry.name}` : `Open ${entry.name}`}
-                        disabled={openingId === entry.key}
+                        onPointerDown={beginLongPress}
+                        onPointerMove={moveLongPress}
+                        onPointerUp={endLongPress}
+                        onPointerCancel={endLongPress}
+                        onContextMenu={(event) => {
+                          if (
+                            selectMode
+                            || suppressOpenRef.current
+                            || longPressRef.current?.id === entry.key
+                          ) {
+                            event.preventDefault();
+                          }
+                        }}
+                        onClick={() => {
+                          if (suppressOpenRef.current) {
+                            suppressOpenRef.current = false;
+                            return;
+                          }
+                          if (selectMode) {
+                            toggleSelected(entry.key);
+                            return;
+                          }
+                          openEntry();
+                        }}
+                        title={
+                          selectMode
+                            ? (selected ? `Deselect ${entry.name}` : `Select ${entry.name}`)
+                            : openingId === entry.key
+                              ? `Opening ${entry.name}`
+                              : `Open ${entry.name}`
+                        }
+                        disabled={!selectMode && openingId === entry.key}
+                        aria-pressed={selectMode ? selected : undefined}
                       >
                         <span className="dash-card-thumb">
                           {entry.project ? (
@@ -816,43 +981,58 @@ export default function ProjectsDashboard({
                         {renaming ? null : copy}
                       </button>
                       {renaming ? copy : null}
-                      <div
-                        className="dash-card-menu"
-                        onPointerDown={(event) => event.stopPropagation()}
-                      >
-                        <button
-                          type="button"
-                          className="dash-card-more"
-                          aria-label={`Actions for ${entry.name}`}
-                          aria-expanded={menuId === entry.key}
-                          onClick={() => setMenuId((current) => (current === entry.key ? null : entry.key))}
+                      {selectMode ? (
+                        <span className={`dash-card-check${selected ? ' is-on' : ''}`} aria-hidden>
+                          {selected ? <Check size={14} strokeWidth={2.6} /> : null}
+                        </span>
+                      ) : (
+                        <div
+                          className="dash-card-menu"
+                          onPointerDown={(event) => event.stopPropagation()}
                         >
-                          <img src={iconDots} alt="" width={19} height={19} />
-                        </button>
-                        {menuId === entry.key && (
-                          <div className="dash-pop dash-pop-card">
-                            <button type="button" onClick={() => { setMenuId(null); openEntry(); }}>Open</button>
-                            <button
-                              type="button"
-                              aria-label={`Rename ${entry.name}`}
-                              onClick={() => beginListedRename(entry)}
-                            >
-                              Rename
-                            </button>
-                            <button
-                              type="button"
-                              className="is-danger"
-                              onClick={() => {
-                                setMenuId(null);
-                                setCloudRows((rows) => rows.filter((row) => row.local_id !== entry.key));
-                                onRemoveProject(entry.recent?.id ?? entry.key);
-                              }}
-                            >
-                              Delete project
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                          <button
+                            type="button"
+                            className="dash-card-more"
+                            aria-label={`Actions for ${entry.name}`}
+                            aria-expanded={menuId === entry.key}
+                            onClick={() => setMenuId((current) => (current === entry.key ? null : entry.key))}
+                          >
+                            <img src={iconDots} alt="" width={19} height={19} />
+                          </button>
+                          {menuId === entry.key && (
+                            <div className="dash-pop dash-pop-card">
+                              <button type="button" onClick={() => { setMenuId(null); openEntry(); }}>Open</button>
+                              <button
+                                type="button"
+                                aria-label={`Rename ${entry.name}`}
+                                onClick={() => beginListedRename(entry)}
+                              >
+                                Rename
+                              </button>
+                              <button
+                                type="button"
+                                className="is-danger"
+                                onClick={() => {
+                                  setMenuId(null);
+                                  setCloudRows((rows) => rows.filter((row) => row.local_id !== entry.key));
+                                  onRemoveProject(entry.recent?.id ?? entry.key);
+                                }}
+                              >
+                                Delete project
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMenuId(null);
+                                  enterSelectMode(entry.key);
+                                }}
+                              >
+                                Select…
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </article>
                   );
                 })}

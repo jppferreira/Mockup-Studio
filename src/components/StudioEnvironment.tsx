@@ -70,10 +70,6 @@ function Softbox({
   target: Vec3;
 }) {
   const lightRef = useRef<THREE.RectAreaLight>(null);
-  const interaction = useStudioShadowInteraction();
-  // RectAreaLight shading is costly — drop softboxes while orbiting; restore when idle.
-  const live = interaction?.mode === 'interactive';
-  const liveIntensity = live ? 0 : intensity;
   useLayoutEffect(() => {
     ensureRectAreaLights();
     const light = lightRef.current;
@@ -85,10 +81,10 @@ function Softbox({
   useFrame(() => {
     const light = lightRef.current;
     if (!light) return;
-    if (Math.abs(light.intensity - liveIntensity) > 1e-6) light.intensity = liveIntensity;
+    // Keep intensity stable — do not dim softboxes while orbiting (visual change).
+    if (Math.abs(light.intensity - intensity) > 1e-6) light.intensity = intensity;
   });
 
-  // Keep mounted while orbiting (intensity 0) so mode flips don't remount lights.
   if (intensity <= 0.001) return null;
   return (
     <rectAreaLight
@@ -97,7 +93,7 @@ function Softbox({
       width={size[0]}
       height={size[1]}
       color={color}
-      intensity={liveIntensity}
+      intensity={intensity}
     />
   );
 }
@@ -141,7 +137,8 @@ export function StudioAmbientOcclusion({ amount }: { amount: number }) {
   const amountRef = useRef(amount);
   amountRef.current = amount;
   useFrame(() => {
-    // Drop the AO re-render while orbiting / dragging — biggest live-preview win.
+    // Interactive: drop the SSAO re-render (12 taps + depth). Idle / export restore.
+    // Lighting + materials stay on — only the screen-space pass is gated.
     const live = interaction?.mode === 'interactive';
     setAmbientOcclusion(gl, live ? 0 : amountRef.current);
   });
@@ -157,7 +154,8 @@ export function StudioDepthOfField({ amount, focus }: { amount: number; focus: V
   amountRef.current = amount;
   focusRef.current = focus;
   useFrame(() => {
-    // Skip the heavy depth + 64-tap blur while orbiting / dragging — idle + export keep full DoF.
+    // Interactive: skip 64-tap DoF + enable grade fast path (single scene pass).
+    // Softboxes / HDRI / materials stay lit — never darken the product.
     const live = interaction?.mode === 'interactive';
     setLivePreviewFast(gl, live);
     setDepthOfField(gl, {
@@ -444,7 +442,11 @@ function useAdaptiveShadowExtent(
     setExtent(next);
   };
 
+  const interaction = useStudioShadowInteraction();
+
   useFrame((state) => {
+    // Skip caster AABB walks while orbiting — plate is frozen anyway.
+    if (interaction?.mode === 'interactive') return;
     frame.current += 1;
     // Refit a few times a second — enough for rotate/scale without React thrash.
     if (frame.current % 12 !== 0) return;
@@ -534,9 +536,10 @@ function StudioSoftFloorShadows({
   const strength = opacityToShadowStrength(opacity, 1);
   const resolution = resolveFloorShadowResolution(quality, mode, exportBoost, maxTex);
   const [refreshToken, setRefreshToken] = useState(0);
-  // Live while the viewport is moving (orbit, gizmos) and during export so the
-  // foot tracks motion. Idle studio bakes once and freezes until lighting changes.
-  const frames = mode === 'interactive' || exportBoost ? Infinity : 1;
+  // Orbit / gizmo used to set frames={Infinity}, which re-baked ContactShadows
+  // every frame and tanked FPS. Keep the plate visible and freeze it (frames=1);
+  // only export captures re-bake continuously. Idle remount via refreshToken.
+  const frames = exportBoost ? Infinity : 1;
 
   const groupRef = useRef<THREE.Group>(null);
   const lightFade = THREE.MathUtils.clamp(0.75 + lightStrength * 0.18, 0.7, 1);
@@ -610,7 +613,7 @@ function StudioSoftFloorShadows({
   return (
     <group ref={groupRef} position={[0, y + (onPaper ? 0.004 : 0.001), 0]}>
       <ContactShadows
-        key={`floor-${mode}-${resolution}-${refreshToken}`}
+        key={`floor-${resolution}-${refreshToken}`}
         frames={frames}
         opacity={primaryOpacity}
         width={1}
@@ -822,7 +825,7 @@ export function StudioLighting({
     bounceRef.current?.layers.enable(1);
   }, []);
 
-  // Re-assert wrap lights every frame — shadow bakers must never leave them at 0.
+  // Re-assert wrap lights when demand frames run — bakers must never leave them at 0.
   useFrame(() => {
     if (ambientRef.current && Math.abs(ambientRef.current.intensity - ambient) > 1e-6) {
       ambientRef.current.intensity = ambient;

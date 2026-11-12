@@ -12,11 +12,13 @@ import { clearStudioTourComplete } from './lib/studioTour';
 import { prepareModelCache } from './lib/modelCache';
 import { warmGltfDecoders } from './lib/gltfDecoders';
 import { getAuthSnapshot } from './lib/supabaseClient';
+import { perfMark } from './lib/perfDiagnostics';
 import './styles.css';
 
 installNumberScrub();
 
 applyAccentTheme(readAccentTheme(), readAccentColor());
+perfMark('boot');
 // Open IndexedDB + AES key while the splash is up so the first GLB resolve is warm.
 prepareModelCache();
 // Meshopt wasm ready before the first compressed (or drei-default) GLTF parse.
@@ -112,7 +114,14 @@ function Root() {
   if (needsOnboarding) {
     return <OnboardingFlow onComplete={() => setNeedsOnboarding(false)} />;
   }
-  return <App onShowOnboarding={showOnboarding} />;
+  return <AppShell onShowOnboarding={showOnboarding} />;
+}
+
+function AppShell({ onShowOnboarding }: { onShowOnboarding: () => void }) {
+  useEffect(() => {
+    perfMark('shell-ready');
+  }, []);
+  return <App onShowOnboarding={onShowOnboarding} />;
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

@@ -319,20 +319,6 @@ export async function resolveDeviceModelUrl(deviceId: string): Promise<string> {
   }
 }
 
-/**
- * Decrypt / download project devices in the background and let the GLTF loader
- * parse them before the canvas Suspense tree asks.
- */
-export function warmDeviceModels(deviceIds: string[]): void {
-  if (!remoteModelsConfigured()) return;
-  prepareModelCache();
-  // Bundled free starters resolve sync — only warm paid/CDN ids.
-  const unique = [...new Set(deviceIds.filter((id) => id && !bundledLocalModelUrl(id)))];
-  for (const deviceId of unique) {
-    void resolveDeviceModelUrl(deviceId).catch(() => undefined);
-  }
-}
-
 /** True when Supabase model delivery is configured in this build. */
 export function remoteModelsConfigured(): boolean {
   return Boolean(

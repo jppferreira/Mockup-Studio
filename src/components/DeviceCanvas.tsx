@@ -77,12 +77,19 @@ import {
   sampleTrack,
 } from '../lib/animation';
 import { publishLiveOrbit, subscribeLiveOrbit, type LiveOrbit } from '../lib/liveOrbit';
+import { recordOrbitFps } from '../lib/perfDiagnostics';
 
 /**
- * Live preview DPR — locked to 1×.
- * Retina 1.5–2× doubled fill-rate across shadows + grade; exports use sized renders.
+ * Live preview DPR — retina up to 1.5× (full 2× doubles grade + shadow fill-rate).
+ * Export / capture paths pass an explicit pixelRatio.
  */
-const LIVE_CANVAS_DPR: [number, number] = [1, 1];
+const LIVE_CANVAS_DPR: [number, number] = [1, 1.5];
+const LIVE_GL = {
+  antialias: true,
+  alpha: true,
+  preserveDrawingBuffer: false,
+  powerPreference: 'high-performance' as const,
+};
 
 
 export type CaptureApi = {
@@ -973,10 +980,59 @@ function ScreenDropHighlight({
   return null;
 }
 
-/** Keeps the demand frameloop alive while media / continuous contact shadows need frames. */
+/** Keeps the demand frameloop alive while media / gizmo / orbit / playback need frames. */
 function DemandKeepAlive({ active }: { active: boolean }) {
+  const interaction = useStudioShadowInteraction();
   useFrame(({ invalidate }) => {
-    if (active) invalidate();
+    // Orbit setBusy is internal to the provider — also pulse while mode is interactive
+    // so damping tails never stall under frameloop="demand".
+    if (active || interaction?.mode === 'interactive') invalidate();
+  });
+  return null;
+}
+
+/**
+ * DEV / ?perf=1 — samples FPS while the shadow interaction is interactive (orbit).
+ * Writes `window.__mokOrbitFps` / `window.__mokPerf` via perfDiagnostics.
+ */
+function OrbitFpsProbe() {
+  const interaction = useStudioShadowInteraction();
+  const gl = useThree((s) => s.gl);
+  const samples = useRef<number[]>([]);
+  const last = useRef(0);
+  const mode = interaction?.mode ?? 'studio';
+  useFrame(() => {
+    if (typeof window === 'undefined') return;
+    const enabled = import.meta.env.DEV || new URLSearchParams(window.location.search).has('perf');
+    if (!enabled) return;
+    const now = performance.now();
+    if (mode !== 'interactive') {
+      if (samples.current.length > 0) {
+        const fps = samples.current;
+        const sorted = [...fps].sort((a, b) => a - b);
+        const avg = fps.reduce((a, b) => a + b, 0) / fps.length;
+        const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? avg;
+        const info = gl.info;
+        recordOrbitFps({
+          avg: Math.round(avg * 10) / 10,
+          min: Math.round(Math.min(...fps) * 10) / 10,
+          max: Math.round(Math.max(...fps) * 10) / 10,
+          p95: Math.round(p95 * 10) / 10,
+          samples: fps.length,
+          mode,
+          drawCalls: info.render.calls,
+          triangles: info.render.triangles,
+        });
+        samples.current = [];
+      }
+      last.current = 0;
+      return;
+    }
+    if (last.current > 0) {
+      const dt = now - last.current;
+      if (dt > 0 && dt < 250) samples.current.push(1000 / dt);
+    }
+    last.current = now;
   });
   return null;
 }
@@ -1138,30 +1194,58 @@ function poseOpenAnimation(root: THREE.Object3D, animations: THREE.AnimationClip
 /** Keeps a single bad GLB from tearing down the whole R3F canvas (black UI). */
 class GltfLoadBoundary extends Component<
   { url: string; children: ReactNode },
-  { failedUrl: string | null }
+  { failedUrl: string | null; message: string | null }
 > {
-  state: { failedUrl: string | null } = { failedUrl: null };
+  state: { failedUrl: string | null; message: string | null } = {
+    failedUrl: null,
+    message: null,
+  };
 
-  static getDerivedStateFromError(): { failedUrl: string | null } {
-    return { failedUrl: '' };
+  static getDerivedStateFromError(error: Error): { failedUrl: string | null; message: string | null } {
+    return { failedUrl: '__pending__', message: error?.message || 'Failed to parse device model' };
   }
 
   componentDidCatch(error: Error, _info: ErrorInfo) {
-    console.warn('[device-model]', this.props.url, error.message);
-    this.setState({ failedUrl: this.props.url });
+    console.error('[device-model] parse/load failed', this.props.url, error.message);
+    this.setState({ failedUrl: this.props.url, message: error.message || 'Failed to parse device model' });
   }
 
   componentDidUpdate(prev: { url: string }) {
     if (prev.url !== this.props.url && this.state.failedUrl != null) {
-      this.setState({ failedUrl: null });
+      this.setState({ failedUrl: null, message: null });
     }
   }
 
   render() {
-    if (this.state.failedUrl != null && this.state.failedUrl === this.props.url) return null;
-    if (this.state.failedUrl === '') return null;
+    if (this.state.failedUrl != null) {
+      return <ModelLoadFallback label="Model failed to load" detail={this.state.message} />;
+    }
     return this.props.children;
   }
+}
+
+/** Visible stand-in while resolving CDN/cache or after a load failure (never blank). */
+function ModelLoadFallback({
+  label,
+  detail,
+}: {
+  label: string;
+  detail?: string | null;
+}) {
+  return (
+    <group>
+      <mesh castShadow receiveShadow>
+        <boxGeometry args={[0.72, 1.48, 0.08]} />
+        <meshStandardMaterial color="#3a4048" wireframe roughness={1} metalness={0} />
+      </mesh>
+      {/* Keep a solid plate behind the wireframe so the seat is obvious in studio light. */}
+      <mesh position={[0, 0, -0.01]} receiveShadow>
+        <boxGeometry args={[0.72, 1.48, 0.02]} />
+        <meshStandardMaterial color="#1c2128" roughness={0.9} metalness={0.05} transparent opacity={0.85} />
+      </mesh>
+      <group userData={{ modelLoadStatus: label, modelLoadDetail: detail ?? '' }} />
+    </group>
+  );
 }
 
 function GltfDeviceContent({
@@ -2265,6 +2349,16 @@ function DeviceModelView({
 }) {
   const device = getDevice(instance.deviceId);
   const modelUrl = useDeviceModelUrl(device.id, device.url);
+  // Surface resolve failures in the console (and __mokModelError) — the canvas
+  // used to render null so card taps looked like a no-op.
+  useEffect(() => {
+    if (!modelUrl.error) return;
+    const report = { deviceId: device.id, error: modelUrl.error, at: Date.now() };
+    console.error('[device-model] resolve failed', report);
+    if (typeof window !== 'undefined') {
+      (window as Window & { __mokModelError?: typeof report }).__mokModelError = report;
+    }
+  }, [device.id, modelUrl.error]);
   const positionRef = useRef<THREE.Group>(null);
   const rotationRef = useRef<THREE.Group>(null);
   const scaleRef = useRef<THREE.Group>(null);
@@ -2389,7 +2483,12 @@ function DeviceModelView({
                 selectedMaterialName={selectedMaterialName}
               />
             </GltfLoadBoundary>
-          ) : null}
+          ) : (
+            <ModelLoadFallback
+              label={modelUrl.loading ? 'Loading model…' : 'Model unavailable'}
+              detail={modelUrl.error}
+            />
+          )}
           </ReflectionDriveContext.Provider>
           <ScreenLayerExplosion
             host={explosionHost}
@@ -2692,9 +2791,9 @@ function KeyLightRig({
   const boundsRef = useRef(new THREE.Box3());
   const lastFitKey = useRef('');
   const fitFrame = useRef(0);
-  const pcssProfile: ProgressiveShadowProfile = mode === 'interactive' && !shadowExportBoost
-    ? 'interactive'
-    : 'studio';
+  // Always studio PCSS — orbit must not soften penumbra. Cost savings come from
+  // freezing the shadow map (autoUpdate=false), not from a lighter filter.
+  const pcssProfile: ProgressiveShadowProfile = 'studio';
 
   useLayoutEffect(() => {
     const light = lightRef.current;
@@ -2707,7 +2806,6 @@ function KeyLightRig({
   }, [position.x, position.y, position.z, target.x, target.y, target.z]);
 
   useEffect(() => {
-    // Lighter PCSS while orbiting; full filter once every canvas idles into studio.
     // Ref-counted so split view does not thrash the shared ShaderChunk.
     const changed = retainProgressiveShadowProfile(pcssProfile);
     if (changed) refreshShadowMaterials(scene);
@@ -2723,7 +2821,8 @@ function KeyLightRig({
     if (!light) return;
     light.castShadow = castShadow;
     const maxTex = gl.capabilities.maxTextureSize || 4096;
-    const size = resolveKeyShadowMapSize(shadowQuality, mode, shadowExportBoost, maxTex);
+    // Size ignores interactive mode so orbit busy flips never thrash the atlas.
+    const size = resolveKeyShadowMapSize(shadowQuality, 'studio', shadowExportBoost, maxTex);
     const penumbra = softnessToPenumbra(shadowSoftness);
     light.shadow.mapSize.set(size, size);
     // The PCSS shader treats shadow radius as emitter size (texels), so Softness
@@ -2734,11 +2833,14 @@ function KeyLightRig({
     const softnessT = THREE.MathUtils.smoothstep(0.2, 14, shadowSoftness);
     light.shadow.bias = -0.00018;
     light.shadow.normalBias = THREE.MathUtils.lerp(0.022, 0.05, softnessT);
-    light.shadow.blurSamples = size >= 2048 ? 16 : 8;
+    // Soft PCF blur taps are costly — keep them low for live; export may bump via size.
+    light.shadow.blurSamples = shadowExportBoost ? (size >= 2048 ? 12 : 8) : 4;
     // 0 fades the cast out; 1 is the soft default core; above 1 crushes soft
     // penumbras that never fully occlude (shader clamps the darkened result).
     light.shadow.intensity = Math.max(0, shadowIntensityCurve(shadowOpacity, 1, 2.6));
-    light.shadow.needsUpdate = true;
+    // Freeze the key shadow map while orbiting; resume + refresh once idle.
+    light.shadow.autoUpdate = mode !== 'interactive' || shadowExportBoost;
+    light.shadow.needsUpdate = mode !== 'interactive' || shadowExportBoost;
     // Dispose stale map when resolution changes so GPU memory stays bounded.
     if (light.shadow.map && (light.shadow.map.width !== size || light.shadow.map.height !== size)) {
       light.shadow.map.dispose();
@@ -2748,17 +2850,21 @@ function KeyLightRig({
     }
   }, [castShadow, shadowSoftness, shadowOpacity, shadowQuality, shadowExportBoost, mode, gl]);
 
-  // Adaptive ortho frustum — tight around casters so 2048/4096 texels aren't wasted.
-  // Also re-assert intensity each frame so a failed shadow bake can never leave the key at 0.
+  // Adaptive ortho frustum — tight around casters so texels aren't wasted.
+  // Frozen during interactive orbit so we never rebuild the shadow map mid-drag.
   useFrame((state) => {
     const light = lightRef.current;
     if (!light) return;
     if (Math.abs(light.intensity - intensity) > 1e-6) light.intensity = intensity;
     if (!castShadow) return;
+    if (mode === 'interactive' && !shadowExportBoost) {
+      light.shadow.autoUpdate = false;
+      return;
+    }
+    light.shadow.autoUpdate = true;
     fitFrame.current += 1;
-    // Bound collection is expensive — don't do it every orbit frame.
-    const interval = mode === 'interactive' ? 3 : 6;
-    if (fitFrame.current % interval !== 0) return;
+    // Bound collection is expensive — throttle even when idle.
+    if (fitFrame.current % 6 !== 0) return;
 
     collectCasterBounds(scene, boundsRef.current, state.gl.info.render.frame);
     if (boundsRef.current.isEmpty()) return;
@@ -3356,9 +3462,9 @@ function CameraRig({
       },
       ...(hasLook && look ? { lookOffset: look } : {}),
     };
-    // Dual-pane sync without React re-renders; App still gets settle writes.
+    // Mid-drag: liveOrbit bus only (dual-pane). React sharedOrbit used to update
+    // once/RAF and re-render MemoDeviceCanvas every frame — settle writes below.
     publishLiveOrbit(orbit);
-    onSharedOrbitChangeRef.current?.(orbit);
   };
 
   const readLiveOrbit = () => {
@@ -4095,9 +4201,11 @@ function DeviceCanvasImpl({
   const fill = project.fillIntensity ?? DEFAULT_PROJECT.fillIntensity;
   const keyIntensity = Math.max(0, project.lightIntensity);
   const toneMappingExposure = project.toneMappingExposure ?? studioPreset.toneMappingExposure;
-  const movingLight = lightGizmoActive || Boolean(selectedSceneLightId);
-  // Orbit, light/gizmo drag, and playback all need a live ContactShadows plate.
-  const shadowBusy = gizmoDragging || movingLight || Boolean(mediaPlaying);
+  // Only actual motion keeps the demand loop alive. Selecting a light / enabling
+  // the light gizmo must NOT spin the GPU — drag handlers call setBusy / gizmoDragging.
+  const shadowBusy = gizmoDragging || Boolean(mediaPlaying);
+  // Device/prop gizmos yield while a light gizmo (or selected scene light) is active.
+  const lightBusy = lightGizmoActive || Boolean(selectedSceneLightId);
   // When App supplies a playheadRef, poses are applied in-canvas (no 60fps React).
   const animDriveActive = Boolean(playheadRef && project.animation && hasAnimation(project.animation));
   const drivenCameraOut = useRef<Vec3 | null>(null);
@@ -4109,8 +4217,8 @@ function DeviceCanvasImpl({
       frameloop="demand"
       dpr={pixelRatio ?? LIVE_CANVAS_DPR}
       shadows
-      // preserveDrawingBuffer off for live fill-rate; CaptureBridge renders then reads sync.
-      gl={{ antialias: true, alpha: true, preserveDrawingBuffer: false, powerPreference: 'high-performance' }}
+      // No MSAA on live canvas (Spline playbook); CaptureBridge / export can boost.
+      gl={LIVE_GL}
       camera={{ position: [0, 0, EYE_CAMERA_DISTANCE], fov: EYE_PERSPECTIVE_FOV, near: 0.1, far: 100 }}
       style={{ width: '100%', height: '100%', background: studioPreset.clearColor, display: 'block' }}
       onCreated={({ gl }) => {
@@ -4129,6 +4237,7 @@ function DeviceCanvasImpl({
     >
       <StudioShadowInteractionProvider exportBoost={shadowExportBoost} busyExternal={shadowBusy}>
         <DemandKeepAlive active={shadowBusy || Boolean(mediaPlaying)} />
+        <OrbitFpsProbe />
         <Background
           preset={project.background}
           colors={project.background === 'transparent' ? null : project.gradientColors}
@@ -4258,7 +4367,7 @@ function DeviceCanvasImpl({
               mediaPlaying={mediaPlaying}
               liveStream={liveStream}
               liveStreamDeviceId={liveStreamDeviceId}
-              gizmoActive={gizmoActive && !movingLight}
+              gizmoActive={gizmoActive && !lightBusy}
               onSelectDevice={onSelectDevice}
               onHoverDevice={onHoverDevice}
               onDragTargetDevice={onDragTargetDevice}

@@ -13,6 +13,8 @@ import { createDeviceInstance, DEVICE_COLORS, type DeviceColor } from '../types'
 
 const PREVIEW_PRESETS = ANIMATION_PRESETS.filter((preset) => preset.id !== 'clear');
 const CLEAR_PRESET = ANIMATION_PRESETS.find((preset) => preset.id === 'clear');
+/** At most this many preset cards run continuous animation at once. */
+const MAX_ANIMATED_PRESETS = 2;
 
 type AnimationPresetsPanelProps = {
   onApply: (presetId: string) => void;
@@ -22,6 +24,20 @@ type AnimationPresetsPanelProps = {
   clayMode?: boolean;
   screenshot?: string | null;
 };
+
+/** Shared live-animation slots so opening the panel does not spin 11 WebGL loops. */
+const animatedPresetIds = new Set<string>();
+
+function claimAnimatedSlot(id: string): boolean {
+  if (animatedPresetIds.has(id)) return true;
+  if (animatedPresetIds.size >= MAX_ANIMATED_PRESETS) return false;
+  animatedPresetIds.add(id);
+  return true;
+}
+
+function releaseAnimatedSlot(id: string) {
+  animatedPresetIds.delete(id);
+}
 
 function deg(value: number) {
   return (value * Math.PI) / 180;
@@ -253,6 +269,23 @@ function PresetCard({
 }) {
   const isClear = preset.id === 'clear';
   const { ref, visible } = useCardVisible();
+  const [hovered, setHovered] = useState(false);
+  const [animating, setAnimating] = useState(false);
+  const wantMotion = !isClear && visible && (hovered || applied);
+
+  useEffect(() => {
+    if (!wantMotion) {
+      releaseAnimatedSlot(preset.id);
+      setAnimating(false);
+      return undefined;
+    }
+    const got = claimAnimatedSlot(preset.id);
+    setAnimating(got);
+    return () => {
+      releaseAnimatedSlot(preset.id);
+      setAnimating(false);
+    };
+  }, [wantMotion, preset.id]);
 
   return (
     <div
@@ -262,6 +295,10 @@ function PresetCard({
       title={preset.description}
       aria-label={`Apply ${preset.label} animation`}
       onClick={() => onApply(preset.id)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
@@ -273,14 +310,16 @@ function PresetCard({
         {visible ? (
           <Canvas
             className="anim-preset-canvas"
-            dpr={[1, 1.5]}
+            dpr={[1, 1.25]}
             gl={{ alpha: false, antialias: true, powerPreference: 'low-power' }}
-            frameloop={isClear ? 'demand' : 'always'}
+            // Static first frame when visible; continuous only for hover / applied (budgeted).
+            frameloop={animating ? 'always' : 'demand'}
             camera={{ position: [0, 0, 3.05], fov: 34 }}
-            onCreated={({ gl }) => {
+            onCreated={({ gl, invalidate }) => {
               gl.setClearColor(0xdfe3e8, 1);
               gl.toneMapping = THREE.ACESFilmicToneMapping;
               gl.toneMappingExposure = 1.7;
+              invalidate();
             }}
           >
             <PresetPreviewScene
@@ -288,7 +327,7 @@ function PresetCard({
               deviceId={deviceId}
               clayMode={clayMode}
               colorHex={colorHex}
-              animate={!isClear}
+              animate={animating}
             />
           </Canvas>
         ) : (

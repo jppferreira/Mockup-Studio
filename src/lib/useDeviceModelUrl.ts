@@ -1,13 +1,11 @@
 import { useEffect, useState } from 'react';
 import { deviceAssetUrl } from './devices';
-import { bundledLocalModelUrl, isBundledLocalDevice } from './localDeviceModels';
+import { bundledLocalModelUrl } from './localDeviceModels';
 import {
   peekDeviceModelUrl,
   remoteModelsConfigured,
   resolveDeviceModelUrl,
-  warmDeviceModels,
 } from './modelCache';
-import { prefetchDeviceModel } from './prefetchDeviceModel';
 
 type State = {
   url: string | null;
@@ -18,9 +16,10 @@ type State = {
 /**
  * Resolve a loadable GLB URL for a catalog device.
  *
- * Hybrid delivery:
+ * On-demand only:
  * - Free starters (`FREE_DEVICE_IDS`) → bundled Vite asset URLs (instant, no network).
- * - Paid catalog → Supabase signed URL → encrypted IDB cache → blob URL.
+ * - Paid catalog → Supabase signed URL → encrypted IDB cache → blob URL when the
+ *   canvas mounts that device (no hover / project-wide warm).
  * - When remote delivery is not configured, fall back to `public/models` paths.
  *
  * Deliberately does not call useGLTF.preload here — parsing stays with the canvas
@@ -93,23 +92,4 @@ export function useDeviceModelUrl(
   }, [deviceId, fallbackUrl]);
 
   return state;
-}
-
-/**
- * Warm project devices before Suspense asks:
- * - Free starters → meshopt decoder + useGLTF.preload on the bundled URL
- * - Paid ids → decrypt/download into the encrypted blob cache (+ preload via prefetch)
- */
-export function warmProjectDeviceModels(deviceIds: string[]): void {
-  const unique = [...new Set(deviceIds.filter(Boolean))];
-  if (!unique.length) return;
-
-  const remoteIds = unique.filter((id) => !isBundledLocalDevice(id));
-  if (remoteIds.length && remoteModelsConfigured()) {
-    warmDeviceModels(remoteIds);
-  }
-
-  for (const deviceId of unique) {
-    void prefetchDeviceModel(deviceId);
-  }
 }

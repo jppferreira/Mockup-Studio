@@ -1,11 +1,31 @@
 import * as THREE from 'three';
 import type { ShadowQuality, Vec3 } from '../types';
 
-/** Internal render quality — interactive stays responsive; studio refines after idle. */
+/**
+ * Internal render quality.
+ * - interactive: orbit / gizmo / playback — freeze maps, skip DoF/AO/grade
+ * - studio: idle preview — full soft shadows + post
+ * Export paths force studio quality with exportBoost (up to 4096 maps).
+ */
 export type StudioShadowMode = 'interactive' | 'studio';
+
+/** Explicit quality tiers used by diagnostics and docs (maps onto mode + exportBoost). */
+export type RenderQualityTier = 'interactive' | 'preview' | 'export';
 
 /** Idle delay before progressive studio refinement (ms). */
 export const STUDIO_SHADOW_IDLE_MS = 260;
+
+/**
+ * Suggested shadow-map budgets by tier.
+ * Live preview keeps a stable 2048 atlas across interactive↔studio so mode flips
+ * never dispose/reallocate. Export may bump to 4096. Interactive freezes updates
+ * instead of shrinking to 1024 (avoids atlas thrash + shader stalls).
+ */
+export const SHADOW_MAP_BUDGET = {
+  interactive: 2048,
+  preview: 2048,
+  export: 4096,
+} as const;
 
 /** Accumulation samples for stationary preview / export. */
 export const STUDIO_SHADOW_SAMPLES = {
@@ -237,12 +257,14 @@ export function resolveKeyShadowMapSize(
   exportBoost: boolean,
   maxTextureSize: number,
 ): number {
-  // Interactive stays light for orbit/gizmo; studio idle + export keep photographic maps.
-  let size = 1024;
-  if (exportBoost || quality === 'ultra' || mode === 'studio') size = 4096;
-  else size = 1024;
+  // Always use the studio atlas size (even while orbiting) so mode flips never
+  // dispose/reallocate the map. Orbit freezes updates instead of shrinking.
+  void mode;
+  let size = 2048;
+  if (exportBoost || quality === 'ultra') size = 4096;
+  else if (quality === 'high' || quality === 'auto') size = 2048;
+  else size = 2048;
   const cap = Math.max(512, Math.min(4096, maxTextureSize || 4096));
-  // Prefer power-of-two under the GPU limit.
   let out = size;
   while (out > cap) out = Math.floor(out / 2);
   return THREE.MathUtils.clamp(out, 512, 4096);
@@ -255,25 +277,24 @@ export function resolveFloorShadowResolution(
   exportBoost: boolean,
   maxTextureSize: number,
 ): number {
+  // Stable studio resolution in both modes — plate stays visible/frozen on orbit.
+  void mode;
   let size = 2048;
-  if (mode === 'interactive' && !exportBoost) {
-    size = (quality === 'high' || quality === 'ultra') ? 1024 : 512;
-  } else if (exportBoost || quality === 'ultra' || quality === 'high') {
-    size = 2048;
-  }
+  if (exportBoost || quality === 'ultra' || quality === 'high') size = 2048;
   const cap = Math.max(512, Math.min(2048, maxTextureSize || 2048));
   let out = size;
   while (out > cap) out = Math.floor(out / 2);
   return THREE.MathUtils.clamp(out, 512, 2048);
 }
 
-/** Extra scene lights (spot / directional) — lighter while orbiting. */
+/** Extra scene lights (spot / directional) — stable size; export may bump. */
 export function resolveSceneLightShadowMapSize(
   mode: StudioShadowMode,
   exportBoost: boolean,
   maxTextureSize: number,
 ): number {
-  let size = exportBoost || mode === 'studio' ? 2048 : 1024;
+  void mode;
+  let size = exportBoost ? 2048 : 2048;
   const cap = Math.max(512, Math.min(2048, maxTextureSize || 2048));
   let out = size;
   while (out > cap) out = Math.floor(out / 2);
