@@ -32,6 +32,7 @@ const DEVICE_CATEGORY_LUCIDE: Record<DeviceCategoryIconKey, LucideIcon> = {
   cuboid: Cuboid,
 };
 import AccentThemePicker from './AccentThemePicker';
+import AccountLicencePanel from './AccountLicencePanel';
 import CloudAccountPanel from './CloudAccountPanel';
 import {
   cloudRowToDocument,
@@ -209,6 +210,7 @@ export default function ProjectsDashboard({
   isDeveloperToolset,
   onSetToolset,
   onExplorePro,
+  onLicenseChange,
   onFeedback,
   onShowOnboarding,
   onShowStudioTour,
@@ -247,6 +249,7 @@ export default function ProjectsDashboard({
   isDeveloperToolset?: boolean;
   onSetToolset?: (toolset: 'developer' | 'user') => void;
   onExplorePro: () => void;
+  onLicenseChange: (next: LicenseState) => void;
   onFeedback: () => void;
   onShowOnboarding?: () => void;
   onShowStudioTour?: () => void;
@@ -1279,18 +1282,21 @@ export default function ProjectsDashboard({
                 onSignedInChange={onCloudSignedInChange}
                 onAfterSync={() => { void refreshCloudIds(); }}
               />
-              <div className="dash-setting">
-                <strong>Plan</strong>
-                <span>{licensingDisabled ? 'Pro Max (this build)' : planLabel(license.tier)}</span>
-              </div>
+              <AccountLicencePanel
+                license={license}
+                onLicenseChange={onLicenseChange}
+                onOpenPlans={onExplorePro}
+              />
               <button type="button" className="dash-setting" onClick={onOpenFile}>
                 <strong>Open a project file</strong>
                 <span>Load a template you saved earlier</span>
               </button>
-              <button type="button" className="dash-setting" onClick={onExplorePro}>
-                <strong>Explore Pro</strong>
-                <span>Devices, video export, and higher resolutions</span>
-              </button>
+              {!licensingDisabled && (
+                <button type="button" className="dash-setting" onClick={onExplorePro}>
+                  <strong>Explore Pro</strong>
+                  <span>Devices, video export, and higher resolutions · {planLabel(license.tier)}</span>
+                </button>
+              )}
               <button type="button" className="dash-setting" onClick={onFeedback}>
                 <strong>Send feedback</strong>
                 <span>Tell us what the studio should do next</span>
@@ -1311,7 +1317,9 @@ export default function ProjectsDashboard({
               <div className="dash-setting dash-legal" id="settings-about">
                 <strong>About</strong>
                 <span>{APP_ABOUT_SUMMARY}</span>
-                <span className="dash-legal-meta">mokstudio · 0.1.0</span>
+                <span className="dash-legal-meta">
+                  mokstudio · {typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.1.2'}
+                </span>
               </div>
 
               <div className="dash-setting dash-legal" id="settings-legal">

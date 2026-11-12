@@ -8499,6 +8499,44 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
   font-weight: 700;
   cursor: pointer;
 }
+.update-prompt-backdrop {
+  z-index: 90;
+}
+.update-prompt-modal {
+  width: 420px;
+}
+.update-prompt-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 4px;
+}
+.update-prompt-progress-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: #2a2e34;
+  overflow: hidden;
+}
+.update-prompt-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #8ecf7a, #c6f0a8);
+  transition: width 0.25s ease-out;
+}
+.update-prompt-progress > span {
+  min-width: 3.5rem;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 650;
+  color: #c5ccd4;
+}
+.dash-settings .account-licence-panel {
+  margin: 0;
+  max-width: none;
+  border-color: var(--dash-border, #2a2d33);
+  background: var(--dash-panel-2, #14161a);
+}
 .toast { position: absolute; z-index: 100; bottom: 27px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 11px; color: var(--tone-eaf9eb); background: var(--tone-283c2d); border: 1px solid var(--tone-598565); border-radius: 14px; padding: 13px 14px; font-size: 12px; box-shadow: 0 10px 35px #0008; }
 .toast-dot { background: var(--tone-baf5aa); height: 8px; width: 8px; border-radius: 50%; }
 .toast button { background: transparent; color: var(--tone-c2d6c4); border: 0; display: grid; place-items: center; }

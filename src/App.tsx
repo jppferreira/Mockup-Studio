@@ -6454,7 +6454,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
   return (
     <div className={`app-shell ${hasOpenProject ? 'has-project' : 'is-dashboard'}`}>
-      <UpdateBanner />
+      <UpdateBanner home={!hasOpenProject} />
       {hasOpenProject && (
       <header className="topbar">
         <button
@@ -6738,6 +6738,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             }
             setLicenseOpen(true);
           }}
+          onLicenseChange={setLicense}
           onFeedback={() => setFeedbackOpen(true)}
           onShowOnboarding={onShowOnboarding}
           onShowStudioTour={requestStudioTour}
