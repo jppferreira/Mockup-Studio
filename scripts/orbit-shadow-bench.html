@@ -1,0 +1,204 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>orbit shadow bench</title>
+  <style>body{margin:0;background:#111;color:#eee;font:14px/1.4 system-ui}canvas{width:960px;height:540px;display:block}</style>
+</head>
+<body>
+<canvas id="c" width="960" height="540"></canvas>
+<pre id="out">running…</pre>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/node_modules/three/build/three.module.js"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const canvas = document.getElementById('c');
+const out = document.getElementById('out');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(1);
+renderer.setSize(960, 540, false);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+function buildScene({ mapSize, blurSamples, softboxes }) {
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1a1e);
+  const camera = new THREE.PerspectiveCamera(40, 960 / 540, 0.1, 100);
+  camera.position.set(2.8, 1.8, 3.6);
+  camera.lookAt(0, 0.7, 0);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+  scene.add(new THREE.HemisphereLight(0xddeeff, 0x334455, 0.35));
+
+  if (softboxes) {
+    for (const [x, y, z, i] of [[2, 3, 1, 2], [-2, 2.5, 1, 1.2], [0, 2, -2, 0.9]]) {
+      const box = new THREE.RectAreaLight(0xffffff, i, 1.6, 1.0);
+      box.position.set(x, y, z);
+      box.lookAt(0, 0.7, 0);
+      scene.add(box);
+    }
+  }
+
+  const key = new THREE.DirectionalLight(0xffffff, 1.5);
+  key.position.set(2.4, 3.8, 1.8);
+  key.castShadow = true;
+  key.shadow.mapSize.set(mapSize, mapSize);
+  key.shadow.camera.near = 0.5;
+  key.shadow.camera.far = 24;
+  key.shadow.camera.left = -5;
+  key.shadow.camera.right = 5;
+  key.shadow.camera.top = 5;
+  key.shadow.camera.bottom = -5;
+  key.shadow.blurSamples = blurSamples;
+  key.shadow.radius = 4;
+  scene.add(key, key.target);
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(14, 14),
+    new THREE.MeshStandardMaterial({ color: 0x2a2a30, roughness: 1, metalness: 0 }),
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  // Dense-ish product + props to stress the shadow pass.
+  for (let i = 0; i < 28; i++) {
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.35 + (i % 5) * 0.08, 0.9 + (i % 3) * 0.25, 0.08 + (i % 4) * 0.02),
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setHSL((i % 10) / 10, 0.15, 0.18),
+        roughness: 0.4,
+        metalness: 0.55,
+      }),
+    );
+    mesh.position.set((i % 7) * 0.55 - 1.8, 0.55, Math.floor(i / 7) * 0.7 - 1.1);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+  }
+  return { scene, camera, key };
+}
+
+function contactPass(renderer, scene, camera, rt) {
+  renderer.setRenderTarget(rt);
+  renderer.clear();
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+}
+
+/** Proxy for installRenderGrade: MSAA color + depth + DoF + AO blit targets. */
+function gradeStack(renderer, scene, camera, colorRt, depthRt, times) {
+  for (let n = 0; n < times; n++) {
+    renderer.setRenderTarget(n === 0 ? colorRt : depthRt);
+    renderer.clear();
+    renderer.render(scene, camera);
+  }
+  renderer.setRenderTarget(null);
+}
+
+function measure(label, opts, frames = 120) {
+  const { scene, camera, key } = buildScene(opts);
+  // Warmup compiles shaders / allocates maps.
+  key.shadow.needsUpdate = true;
+  for (let i = 0; i < 12; i++) {
+    if (opts.rebuildContact) contactPass(renderer, scene, camera, opts.rt);
+    if (opts.gradePasses > 0) gradeStack(renderer, scene, camera, opts.colorRt, opts.depthRt, opts.gradePasses);
+    else renderer.render(scene, camera);
+  }
+  key.shadow.autoUpdate = opts.autoUpdate;
+  renderer.shadowMap.autoUpdate = opts.mapAutoUpdate;
+
+  const t0 = performance.now();
+  for (let i = 0; i < frames; i++) {
+    const a = i * 0.07;
+    camera.position.x = Math.cos(a) * 3.8;
+    camera.position.z = Math.sin(a) * 3.8;
+    camera.lookAt(0, 0.7, 0);
+    if (opts.forceShadow) key.shadow.needsUpdate = true;
+    if (opts.rebuildContact) contactPass(renderer, scene, camera, opts.rt);
+    if (opts.gradePasses > 0) gradeStack(renderer, scene, camera, opts.colorRt, opts.depthRt, opts.gradePasses);
+    else renderer.render(scene, camera);
+  }
+  const ms = performance.now() - t0;
+  const avgMs = ms / frames;
+  return {
+    label,
+    avgMs: Math.round(avgMs * 100) / 100,
+    equivFps: Math.round((1000 / avgMs) * 10) / 10,
+    frames,
+    totalMs: Math.round(ms),
+  };
+}
+
+const rt = new THREE.WebGLRenderTarget(2048, 2048);
+const colorRt = new THREE.WebGLRenderTarget(960, 540, { samples: 2 });
+const depthRt = new THREE.WebGLRenderTarget(960, 540);
+
+// Orbit-with-DoF/AO era: updating 4096 map + contact rebuild + full grade stack.
+const before = measure('before interactive (4096+contact+grade×3)', {
+  mapSize: 4096,
+  blurSamples: 16,
+  softboxes: true,
+  autoUpdate: true,
+  mapAutoUpdate: true,
+  forceShadow: true,
+  rebuildContact: true,
+  gradePasses: 3,
+  rt,
+  colorRt,
+  depthRt,
+});
+
+// Shipped interactive: frozen 2048, softboxes on, no contact rebuild, fast path (1 pass).
+const after = measure('after interactive (2048 frozen, softboxes, grade×0)', {
+  mapSize: 2048,
+  blurSamples: 4,
+  softboxes: true,
+  autoUpdate: false,
+  mapAutoUpdate: false,
+  forceShadow: false,
+  rebuildContact: false,
+  gradePasses: 0,
+  rt,
+  colorRt,
+  depthRt,
+});
+
+const preview = measure('preview idle (2048 + grade×3, no contact every frame)', {
+  mapSize: 2048,
+  blurSamples: 4,
+  softboxes: true,
+  autoUpdate: true,
+  mapAutoUpdate: true,
+  forceShadow: false,
+  rebuildContact: false,
+  gradePasses: 3,
+  rt,
+  colorRt,
+  depthRt,
+});
+
+const report = {
+  hardware: {
+    userAgent: navigator.userAgent,
+    devicePixelRatio: window.devicePixelRatio,
+    maxTextureSize: renderer.capabilities.maxTextureSize,
+  },
+  before,
+  after,
+  preview,
+  speedupInteractive: Math.round((before.avgMs / after.avgMs) * 100) / 100,
+  note: 'Tight render-loop ms/frame (not vsync-capped). ContactShadows ≈ extra 2048 pass; grade×N ≈ MSAA color + depth (+ DoF/AO) scene re-renders.',
+};
+out.textContent = JSON.stringify(report, null, 2);
+document.title = `fps~${after.equivFps} (${report.speedupInteractive}×)`;
+window.__bench = report;
+</script>
+</body>
+</html>
