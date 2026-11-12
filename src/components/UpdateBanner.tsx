@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Download, RefreshCw, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Check, Download, RefreshCw, X } from 'lucide-react';
 import { isDirectDesktopBuild, supportsElectronUpdater } from '../lib/distribution';
 import {
   currentAppVersion,
@@ -11,22 +11,35 @@ import {
 type Props = {
   /** Home / projects dashboard — use a modal instead of the corner banner. */
   home?: boolean;
+  onNotify?: (message: string) => void;
 };
 
 /**
- * Desktop auto-update UI (Figma-style).
- * Detect → show what changed → download inside the app → restart to install.
+ * Desktop auto-update UI.
+ * Available → changelog modal → download in background (app stays usable) →
+ * confirmation when ready → restart installs from the downloaded zip.
  */
-export default function UpdateBanner({ home = false }: Props) {
+export default function UpdateBanner({ home = false, onNotify }: Props) {
   const [status, setStatus] = useState<DesktopUpdateStatus | null>(null);
   const [dismissedKey, setDismissedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
+  const readyAnnounced = useRef<string | null>(null);
+  const onNotifyRef = useRef(onNotify);
+  onNotifyRef.current = onNotify;
 
   useEffect(() => {
     if (!isDirectDesktopBuild()) return undefined;
 
     let cancelled = false;
     const api = window.mockupDesktop;
+
+    void api?.takeUpdateConfirmation?.().then((confirmation) => {
+      if (cancelled || !confirmation?.version) return;
+      onNotifyRef.current?.(
+        `mokstudio is updated to ${confirmation.version}. You’re on the latest version.`,
+      );
+    });
 
     const mergeNotes = async (next: DesktopUpdateStatus) => {
       if (!next.version) return next;
@@ -117,6 +130,15 @@ export default function UpdateBanner({ home = false }: Props) {
     };
   }, [home]);
 
+  useEffect(() => {
+    if (status?.state !== 'ready' || !status.version) return;
+    if (readyAnnounced.current === status.version) return;
+    readyAnnounced.current = status.version;
+    onNotifyRef.current?.(
+      `Update ${status.version} finished downloading. Restart when you’re ready to install it.`,
+    );
+  }, [status?.state, status?.version]);
+
   const startInAppDownload = async () => {
     if (!supportsElectronUpdater()) {
       setStatus({
@@ -128,7 +150,11 @@ export default function UpdateBanner({ home = false }: Props) {
       });
       return;
     }
+    const version = status?.version ?? null;
     setBusy(true);
+    setInstallError(null);
+    // Close the blocking modal so the user can keep working.
+    setDismissedKey(`downloading:${version ?? ''}`);
     setStatus((prev) => ({
       state: 'downloading',
       version: prev?.version ?? null,
@@ -136,25 +162,47 @@ export default function UpdateBanner({ home = false }: Props) {
       notes: prev?.notes,
       title: prev?.title,
     }));
+    onNotifyRef.current?.(
+      version
+        ? `Downloading update ${version} in the background…`
+        : 'Downloading update in the background…',
+    );
     try {
       const result = await window.mockupDesktop?.downloadUpdate?.();
       if (!result?.ok) {
+        setDismissedKey(null);
         setStatus({
           state: 'error',
           message: result?.error || 'Could not download the update.',
-          version: status?.version,
+          version,
           notes: status?.notes,
           title: status?.title,
         });
       }
     } catch (err) {
+      setDismissedKey(null);
       setStatus({
         state: 'error',
         message: err instanceof Error ? err.message : 'Could not download the update.',
-        version: status?.version,
+        version,
         notes: status?.notes,
         title: status?.title,
       });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const installUpdate = async () => {
+    setBusy(true);
+    setInstallError(null);
+    try {
+      const result = await window.mockupDesktop?.installUpdate?.();
+      if (!result?.ok) {
+        setInstallError(result?.error || 'Could not restart to install the update.');
+      }
+    } catch (err) {
+      setInstallError(err instanceof Error ? err.message : 'Could not restart to install the update.');
     } finally {
       setBusy(false);
     }
@@ -169,11 +217,94 @@ export default function UpdateBanner({ home = false }: Props) {
   if (!active || !status) return null;
 
   const dismissKey = `${status.state}:${status.version ?? ''}`;
-  if (home && dismissedKey === dismissKey && status.state !== 'ready') return null;
-
   const versionLabel = status.version ? ` ${status.version}` : '';
   const percent = typeof status.percent === 'number' ? Math.max(0, Math.min(100, status.percent)) : null;
   const notes = status.notes?.length ? status.notes : null;
+
+  // While downloading, never block the UI — only a compact banner.
+  if (status.state === 'downloading') {
+    return (
+      <div className="update-banner" role="status">
+        <span>
+          Downloading update{versionLabel}
+          {percent != null ? ` · ${percent}%` : '…'}
+        </span>
+      </div>
+    );
+  }
+
+  // Ready confirmation — show on home as modal; elsewhere as banner.
+  if (status.state === 'ready') {
+    if (!home || dismissedKey === dismissKey) {
+      return (
+        <div className="update-banner" role="status">
+          <span>Update{versionLabel} is ready.</span>
+          <button type="button" disabled={busy} onClick={() => void installUpdate()}>
+            Restart
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className="modal-backdrop update-prompt-backdrop"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setDismissedKey(dismissKey);
+        }}
+      >
+        <div
+          className="export-modal update-prompt-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="update-ready-title"
+        >
+          <div className="modal-head">
+            <div className="modal-icon" aria-hidden>
+              <Check size={21} />
+            </div>
+            <button
+              type="button"
+              className="modal-close"
+              aria-label="Dismiss"
+              onClick={() => setDismissedKey(dismissKey)}
+            >
+              <X size={19} />
+            </button>
+          </div>
+          <h2 id="update-ready-title">Update{versionLabel} is ready</h2>
+          <p>
+            The download finished. You can keep working — restart mokstudio when you want to install it.
+            Your projects are saved.
+          </p>
+          {installError && (
+            <p className="update-prompt-error" role="alert">{installError}</p>
+          )}
+          <div className="export-modal-actions">
+            <button
+              type="button"
+              className="button subtle-button"
+              onClick={() => setDismissedKey(dismissKey)}
+            >
+              Later
+            </button>
+            <button
+              type="button"
+              className="button primary-button"
+              disabled={busy}
+              onClick={() => void installUpdate()}
+            >
+              <RefreshCw size={15} aria-hidden />
+              Restart and update
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (home && dismissedKey === dismissKey) return null;
 
   if (!home) {
     if (status.state === 'available') {
@@ -186,41 +317,16 @@ export default function UpdateBanner({ home = false }: Props) {
         </div>
       );
     }
-    if (status.state !== 'downloading' && status.state !== 'ready') return null;
-    return (
-      <div className="update-banner" role="status">
-        {status.state === 'ready' ? (
-          <>
-            <span>Update{versionLabel} is ready.</span>
-            <button type="button" onClick={() => void window.mockupDesktop?.installUpdate?.()}>
-              Restart
-            </button>
-          </>
-        ) : (
-          <span>
-            Downloading update
-            {percent != null ? ` ${percent}%` : '…'}
-          </span>
-        )}
-      </div>
-    );
+    return null;
   }
 
-  const title = status.state === 'ready'
-    ? `Update${versionLabel} is ready`
-    : status.state === 'error'
-      ? 'Could not download update'
-      : status.state === 'downloading'
-        ? `Downloading update${versionLabel}`
-        : `Update${versionLabel} available`;
+  const title = status.state === 'error'
+    ? 'Could not download update'
+    : `Update${versionLabel} available`;
 
-  const body = status.state === 'ready'
-    ? 'Restart mokstudio to install the update. Your projects are saved.'
-    : status.state === 'downloading'
-      ? 'Downloading in the background. Keep the app open — we will ask you to restart when it is ready.'
-      : status.state === 'error'
-        ? `${status.message || 'The update could not be downloaded.'} Try again to download inside mokstudio.`
-        : `You’re on ${currentAppVersion()}. Here’s what’s new — download inside the app, then restart when ready.`;
+  const body = status.state === 'error'
+    ? `${status.message || 'The update could not be downloaded.'} Try again — you can keep using mokstudio while it downloads.`
+    : `You’re on ${currentAppVersion()}. Download in the background, keep working, then restart when it’s ready.`;
 
   return (
     <div
@@ -228,7 +334,6 @@ export default function UpdateBanner({ home = false }: Props) {
       role="presentation"
       onMouseDown={(event) => {
         if (event.target !== event.currentTarget) return;
-        if (status.state === 'ready' || status.state === 'downloading') return;
         setDismissedKey(dismissKey);
       }}
     >
@@ -240,22 +345,20 @@ export default function UpdateBanner({ home = false }: Props) {
       >
         <div className="modal-head">
           <div className="modal-icon" aria-hidden>
-            {status.state === 'ready' ? <RefreshCw size={21} /> : <Download size={21} />}
+            <Download size={21} />
           </div>
-          {status.state !== 'ready' && status.state !== 'downloading' && (
-            <button
-              type="button"
-              className="modal-close"
-              aria-label="Dismiss update prompt"
-              onClick={() => setDismissedKey(dismissKey)}
-            >
-              <X size={19} />
-            </button>
-          )}
+          <button
+            type="button"
+            className="modal-close"
+            aria-label="Dismiss update prompt"
+            onClick={() => setDismissedKey(dismissKey)}
+          >
+            <X size={19} />
+          </button>
         </div>
         <h2 id="update-prompt-title">{title}</h2>
         <p>{body}</p>
-        {notes && (
+        {notes && status.state === 'available' && (
           <div className="update-prompt-notes">
             <strong>{status.title || `What’s new in ${status.version ?? 'this update'}`}</strong>
             <ul>
@@ -265,31 +368,8 @@ export default function UpdateBanner({ home = false }: Props) {
             </ul>
           </div>
         )}
-        {status.state === 'downloading' && (
-          <div className="update-prompt-progress" aria-live="polite">
-            <div className="update-prompt-progress-track">
-              <div
-                className="update-prompt-progress-fill"
-                style={{ width: `${percent ?? 8}%` }}
-              />
-            </div>
-            <span>{percent != null ? `${percent}%` : 'Starting…'}</span>
-          </div>
-        )}
         <div className="export-modal-actions">
-          {status.state === 'ready' ? (
-            <button
-              type="button"
-              className="button primary-button"
-              onClick={() => void window.mockupDesktop?.installUpdate?.()}
-            >
-              Restart and update
-            </button>
-          ) : status.state === 'downloading' ? (
-            <button type="button" className="button subtle-button" disabled>
-              Downloading…
-            </button>
-          ) : status.state === 'error' ? (
+          {status.state === 'error' ? (
             <>
               <button
                 type="button"

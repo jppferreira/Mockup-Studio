@@ -107,7 +107,7 @@ interface Window {
       percent?: number;
       message?: string | null;
     }>;
-    installUpdate?: () => Promise<{ ok: boolean }>;
+    installUpdate?: () => Promise<{ ok: boolean; error?: string; fallback?: boolean }>;
     downloadUpdate?: () => Promise<{
       ok: boolean;
       state?: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'up-to-date';
@@ -122,6 +122,7 @@ interface Window {
       percent?: number;
       error?: string;
     }>;
+    takeUpdateConfirmation?: () => Promise<{ version: string; at?: number } | null>;
     onUpdateStatus?: (handler: (status: {
       state: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'up-to-date';
       version?: string | null;

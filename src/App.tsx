@@ -6454,7 +6454,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
 
   return (
     <div className={`app-shell ${hasOpenProject ? 'has-project' : 'is-dashboard'}`}>
-      <UpdateBanner home={!hasOpenProject} />
+      <UpdateBanner home={!hasOpenProject} onNotify={notify} />
       {hasOpenProject && (
       <header className="topbar">
         <button

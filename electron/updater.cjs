@@ -1,5 +1,9 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const { autoUpdater } = require('electron-updater');
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const CHECK_DELAY_MS = 4_000;
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -10,6 +14,126 @@ function isMasBuild() {
   if (process.mas === true) return true;
   if (process.env.MOCKUP_DISTRIBUTION === 'mac_mas') return true;
   return false;
+}
+
+function updaterCacheDir() {
+  return path.join(app.getPath('home'), 'Library', 'Caches', 'mockup-studio-updater');
+}
+
+function findDownloadedZip() {
+  const cache = updaterCacheDir();
+  const updateZip = path.join(cache, 'update.zip');
+  if (fs.existsSync(updateZip)) return updateZip;
+  const pendingDir = path.join(cache, 'pending');
+  if (!fs.existsSync(pendingDir)) return null;
+  const zip = fs.readdirSync(pendingDir).find((name) => name.endsWith('.zip'));
+  return zip ? path.join(pendingDir, zip) : null;
+}
+
+function currentAppBundlePath() {
+  // …/mokstudio.app/Contents/MacOS/mokstudio → …/mokstudio.app
+  return path.resolve(process.execPath, '..', '..', '..');
+}
+
+function confirmationPath() {
+  return path.join(app.getPath('userData'), 'update-confirmation.json');
+}
+
+function markUpdateConfirmation(version) {
+  try {
+    fs.writeFileSync(
+      confirmationPath(),
+      JSON.stringify({ version: version || app.getVersion(), at: Date.now() }),
+      'utf8',
+    );
+  } catch (err) {
+    console.error('[updater] could not write confirmation', err instanceof Error ? err.message : err);
+  }
+}
+
+function takeUpdateConfirmation() {
+  const file = confirmationPath();
+  try {
+    if (!fs.existsSync(file)) return null;
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fs.unlinkSync(file);
+    return raw && typeof raw.version === 'string' ? raw : null;
+  } catch {
+    try { fs.unlinkSync(file); } catch { /* ignore */ }
+    return null;
+  }
+}
+
+/**
+ * Squirrel.Mac quitAndInstall is unreliable for ad-hoc/unsigned direct builds.
+ * Apply the downloaded zip with a detached shell helper after this process quits.
+ */
+function installFromDownloadedZip(version) {
+  const zipPath = findDownloadedZip();
+  if (!zipPath) {
+    return { ok: false, error: 'Update package not found. Try downloading again.' };
+  }
+
+  const appPath = currentAppBundlePath();
+  if (!appPath.endsWith('.app') || !fs.existsSync(appPath)) {
+    return { ok: false, error: 'Could not locate the installed app bundle.' };
+  }
+
+  const staging = path.join(os.tmpdir(), `mokstudio-update-${process.pid}-${Date.now()}`);
+  const helper = path.join(os.tmpdir(), `mokstudio-apply-update-${process.pid}.sh`);
+  const logFile = path.join(app.getPath('home'), 'Library', 'Logs', 'mokstudio-update.log');
+
+  const script = `#!/bin/bash
+set -euo pipefail
+APP_PATH=${JSON.stringify(appPath)}
+ZIP_PATH=${JSON.stringify(zipPath)}
+STAGING=${JSON.stringify(staging)}
+LOG=${JSON.stringify(logFile)}
+mkdir -p "$(dirname "$LOG")"
+exec >>"$LOG" 2>&1
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) applying update from $ZIP_PATH -> $APP_PATH"
+
+for _ in $(seq 1 80); do
+  if ! pgrep -f "$APP_PATH/Contents/MacOS/" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.25
+done
+sleep 0.8
+
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
+ditto -x -k "$ZIP_PATH" "$STAGING"
+NEW_APP="$STAGING/mokstudio.app"
+if [[ ! -d "$NEW_APP" ]]; then
+  NEW_APP="$(find "$STAGING" -maxdepth 2 -name '*.app' -type d | head -1 || true)"
+fi
+if [[ -z "\${NEW_APP}" || ! -d "$NEW_APP" ]]; then
+  echo "no .app found in update zip"
+  exit 1
+fi
+
+rm -rf "$APP_PATH"
+ditto "$NEW_APP" "$APP_PATH"
+xattr -cr "$APP_PATH" >/dev/null 2>&1 || true
+open "$APP_PATH"
+rm -rf "$STAGING"
+rm -f "$0"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) update applied"
+`;
+
+  fs.writeFileSync(helper, script, { mode: 0o755 });
+  markUpdateConfirmation(version);
+  spawn('/bin/bash', [helper], {
+    detached: true,
+    stdio: 'ignore',
+  }).unref();
+
+  setTimeout(() => {
+    app.quit();
+  }, 250);
+
+  return { ok: true };
 }
 
 /** Background Mac updates from the latest GitHub Release (latest-mac.yml + zip). */
@@ -27,12 +151,25 @@ function setupAutoUpdater() {
   };
 
   ipcMain.handle('updater:status', () => status);
+  ipcMain.handle('updater:takeConfirmation', () => takeUpdateConfirmation());
   ipcMain.handle('updater:install', () => {
-    if (!enabled || status.state !== 'ready') return { ok: false };
+    if (!enabled || status.state !== 'ready') {
+      return { ok: false, error: 'No downloaded update is ready to install.' };
+    }
+    const version = status.version || lastCheckResult?.updateInfo?.version || null;
+    // Prefer direct zip apply — Squirrel.Mac often fails on unsigned builds.
+    const direct = installFromDownloadedZip(version);
+    if (direct.ok) return direct;
+
+    console.warn('[updater] direct install failed, falling back to quitAndInstall', direct.error);
     setImmediate(() => {
-      autoUpdater.quitAndInstall(false, true);
+      try {
+        autoUpdater.quitAndInstall(false, true);
+      } catch (err) {
+        console.error('[updater] quitAndInstall failed', err instanceof Error ? err.message : err);
+      }
     });
-    return { ok: true };
+    return { ok: true, fallback: true };
   });
   ipcMain.handle('updater:download', async () => {
     if (!enabled) {
@@ -50,11 +187,10 @@ function setupAutoUpdater() {
         version: status.version || lastCheckResult?.updateInfo?.version || null,
         percent: 0,
       });
-      // Ensure we have update info before downloadUpdate().
-      if (!lastCheckResult?.downloadPromise && status.state !== 'available') {
+      if (!lastCheckResult) {
         lastCheckResult = await autoUpdater.checkForUpdates();
       }
-      await autoUpdater.downloadUpdate();
+      await autoUpdater.downloadUpdate(lastCheckResult?.cancellationToken);
       return { ok: true, state: status.state, version: status.version || null };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -77,7 +213,6 @@ function setupAutoUpdater() {
       broadcast({ state: 'checking', version: null, percent: 0 });
       lastCheckResult = await autoUpdater.checkForUpdates();
       const version = lastCheckResult?.updateInfo?.version || null;
-      // Give update-available a tick to land before treating as up-to-date.
       await new Promise((resolve) => setTimeout(resolve, 400));
       if (status.state === 'checking' || status.state === 'idle') {
         broadcast({ state: 'up-to-date', version: app.getVersion() });
@@ -103,9 +238,8 @@ function setupAutoUpdater() {
     console.error('[updater] setFeedURL failed', err instanceof Error ? err.message : err);
   }
 
-  // Wait for the user to confirm in the modal (Figma-style), then download in-app.
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.logger = console;
   if (typeof autoUpdater.allowDowngrade === 'boolean') {
     autoUpdater.allowDowngrade = false;

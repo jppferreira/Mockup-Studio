@@ -263,6 +263,8 @@ export default function ProjectsDashboard({
   const [rememberedTabs] = useState(readDashTabMemory);
   const [section, setSection] = useState<DashSection>(rememberedTabs.section);
   const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [sort, setSort] = useState<SortMode>('edited');
   const [sortOpen, setSortOpen] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
@@ -280,6 +282,10 @@ export default function ProjectsDashboard({
     timer: number;
   } | null>(null);
   const suppressOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (section !== 'projects' && !query.trim()) setSearchOpen(false);
+  }, [section, query]);
 
   useEffect(() => {
     try {
@@ -749,15 +755,46 @@ export default function ProjectsDashboard({
             )}
             {section === 'projects' && (
               <div className="dash-tools">
-                <label className="dash-search">
-                  <img src={iconSearch} alt="" width={19} height={19} />
-                  <input
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Search projects"
+                <div className={`dash-search-shell${searchOpen || query ? ' is-open' : ''}`}>
+                  <button
+                    type="button"
+                    className="dash-search-toggle"
                     aria-label="Search projects"
-                  />
-                </label>
+                    title="Search projects"
+                    aria-expanded={searchOpen || Boolean(query)}
+                    tabIndex={searchOpen || query ? -1 : 0}
+                    onClick={() => {
+                      setSearchOpen(true);
+                      window.requestAnimationFrame(() => searchInputRef.current?.focus());
+                    }}
+                  >
+                    <img src={iconSearch} alt="" width={19} height={19} />
+                  </button>
+                  <label className="dash-search">
+                    <img src={iconSearch} alt="" width={19} height={19} />
+                    <input
+                      ref={searchInputRef}
+                      value={query}
+                      onChange={(event) => setQuery(event.target.value)}
+                      onFocus={() => setSearchOpen(true)}
+                      onBlur={() => {
+                        if (!query.trim()) setSearchOpen(false);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') {
+                          if (query) setQuery('');
+                          else {
+                            setSearchOpen(false);
+                            (event.target as HTMLInputElement).blur();
+                          }
+                        }
+                      }}
+                      placeholder="Search projects"
+                      aria-label="Search projects"
+                      tabIndex={searchOpen || query ? 0 : -1}
+                    />
+                  </label>
+                </div>
                 <div
                   className="dash-sort-wrap"
                   onPointerDown={(event) => event.stopPropagation()}
