@@ -8503,7 +8503,35 @@ input[type='range']::-webkit-slider-thumb { appearance: none; width: 14px; heigh
   z-index: 90;
 }
 .update-prompt-modal {
-  width: 420px;
+  width: 440px;
+}
+.update-prompt-modal > p {
+  margin-bottom: 14px;
+}
+.update-prompt-notes {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid #32363a;
+  border-radius: 12px;
+  background: #17191c;
+}
+.update-prompt-notes strong {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #e8eaee;
+}
+.update-prompt-notes ul {
+  margin: 0;
+  padding: 0 0 0 1.1rem;
+  display: grid;
+  gap: 6px;
+}
+.update-prompt-notes li {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #b4bac2;
 }
 .update-prompt-progress {
   display: flex;

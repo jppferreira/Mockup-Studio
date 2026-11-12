@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('mockupDesktop', {
   },
   updateStatus: () => ipcRenderer.invoke('updater:status'),
   installUpdate: () => ipcRenderer.invoke('updater:install'),
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
   checkForUpdates: () => ipcRenderer.invoke('updater:check'),
   onUpdateStatus: (handler) => {
     const listener = (_event, payload) => handler(payload);

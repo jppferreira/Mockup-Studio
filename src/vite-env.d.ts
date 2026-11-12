@@ -102,21 +102,28 @@ interface Window {
     /** Live OAuth deep-link handoff from the system browser (Figma-style). */
     onAuthCallback?: (handler: (url: string) => void) => () => void;
     updateStatus?: () => Promise<{
-      state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error' | 'up-to-date';
+      state: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'up-to-date';
       version?: string | null;
       percent?: number;
       message?: string | null;
     }>;
     installUpdate?: () => Promise<{ ok: boolean }>;
+    downloadUpdate?: () => Promise<{
+      ok: boolean;
+      state?: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'up-to-date';
+      version?: string | null;
+      percent?: number;
+      error?: string;
+    }>;
     checkForUpdates?: () => Promise<{
       ok: boolean;
-      state?: 'idle' | 'checking' | 'downloading' | 'ready' | 'error' | 'up-to-date';
+      state?: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'up-to-date';
       version?: string | null;
       percent?: number;
       error?: string;
     }>;
     onUpdateStatus?: (handler: (status: {
-      state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error' | 'up-to-date';
+      state: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'up-to-date';
       version?: string | null;
       percent?: number;
       message?: string | null;

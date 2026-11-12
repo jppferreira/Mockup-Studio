@@ -25,7 +25,7 @@ import { openBillingPortal, startStripeCheckout } from '../lib/stripeCheckout';
 import type { CheckoutSku } from '@shared/entitlementModel';
 
 type UpdateStatus = {
-  state: 'idle' | 'checking' | 'downloading' | 'ready' | 'error' | 'up-to-date';
+  state: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error' | 'up-to-date';
   version?: string | null;
   percent?: number;
   message?: string | null;
@@ -275,12 +275,34 @@ export default function AccountLicencePanel({
                   return;
                 }
                 if (result.state === 'up-to-date') setMessage('You’re on the latest version.');
+                else if (result.state === 'available') setMessage(`Update ${result.version ?? ''} is available.`);
                 else if (result.state === 'ready') setMessage(`Update ${result.version ?? ''} is ready to install.`);
                 else setMessage(null);
               })();
             }}
           >
             Check for updates
+          </button>
+        )}
+
+        {update?.state === 'available' && (
+          <button
+            type="button"
+            className="button primary-button"
+            disabled={busy}
+            onClick={() => {
+              void (async () => {
+                setBusy(true);
+                setMessage(null);
+                const result = await window.mockupDesktop?.downloadUpdate?.();
+                setBusy(false);
+                if (!result?.ok) {
+                  setMessage(result?.error || 'Could not download the update.');
+                }
+              })();
+            }}
+          >
+            Download update{update.version ? ` (${update.version})` : ''}
           </button>
         )}
 
