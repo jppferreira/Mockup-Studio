@@ -713,10 +713,9 @@ export default function ModelingModePanel({
       <section className="modeling-mode-section">
         <h4><LayoutTemplate size={14} /> Master catalog</h4>
         <p>
-          Publish master templates to Supabase for every user (not My Templates).
-          Also writes <code>src/data/shippedTemplates.json</code> in Dev.
-          Update overwrites the linked template; Ship as new adds one. Flip to{' '}
-          <strong>User</strong> to verify.
+          Legacy pack ship — prefer <strong>Publish as Template</strong> in Inspect for
+          versioned global templates. This still writes <code>shippedTemplates.json</code> in Dev
+          and the master pack. Flip to <strong>User</strong> to verify.
         </p>
         {canUpdateExisting && (
           <p className="modeling-mode-active-id">

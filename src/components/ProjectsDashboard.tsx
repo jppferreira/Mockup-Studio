@@ -92,6 +92,8 @@ import {
 import { APP_LOGO_SRC } from '../lib/appBrand';
 import DeviceModelThumb from './DeviceModelThumb';
 import TemplateThumb, { ProjectThumb } from './TemplateThumb';
+import AdminPublishedTemplatesPanel from './AdminPublishedTemplatesPanel';
+import type { PublishedTemplateRecord } from '../lib/publishedTemplates';
 import newProjectArt from '../assets/dashboard/new-project.svg';
 import iconGrid from '../assets/dashboard/icon-grid.svg';
 import iconCube from '../assets/dashboard/icon-cube.svg';
@@ -287,6 +289,10 @@ export default function ProjectsDashboard({
   onCloudSignedInChange,
   cloudSignedInEmail,
   deviceUnlocked,
+  isAdmin = false,
+  onNotify,
+  onEditPublishedTemplate,
+  onRepublishTemplate,
 }: {
   recentProjects: RecentProjectEntry[];
   recentScreenshots: RecentScreenshot[];
@@ -329,6 +335,10 @@ export default function ProjectsDashboard({
   onCloudSignedInChange?: (email: string | null) => void;
   cloudSignedInEmail?: string | null;
   deviceUnlocked: (deviceId: string) => boolean;
+  isAdmin?: boolean;
+  onNotify?: (message: string) => void;
+  onEditPublishedTemplate?: (template: CompositionTemplate, published: PublishedTemplateRecord) => void;
+  onRepublishTemplate?: (published: PublishedTemplateRecord) => void;
 }) {
   const [rememberedTabs] = useState(readDashTabMemory);
   const [section, setSection] = useState<DashSection>(rememberedTabs.section);
@@ -713,14 +723,21 @@ export default function ProjectsDashboard({
       setTemplateCategory('saved');
     }
   }, [templateCategory, canUseProMaxPack, canUseDeviceLayouts]);
-  const templatesList = (category: Exclude<TemplateCategory, 'saved'>) => (
-    templatesVisibleForTier(category, {
+  const templatesList = (category: Exclude<TemplateCategory, 'saved'>) => {
+    const list = templatesVisibleForTier(category, {
       tier: featureTier,
       includeAll: includeAllTemplates,
       // User library only shows downloaded templates — never the full catalog by default.
       installedIds: includeAllTemplates ? null : installedIdSet,
-    })
-  );
+    });
+    const needle = query.trim().toLowerCase();
+    if (!needle || section !== 'templates') return list;
+    return list.filter((item) => (
+      item.label.toLowerCase().includes(needle)
+      || item.description.toLowerCase().includes(needle)
+      || item.badge.toLowerCase().includes(needle)
+    ));
+  };
   // Listing is install + tier gated inside templatesVisibleForTier (not prefilled).
   const compositionTemplates = templatesList('scenes');
   const sceneTemplates = templatesList('devices');
@@ -1407,6 +1424,15 @@ export default function ProjectsDashboard({
               {templatesUpgradeHint && !canUseProMaxPack && !canUseDeviceLayouts ? (
                 <p className="dash-empty">{templatesUpgradeHint}</p>
               ) : null}
+
+              {isAdmin && onEditPublishedTemplate && onRepublishTemplate && onNotify && (
+                <AdminPublishedTemplatesPanel
+                  active={section === 'templates'}
+                  onNotify={onNotify}
+                  onEditInStudio={onEditPublishedTemplate}
+                  onRepublish={onRepublishTemplate}
+                />
+              )}
 
               <section className="dash-template-block" aria-labelledby="dash-templates-heading">
                 <div className="dash-template-block-head">

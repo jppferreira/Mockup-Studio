@@ -4,8 +4,8 @@
  * My Templates stay local — they are never pushed here.
  */
 
+import { fetchIsAdmin } from './adminRole';
 import { ensureFreshSession, getSupabase, isSupabaseConfigured } from './supabaseClient';
-import { isDevAccessEmail } from './modelingMode';
 import type { CompositionTemplate } from './templates';
 import {
   loadShippedPackTemplates,
@@ -17,7 +17,7 @@ import {
 const CATALOG_TABLE = 'mokstudio_template_catalog';
 const MASTER_ID = 'master';
 
-/** Publish the current master pack to Supabase (Dev admin only). */
+/** Publish the current master pack to Supabase (admin only). */
 export async function pushMasterTemplateCatalog(options?: {
   templates?: CompositionTemplate[];
   removedIds?: string[];
@@ -28,10 +28,10 @@ export async function pushMasterTemplateCatalog(options?: {
   }
   const auth = await ensureFreshSession();
   if (!auth.session?.user || !auth.user) {
-    return { ok: false, error: 'Sign in as Dev to publish the master catalog.', skipped: true };
+    return { ok: false, error: 'Sign in as an administrator to publish the master catalog.', skipped: true };
   }
-  if (!isDevAccessEmail(auth.user.email)) {
-    return { ok: false, error: 'Only the Dev admin can publish master templates.', skipped: true };
+  if (!(await fetchIsAdmin({ force: true }))) {
+    return { ok: false, error: 'Only administrators can publish master templates.', skipped: true };
   }
   const sb = getSupabase();
   if (!sb) return { ok: false, error: 'Cloud account is not configured.', skipped: true };

@@ -36,6 +36,7 @@ const AnimationPresetsPanel = lazy(() => import('./components/AnimationPresetsPa
 import FeedbackModal from './components/FeedbackModal';
 import FigmaConnectModal from './components/FigmaConnectModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
+import PublishTemplateModal, { type PublishTemplateFormValues } from './components/PublishTemplateModal';
 import LicenseModal from './components/LicenseModal';
 import DevLicenseSwitcher from './components/DevLicenseSwitcher';
 import UpdateBanner from './components/UpdateBanner';
@@ -86,6 +87,18 @@ import {
   subscribeRuntimePromoted,
 } from './lib/shippedTemplates';
 import { pullMasterTemplateCatalog } from './lib/cloudTemplates';
+import {
+  clearAdminRoleCache,
+  fetchIsAdmin,
+  subscribeAdminRole,
+} from './lib/adminRole';
+import {
+  loadTemplateWithScene,
+  publishTemplate,
+  syncPublishedTemplatesIntoLibrary,
+  toCompositionTemplate,
+  type PublishedTemplateRecord,
+} from './lib/publishedTemplates';
 import { collectDroppedFiles, meshDropOffer, type MeshDropOffer } from './lib/meshDrop';
 import { isPlaceholderScreenshot, placeholderForDevice } from './lib/demo';
 import { TONE_CLAY } from './lib/referenceTones';
@@ -1025,20 +1038,34 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [studioSetFocus, setStudioSetFocus] = useState<StudioSetFocus>(null);
   const [templatesTick, setTemplatesTick] = useState(0);
   const [shippingTemplate, setShippingTemplate] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [publishModalOpen, setPublishModalOpen] = useState(false);
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [editingPublishedTemplate, setEditingPublishedTemplate] = useState<PublishedTemplateRecord | null>(null);
+  const [linkedPublishedTemplateId, setLinkedPublishedTemplateId] = useState<string | null>(null);
   const toolsetSwitchAvailable = isDevToolsetAvailable(accountEmail);
   const isDeveloperToolset = toolsetSwitchAvailable && workspaceToolset === 'developer';
 
   /** Pull Dev-published master templates from Supabase (not My Templates). */
   const refreshMasterCatalogFromCloud = useCallback(async () => {
     const remote = await pullMasterTemplateCatalog();
-    if (!remote.ok || remote.skipped || remote.missing || !remote.contents) return false;
-    try {
-      applyRemoteShippedPack(JSON.parse(remote.contents));
+    let applied = false;
+    if (remote.ok && !remote.skipped && !remote.missing && remote.contents) {
+      try {
+        applyRemoteShippedPack(JSON.parse(remote.contents));
+        applied = true;
+      } catch {
+        /* ignore pack parse errors */
+      }
+    }
+    // Versioned published library — available without an app update.
+    const published = await syncPublishedTemplatesIntoLibrary().catch(() => ({ ok: false, count: 0 }));
+    if (applied || (published.ok && published.count > 0)) {
       setTemplatesTick((n) => n + 1);
       return true;
-    } catch {
-      return false;
     }
+    return false;
   }, []);
 
   const setToolset = (next: WorkspaceToolset) => {
@@ -1870,10 +1897,24 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       setDevAccessAccount(email);
       setAccountEmail(email?.trim().toLowerCase() || null);
     };
+    const refreshAdmin = () => {
+      void fetchIsAdmin({ force: true }).then((next) => {
+        if (!cancelled) setIsAdmin(next);
+      }).catch(() => {
+        if (!cancelled) setIsAdmin(false);
+      });
+    };
+    const stopAdminSub = subscribeAdminRole((next) => {
+      if (!cancelled) setIsAdmin(next);
+    });
     void getAuthSnapshot().then((snap) => {
       if (!cancelled) rememberAccount(snap.user?.email);
       if (!cancelled && snap.user) {
+        refreshAdmin();
         void refreshMasterCatalogFromCloud().catch(() => undefined);
+      } else if (!cancelled) {
+        clearAdminRoleCache();
+        setIsAdmin(false);
       }
     }).catch(() => undefined);
     // Stage C — do not block the editor on Supabase. Local session restore owns
@@ -1886,8 +1927,11 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       rememberAccount(snap.user?.email);
       if (!snap.user) {
         licenseSynced = false;
+        clearAdminRoleCache();
+        setIsAdmin(false);
         return;
       }
+      refreshAdmin();
       void syncIfSignedIn().catch(() => undefined);
       void refreshMasterCatalogFromCloud().catch(() => undefined);
     });
@@ -1909,6 +1953,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       cancelled = true;
       cancelDeferredSync();
       stopAuth();
+      stopAdminSub();
       window.clearTimeout(syncTimer);
       window.clearInterval(interval);
       window.removeEventListener('focus', onFocus);
@@ -6644,6 +6689,80 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     }
   };
 
+  const openPublishTemplateModal = (existing?: PublishedTemplateRecord | null) => {
+    setPublishError(null);
+    setEditingPublishedTemplate(existing ?? null);
+    if (existing?.id) setLinkedPublishedTemplateId(existing.id);
+    setPublishModalOpen(true);
+  };
+
+  const capturePublishPreview = async (): Promise<string | null> => {
+    try {
+      await waitFrames(2);
+      const canvas = await captureStillCanvas(960, 720, animTime);
+      return stillDataUrlFromCanvas(canvas, 'webp');
+    } catch {
+      return null;
+    }
+  };
+
+  const onPublishTemplateSubmit = async (values: PublishTemplateFormValues) => {
+    setPublishBusy(true);
+    setPublishError(null);
+    try {
+      const result = await publishTemplate({
+        templateId: values.templateId || linkedPublishedTemplateId,
+        title: values.title,
+        description: values.description,
+        category: values.category,
+        tags: values.tags,
+        accessTier: values.accessTier,
+        status: values.status,
+        thumbnailDataUrl: values.thumbnailDataUrl,
+        keepThumbnail: values.keepThumbnail,
+        project,
+        cameraOrbit: sharedOrbit,
+      });
+      if (!result.ok || !result.template) {
+        setPublishError(result.error || 'Could not publish template.');
+        return;
+      }
+      setLinkedPublishedTemplateId(result.template.id);
+      setTemplatesTick((n) => n + 1);
+      setPublishModalOpen(false);
+      setEditingPublishedTemplate(null);
+      notify(
+        result.template.status === 'published'
+          ? `Published “${result.template.title}” to all users · v${result.template.versionNumber ?? 1}`
+          : `Saved draft “${result.template.title}” (only you can see it until published)`,
+      );
+    } catch (err) {
+      setPublishError(err instanceof Error ? err.message : 'Publish failed');
+    } finally {
+      setPublishBusy(false);
+    }
+  };
+
+  const onEditPublishedTemplate = async (
+    template: CompositionTemplate,
+    published: PublishedTemplateRecord,
+  ) => {
+    setLinkedPublishedTemplateId(published.id);
+    startFromTemplate(template);
+    notify(`Editing “${published.title}” — use Publish as Template to save a new version`);
+  };
+
+  const onRepublishTemplate = async (published: PublishedTemplateRecord) => {
+    const loaded = await loadTemplateWithScene(published.id);
+    if (!loaded.ok || !loaded.template) {
+      notify(loaded.error || 'Could not load template');
+      return;
+    }
+    setLinkedPublishedTemplateId(published.id);
+    startFromTemplate(toCompositionTemplate(loaded.template));
+    openPublishTemplateModal(loaded.template);
+  };
+
   const onSaveComposition = (opts?: { openLibrary?: boolean }) => {
     const saved = saveComposition(compositionName, project, { cameraOrbit: sharedOrbit });
     const next = loadSavedCompositions();
@@ -6987,6 +7106,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           toolsetSwitchAvailable={toolsetSwitchAvailable}
           isDeveloperToolset={isDeveloperToolset}
           onSetToolset={setToolset}
+          isAdmin={isAdmin}
+          onNotify={notify}
+          onEditPublishedTemplate={(template, published) => { void onEditPublishedTemplate(template, published); }}
+          onRepublishTemplate={(published) => { void onRepublishTemplate(published); }}
           onExplorePro={() => {
             if (LICENSING_DISABLED) {
               notify('Pro features are unlocked in this build');
@@ -8279,6 +8402,56 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             />
           ) : (
           <>
+          {isAdmin && (
+            <div className="template-quick-edit" aria-label="Publish as template">
+              <div className="template-quick-edit-copy">
+                <strong>Publish as template</strong>
+                <span>
+                  {linkedPublishedTemplateId
+                    ? 'Push a new version to every signed-in user, or keep it as a draft'
+                    : 'You are the admin — publish this scene and it appears for all users automatically'}
+                </span>
+              </div>
+              <div className="template-quick-edit-actions">
+                <button
+                  type="button"
+                  className="button primary-button"
+                  disabled={project.devices.length === 0 || publishBusy}
+                  onClick={() => {
+                    if (linkedPublishedTemplateId) {
+                      void (async () => {
+                        const loaded = await loadTemplateWithScene(linkedPublishedTemplateId);
+                        openPublishTemplateModal(loaded.ok && loaded.template ? loaded.template : {
+                          id: linkedPublishedTemplateId,
+                          title: project.name || 'Untitled template',
+                          description: '',
+                          category: 'custom',
+                          tags: [],
+                          thumbnailPath: null,
+                          thumbnailUrl: null,
+                          accessTier: 'free',
+                          status: 'draft',
+                          currentVersionId: null,
+                          schemaVersion: 1,
+                          libraryCategory: 'devices',
+                          slug: null,
+                          createdBy: '',
+                          createdAt: '',
+                          updatedAt: '',
+                          publishedAt: null,
+                        });
+                      })();
+                      return;
+                    }
+                    openPublishTemplateModal(null);
+                  }}
+                >
+                  <Upload size={13} />
+                  {linkedPublishedTemplateId ? 'Update template…' : 'Publish as Template'}
+                </button>
+              </div>
+            </div>
+          )}
           {isDeveloperToolset && (
             <div className="template-quick-edit" aria-label="Ship templates">
               <div className="template-quick-edit-copy">
@@ -11069,6 +11242,21 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           onDismiss={() => setSyncConflicts([])}
         />
       )}
+
+      <PublishTemplateModal
+        open={publishModalOpen}
+        project={project}
+        editing={editingPublishedTemplate}
+        busy={publishBusy}
+        error={publishError}
+        onCapturePreview={capturePublishPreview}
+        onClose={() => {
+          if (publishBusy) return;
+          setPublishModalOpen(false);
+          setPublishError(null);
+        }}
+        onSubmit={onPublishTemplateSubmit}
+      />
 
       <FeedbackModal
         open={feedbackOpen}
