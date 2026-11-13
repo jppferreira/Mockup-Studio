@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Plus, Search, Trash2, X } from 'lucide-react';
 import iconDown from '../assets/scene-hierarchy/icon-down.svg';
 import iconDownSelected from '../assets/scene-hierarchy/icon-down-selected.svg';
@@ -112,7 +112,7 @@ function overlayTreeLabel(overlay: SceneOverlay) {
 
 const STUDIO_LABELS = ['Camera', 'Reflection', 'Key Light', 'Rim Light', 'Shadow'] as const;
 
-export default function SceneHierarchy({
+function SceneHierarchy({
   project,
   scenes,
   activeSceneId,
@@ -721,3 +721,5 @@ export default function SceneHierarchy({
     </div>
   );
 }
+
+export default memo(SceneHierarchy);

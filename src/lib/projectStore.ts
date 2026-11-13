@@ -124,16 +124,25 @@ export async function putProjectDocument(
   const id = options?.id ?? base.id;
   const withId = base.id === id ? base : { ...base, id };
 
+  // A cloud document is already versioned. Store it as given so a pull does not
+  // look like a new local edit and get pushed back over the desktop save.
+  const authoritative = isSceneDocument(input) && options?.enqueueOutbox === false;
+
+  // Cheap no-op for already-slim SceneDocument writes (cloud pull / seal).
+  // MockupProject inputs are hydrated (data URLs) and must externalize first.
+  if (previous && !authoritative && isSceneDocument(input)) {
+    const incomingScene = migrateDocument(input).scene;
+    if (canonicalProjectJson(previous.scene) === canonicalProjectJson(incomingScene)) {
+      return hydrateDocument({ ...previous, id });
+    }
+  }
+
   // Hydrate first so we never double-externalise existing asset refs into empty blobs.
   const hydrated = await hydrateDocument(withId);
   const { scene, assets, blobs } = await externalizeSceneAssets(hydrated.scene);
   for (const [hash, blob] of blobs) {
     await putAssetBlob(hash, blob.mime, blob.bytes);
   }
-
-  // A cloud document is already versioned. Store it as given so a pull does not
-  // look like a new local edit and get pushed back over the desktop save.
-  const authoritative = isSceneDocument(input) && options?.enqueueOutbox === false;
 
   // Reopening a tab rewrites the same scene. Bumping that rewrite makes this
   // browser look newer than the desktop save and uploads the old file over it.

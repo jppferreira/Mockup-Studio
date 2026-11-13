@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   Diamond, Gauge, KeyRound, Music2, PanelBottomClose, PanelBottomOpen, Pause, Play, Plus,
   Repeat, SkipBack, Sparkles, Square, Trash2, X, ZoomIn, ZoomOut,
@@ -201,7 +201,7 @@ function easePath(ease: AnimEase | undefined, bezier?: EaseBezier): string {
   }
 }
 
-export default function AnimationTimeline({
+function AnimationTimeline({
   open,
   chromeHidden = false,
   onToggle,
@@ -663,24 +663,40 @@ export default function AnimationTimeline({
 
   useEffect(() => {
     if (!draggingKeys) return undefined;
+    let raf = 0;
+    let pending: AnimationClip | null = null;
+    const flush = () => {
+      raf = 0;
+      if (!pending) return;
+      const next = pending;
+      pending = null;
+      onChangeRef.current(next);
+    };
     const onMove = (event: PointerEvent) => {
       const el = scrubRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
       const deltaPct = (event.clientX - draggingKeys.originClientX) / Math.max(1, rect.width);
       const deltaTime = deltaPct * clipRef.current.duration;
-      onChangeRef.current(moveKeyframesByDelta(
+      pending = moveKeyframesByDelta(
         clipRef.current,
         draggingKeys.items,
         deltaTime,
         clipRef.current.duration,
-      ));
+      );
+      if (!raf) raf = requestAnimationFrame(flush);
     };
-    const onUp = () => setDraggingKeys(null);
+    const onUp = () => {
+      if (raf) cancelAnimationFrame(raf);
+      if (pending) onChangeRef.current(pending);
+      pending = null;
+      setDraggingKeys(null);
+    };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
     return () => {
+      if (raf) cancelAnimationFrame(raf);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
@@ -1874,3 +1890,5 @@ export default function AnimationTimeline({
     </>
   );
 }
+
+export default memo(AnimationTimeline);

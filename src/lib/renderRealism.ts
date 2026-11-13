@@ -493,8 +493,8 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
   const buffer = new THREE.WebGLRenderTarget(1, 1, {
     depthBuffer: true,
     stencilBuffer: false,
-    // 2× MSAA is enough for live preview; 4× doubled grade fill-rate cost.
-    samples: gl.capabilities.isWebGL2 ? 2 : 0,
+    // Live grade path skips MSAA — canvas antialias is off; export can boost.
+    samples: 0,
     type: THREE.UnsignedByteType,
     format: THREE.RGBAFormat,
   });

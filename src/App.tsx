@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { lazy, startTransition, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import {
   Aperture, ArrowDownToLine, ArrowLeftRight, ArrowUpDown, Bot, Box, Camera, Check, ChevronDown, Circle, CircleOff, Cuboid,
@@ -7,7 +7,7 @@ import {
   ClipboardPaste, Columns2, Command, Copy, Download, FileImage, FlipHorizontal2, Gauge, Glasses, Headphones,
   ImagePlus, KeyRound, Laptop, Layers3, LayoutGrid, LayoutTemplate, MessageSquarePlus, Minus,
   Menu, Monitor, MonitorSmartphone, MoreHorizontal, Orbit, PanelLeftClose, PanelLeftOpen, PanelRightClose,
-  Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, UnfoldVertical, Upload, UserRound, Watch, Waves, Wrench, X,
+  Plus, Presentation, RefreshCw, RotateCcw, Rotate3D, RotateCw, Save, Settings2, Share2, SlidersHorizontal, Smartphone, Sparkles, Sun, Tablet, Trash2, UnfoldVertical, Upload, UserRound, Watch, Waves, Wrench, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import AccentThemePicker from './components/AccentThemePicker';
@@ -20,7 +20,7 @@ import ChangeLogPanel from './components/ChangeLogPanel';
 import CompositionSwitcher from './components/CompositionSwitcher';
 import SceneHierarchy, { sameLayerSelection, type SceneLayerSelection } from './components/SceneHierarchy';
 import StudioTour, { type StudioTourStep } from './components/StudioTour';
-import TemplateThumb from './components/TemplateThumb';
+import TemplateThumb, { TemplateThumbHost, invalidateTemplateThumb } from './components/TemplateThumb';
 import DeviceCardGrid, { DEVICE_DRAG_MIME, type DeviceCardPreviewLayout } from './components/DeviceCardGrid';
 import DeviceModelThumb from './components/DeviceModelThumb';
 import FinishDots from './components/FinishDots';
@@ -37,6 +37,7 @@ import FeedbackModal from './components/FeedbackModal';
 import FigmaConnectModal from './components/FigmaConnectModal';
 import FigmaExploreModal from './components/FigmaExploreModal';
 import LicenseModal from './components/LicenseModal';
+import DevLicenseSwitcher from './components/DevLicenseSwitcher';
 import UpdateBanner from './components/UpdateBanner';
 import AccountLicencePanel from './components/AccountLicencePanel';
 import { getCheckoutConfig } from '@shared/checkout';
@@ -74,14 +75,17 @@ import {
   type WorkspaceToolset,
 } from './lib/modelingMode';
 import {
+  applyRemoteShippedPack,
   createBlankShippedTemplate,
   deleteShippedTemplate,
   duplicateShippedTemplate,
   prepareShippedFromProject,
   renameShippedTemplate,
   shipCompositionTemplate,
+  shippedCategoryOf,
   subscribeRuntimePromoted,
 } from './lib/shippedTemplates';
+import { pullMasterTemplateCatalog } from './lib/cloudTemplates';
 import { collectDroppedFiles, meshDropOffer, type MeshDropOffer } from './lib/meshDrop';
 import { isPlaceholderScreenshot, placeholderForDevice } from './lib/demo';
 import { TONE_CLAY } from './lib/referenceTones';
@@ -178,15 +182,19 @@ import {
   PLAN_PRICES_GBP,
   canExportVideo,
   canUseProMaxTemplates,
+  effectiveLicenseTier,
   formatGbp,
   isFreeDevice,
   isResolutionAllowed,
+  loadDevLicenseOverride,
   loadLicense,
   maxDevicesFor,
   planLabel,
+  saveDevLicenseOverride,
   upgradeCopy,
   upgradeCopyProMax,
   type LicenseState,
+  type LicenseTier,
 } from './lib/license';
 import { canUseDevice as isDeviceUnlocked, syncLicenseWithAccount } from './lib/entitlements';
 import {
@@ -252,6 +260,7 @@ import {
   type SessionFrameSize,
 } from './lib/sessionWorkspace';
 import { scheduleIdle } from './lib/scheduleIdle';
+import { APP_DISPLAY_NAME, APP_LOGO_SRC } from './lib/appBrand';
 import { logPerfSummary, perfMark, perfMeasure } from './lib/perfDiagnostics';
 import {
   clearStudioTourComplete, isStudioTourComplete,
@@ -275,8 +284,9 @@ import {
 import {
   applyCompositionKeepingDevices, getCompositionTemplate, isDevEditableTemplateId, isProMaxPackTemplate,
   projectFromTemplate, templatesVisibleForTier,
-  type CompositionTemplate, type TemplateCategory,
+  type CompositionTemplate, type ShippedTemplateCategory, type TemplateCategory,
 } from './lib/templates';
+import { loadInstalledTemplateIds } from './lib/installedTemplates';
 import {
   BACKGROUNDS, CAMERA_LENSES, CAMERA_TARGET_ID, DEFAULT_PROJECT, DEVICE_COLORS,
   EXPORT_ASPECTS, EXPORT_ASPECT_GROUPS, EXPORT_FPS_OPTIONS, EXPORT_RESOLUTIONS,
@@ -471,8 +481,37 @@ function SliderField({ label, value, min, max, step = 1, unit = '°', onChange }
   label: string; value: number; min: number; max: number; step?: number;
   unit?: string; onChange: (v: number) => void;
 }) {
+  const [live, setLive] = useState(value);
+  const pendingRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (pendingRef.current != null) return;
+    setLive(value);
+  }, [value]);
+
+  const flush = useCallback(() => {
+    rafRef.current = null;
+    const next = pendingRef.current;
+    pendingRef.current = null;
+    if (next != null) onChangeRef.current(next);
+  }, []);
+
+  const push = useCallback((next: number) => {
+    setLive(next);
+    pendingRef.current = next;
+    if (rafRef.current != null) return;
+    rafRef.current = requestAnimationFrame(flush);
+  }, [flush]);
+
+  useEffect(() => () => {
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+  }, []);
+
   const span = max - min || 1;
-  const fill = Math.min(100, Math.max(0, ((value - min) / span) * 100));
+  const fill = Math.min(100, Math.max(0, ((live - min) / span) * 100));
   const digits = step < 0.1 ? 2 : step < 1 ? 1 : 0;
   return (
     <label className="slider-field">
@@ -482,9 +521,11 @@ function SliderField({ label, value, min, max, step = 1, unit = '°', onChange }
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={live}
         style={{ ['--slider-fill' as string]: `${fill}%` }}
-        onChange={(e) => onChange(Number(e.target.value))}
+        onChange={(e) => push(Number(e.target.value))}
+        onPointerUp={flush}
+        onPointerCancel={flush}
       />
       <span className="slider-number" data-scrub title="Drag left or right to adjust. Shift for finer steps.">
         <input
@@ -492,12 +533,15 @@ function SliderField({ label, value, min, max, step = 1, unit = '°', onChange }
           min={min}
           max={max}
           step={step}
-          value={value.toFixed(digits)}
+          value={live.toFixed(digits)}
           aria-label={label}
           onChange={(e) => {
             const next = Number(e.target.value);
             if (!Number.isFinite(next)) return;
-            onChange(Math.min(max, Math.max(min, next)));
+            const clamped = Math.min(max, Math.max(min, next));
+            setLive(clamped);
+            pendingRef.current = null;
+            onChangeRef.current(clamped);
           }}
         />
         {unit ? <span className="slider-number-unit">{unit}</span> : null}
@@ -984,6 +1028,19 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const toolsetSwitchAvailable = isDevToolsetAvailable(accountEmail);
   const isDeveloperToolset = toolsetSwitchAvailable && workspaceToolset === 'developer';
 
+  /** Pull Dev-published master templates from Supabase (not My Templates). */
+  const refreshMasterCatalogFromCloud = useCallback(async () => {
+    const remote = await pullMasterTemplateCatalog();
+    if (!remote.ok || remote.skipped || remote.missing || !remote.contents) return false;
+    try {
+      applyRemoteShippedPack(JSON.parse(remote.contents));
+      setTemplatesTick((n) => n + 1);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   const setToolset = (next: WorkspaceToolset) => {
     setWorkspaceToolset(next);
     saveWorkspaceToolset(next);
@@ -1015,9 +1072,34 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [studioAiBusy, setStudioAiBusy] = useState(false);
   const [svgExplodeModel, setSvgExplodeModel] = useState<SvgDocumentModel | null>(null);
   const [license, setLicense] = useState<LicenseState>(() => loadLicense());
+  const [devLicenseOverride, setDevLicenseOverrideState] = useState<LicenseTier | null>(() => (
+    toolsetSwitchAvailable ? loadDevLicenseOverride() : null
+  ));
+  const gatedTier = useMemo(
+    () => effectiveLicenseTier(license.tier),
+    [devLicenseOverride, license.tier],
+  );
+  const setDevLicenseOverride = (tier: LicenseTier | null) => {
+    if (!toolsetSwitchAvailable) return;
+    saveDevLicenseOverride(tier);
+    setDevLicenseOverrideState(tier);
+    if (LICENSING_DISABLED) {
+      notify('LICENSING_DISABLED is on — turn it off to simulate Free / Pro / Pro Max');
+      return;
+    }
+    notify(tier
+      ? `Dev license · simulating ${planLabel(tier)}`
+      : `Dev license · using real ${planLabel(license.tier)} entitlement`);
+  };
   useEffect(() => {
     if (LICENSING_DISABLED) setLicense(loadLicense());
   }, []);
+  useEffect(() => {
+    if (!toolsetSwitchAvailable && devLicenseOverride !== null) {
+      saveDevLicenseOverride(null);
+      setDevLicenseOverrideState(null);
+    }
+  }, [toolsetSwitchAvailable, devLicenseOverride]);
   useEffect(() => {
     let cancelled = false;
     const syncFigmaForAccount = async (userId: string | null | undefined) => {
@@ -1095,6 +1177,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [toast, setToast] = useState<string | null>(null);
   const [deviceMenu, setDeviceMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [gizmoDragging, setGizmoDragging] = useState(false);
+  const gizmoDraggingRef = useRef(false);
   /** When true, show the key-light translate handle in the 3D viewer. */
   const [lightGizmoActive, setLightGizmoActive] = useState(false);
   /** Dual-canvas shared orbit so both panes keep the same viewing angle (offset from device). */
@@ -1216,6 +1299,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const savedJsonRef = useRef(new Map<string, string>());
   const syncPathByTabRef = useRef(new Map<string, string>());
   const notifyRef = useRef<(message: string) => void>(() => {});
+  const applyScreenImageRef = useRef<(
+    dataUrl: string,
+    name: string,
+    message?: string,
+    deviceId?: string | null,
+  ) => void>(() => {});
   const persistCloudRef = useRef<
     (
       tabId: string,
@@ -1292,8 +1381,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     () => filterDevicesByCategory(allDevices, deviceCategoryFilter),
     [allDevices, deviceCategoryFilter],
   );
-  const entitlementsMaxDevices = maxDevicesFor(license.tier);
-  const videoAllowed = canExportVideo(license.tier);
+  const entitlementsMaxDevices = maxDevicesFor(gatedTier);
+  const videoAllowed = canExportVideo(gatedTier);
 
   const activeTab = workspace.tabs.find((tab) => tab.id === workspace.activeId) ?? workspace.tabs[0] ?? null;
   const hasOpenProject = activeTab != null;
@@ -1329,6 +1418,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const animTimeRef = useRef(animTime);
   animTimeRef.current = animTime;
   const animSeekRafRef = useRef<number | null>(null);
+  /** While playing, React playhead UI updates ~12Hz; canvas still reads playheadRef at 60fps. */
+  const animUiLastPushRef = useRef(0);
+  const overlayPatchRafRef = useRef<number | null>(null);
+  const pendingOverlayPatchRef = useRef<{ id: string; x: number; y: number } | null>(null);
   useEffect(() => {
     if (!activeTab) return;
     playheadRef.current = activeTab.animTime;
@@ -1779,6 +1872,9 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     };
     void getAuthSnapshot().then((snap) => {
       if (!cancelled) rememberAccount(snap.user?.email);
+      if (!cancelled && snap.user) {
+        void refreshMasterCatalogFromCloud().catch(() => undefined);
+      }
     }).catch(() => undefined);
     // Stage C — do not block the editor on Supabase. Local session restore owns
     // first paint; cloud reconcile runs after sessionReady (or on auth/visibility).
@@ -1793,6 +1889,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         return;
       }
       void syncIfSignedIn().catch(() => undefined);
+      void refreshMasterCatalogFromCloud().catch(() => undefined);
     });
 
     // Pull/push when returning to the app so web ↔ desktop stay aligned.
@@ -1818,7 +1915,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       document.removeEventListener('visibilitychange', onVisible);
       scheduleCloudSyncRef.current = () => undefined;
     };
-  }, [handleSyncConflicts]);
+  }, [handleSyncConflicts, refreshMasterCatalogFromCloud]);
 
   useEffect(() => {
     if (!toolsetSwitchAvailable) {
@@ -2006,31 +2103,39 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   /** Debounced local-first document autosave — cloud flush is scheduled separately. */
   useEffect(() => {
     if (!sessionReadyRef.current) return undefined;
+    // Do not thrash IDB while the user is dragging gizmos or playing back.
+    if (gizmoDraggingRef.current || animPlayingRef.current) return undefined;
+    let cancelIdle: (() => void) | null = null;
     const timer = window.setTimeout(() => {
-      const missingIds: { tabId: string; documentId: string }[] = [];
-      for (const tab of workspaceRef.current.tabs) {
-        let docId = tab.documentId?.trim() || '';
-        if (!docId) {
-          docId = createDocumentId();
-          tab.documentId = docId;
-          missingIds.push({ tabId: tab.id, documentId: docId });
+      cancelIdle = scheduleIdle(() => {
+        const missingIds: { tabId: string; documentId: string }[] = [];
+        for (const tab of workspaceRef.current.tabs) {
+          let docId = tab.documentId?.trim() || '';
+          if (!docId) {
+            docId = createDocumentId();
+            tab.documentId = docId;
+            missingIds.push({ tabId: tab.id, documentId: docId });
+          }
+          void persistTabSnapshotRef.current(tab).catch(() => undefined);
         }
-        void persistTabSnapshotRef.current(tab).catch(() => undefined);
-      }
-      if (missingIds.length) {
-        setWorkspace((ws) => ({
-          ...ws,
-          tabs: ws.tabs.map((tab) => {
-            const found = missingIds.find((item) => item.tabId === tab.id);
-            return found ? { ...tab, documentId: found.documentId } : tab;
-          }),
-        }));
-      }
-      // Push queued local edits / pull remote ones once signed in.
-      scheduleCloudSyncRef.current(1600);
-    }, 700);
-    return () => window.clearTimeout(timer);
-  }, [workspace]);
+        if (missingIds.length) {
+          setWorkspace((ws) => ({
+            ...ws,
+            tabs: ws.tabs.map((tab) => {
+              const found = missingIds.find((item) => item.tabId === tab.id);
+              return found ? { ...tab, documentId: found.documentId } : tab;
+            }),
+          }));
+        }
+        // Push queued local edits / pull remote ones once signed in.
+        scheduleCloudSyncRef.current(1600);
+      }, 1800);
+    }, 1100);
+    return () => {
+      window.clearTimeout(timer);
+      cancelIdle?.();
+    };
+  }, [workspace, gizmoDragging, animPlaying]);
 
   useEffect(() => {
     const flush = () => {
@@ -2102,11 +2207,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     };
     dirtyTabsRef.current.add(tabId);
     sessionDirtyRef.current = true;
-    const existing = changeLogsRef.current.get(tabId) ?? [];
-    const recorded = recordProjectChange(existing, current, next);
-    if (recorded !== existing) {
-      changeLogsRef.current.set(tabId, recorded);
-      setChangeLogVersion((version) => version + 1);
+    // Skip deep change-log diffs while gizmos drag — they re-render App every frame.
+    if (!gizmoDraggingRef.current) {
+      const existing = changeLogsRef.current.get(tabId) ?? [];
+      const recorded = recordProjectChange(existing, current, next);
+      if (recorded !== existing) {
+        changeLogsRef.current.set(tabId, recorded);
+        setChangeLogVersion((version) => version + 1);
+      }
     }
     setWorkspace((ws) => ({
       ...ws,
@@ -2146,13 +2254,18 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     const next = typeof value === 'function' ? value(playheadRef.current) : value;
     playheadRef.current = next;
     animTimeRef.current = next;
-    // Coalesce to one React update per frame. Canvas still owns transforms;
-    // React only needs the playhead for lid / layer overlay props + UI.
+    // Canvas reads playheadRef every frame. During playback, throttle React
+    // chrome (~12Hz) so the giant App tree is not painted 60 times/sec.
+    if (animPlayingRef.current) {
+      const now = performance.now();
+      if (now - animUiLastPushRef.current < 80) return;
+      animUiLastPushRef.current = now;
+    }
     if (animSeekRafRef.current != null) return;
     animSeekRafRef.current = requestAnimationFrame(() => {
       animSeekRafRef.current = null;
       const time = playheadRef.current;
-      setAnimTimeState(time);
+      startTransition(() => setAnimTimeState(time));
       if (!animPlayingRef.current) persistAnimTime(time);
     });
   }, [persistAnimTime]);
@@ -2442,6 +2555,17 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       return merged;
     });
   }, [setProject]);
+
+  const onTimelineChange = useCallback((next: NonNullable<MockupProject['animation']>) => {
+    updateProject({ animation: next });
+    // Timeline drags fire often; debounce the file seal like camera orbit.
+    if (animSaveTimerRef.current != null) window.clearTimeout(animSaveTimerRef.current);
+    animSaveTimerRef.current = window.setTimeout(() => {
+      animSaveTimerRef.current = null;
+      const tab = workspaceRef.current.tabs.find((item) => item.id === activeIdRef.current);
+      if (tab) void persistTabSnapshotRef.current(tab);
+    }, 280);
+  }, [updateProject]);
 
   const writeCameraOrbit = useCallback((orbit: { offset: Vec3; lookOffset?: Vec3 } | null) => {
     // A null write from a missed canvas publish must not erase a real angle.
@@ -2752,6 +2876,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     setOpenSectionId('overlays');
   };
 
+  const flushOverlayPatch = useCallback(() => {
+    overlayPatchRafRef.current = null;
+    const pending = pendingOverlayPatchRef.current;
+    pendingOverlayPatchRef.current = null;
+    if (!pending) return;
+    patchOverlay(pending.id, { x: pending.x, y: pending.y });
+  }, [patchOverlay]);
+
   const onOverlayPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     const drag = overlayDragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
@@ -2761,13 +2893,22 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     if (rect.width <= 0 || rect.height <= 0) return;
     const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
     const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-    patchOverlay(drag.id, { x, y });
+    pendingOverlayPatchRef.current = { id: drag.id, x, y };
+    if (overlayPatchRafRef.current != null) return;
+    overlayPatchRafRef.current = requestAnimationFrame(flushOverlayPatch);
   };
 
   const onOverlayPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     const drag = overlayDragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
     overlayDragRef.current = null;
+    if (overlayPatchRafRef.current != null) {
+      cancelAnimationFrame(overlayPatchRafRef.current);
+      overlayPatchRafRef.current = null;
+    }
+    const pending = pendingOverlayPatchRef.current;
+    pendingOverlayPatchRef.current = null;
+    if (pending) patchOverlay(pending.id, { x: pending.x, y: pending.y });
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {
@@ -2980,7 +3121,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const startWithDevice = (deviceId: string) => {
-    if (!isDeviceUnlocked(license.tier, deviceId)) {
+    if (!isDeviceUnlocked(gatedTier, deviceId)) {
       notify(upgradeCopy('The full device library'));
       setLicenseOpen(true);
       return;
@@ -3071,7 +3212,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const startFromTemplate = (template: CompositionTemplate) => {
     if (
       isProMaxPackTemplate(template)
-      && !canUseProMaxTemplates(license.tier)
+      && !canUseProMaxTemplates(gatedTier)
       && !isDeveloperToolset
     ) {
       notify(upgradeCopyProMax('The Pro Max template & motion pack'));
@@ -3080,8 +3221,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     }
     const needsPro = template.devices.length > 1
       || template.compositionMode === 'split'
-      || template.devices.some((d) => !isDeviceUnlocked(license.tier, d.deviceId));
-    if (needsPro && license.tier === 'free') {
+      || template.devices.some((d) => !isDeviceUnlocked(gatedTier, d.deviceId));
+    if (needsPro && gatedTier === 'free') {
       notify(upgradeCopy('Multi-device templates and the full device library'));
       setLicenseOpen(true);
       return;
@@ -3256,12 +3397,56 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     if (timelineOpen) keyPropertyAtPlayhead(`rotation.${axis}` as AnimProperty, value);
   };
 
-  const notify = (message: string) => {
+  const notify = useCallback((message: string) => {
     if (toastTimer.current != null) window.clearTimeout(toastTimer.current);
     setToast(message);
     toastTimer.current = window.setTimeout(() => setToast(null), 4300);
-  };
+  }, []);
   notifyRef.current = notify;
+
+  const onLibraryDragStart = useCallback((id: string) => {
+    draggingLibraryDeviceRef.current = id;
+  }, []);
+  const onLibraryDragEnd = useCallback(() => {
+    draggingLibraryDeviceRef.current = null;
+    setDragOver(false);
+    setCanvasDropKind(null);
+  }, []);
+  const onLibraryDevicePick = useCallback((device: DeviceModel, unlocked: boolean) => {
+    if (!unlocked) {
+      notify(upgradeCopy('The full device library'));
+      setLicenseOpen(true);
+      return;
+    }
+    patchSelectedDevice({ deviceId: device.id });
+    setDeviceChosen(true);
+    const current = liveProjectRef.current;
+    const selected = getSelectedDevice(current);
+    const shot = deviceScreenMedia(selected, current.screenshot);
+    if (isPlaceholderScreenshot(shot)) {
+      applyScreenImageRef.current(placeholderForDevice(device), device.label, 'Size guide updated');
+    }
+  }, [notify, patchSelectedDevice]);
+  const onLibraryIosDevicePick = useCallback((option: DeviceModel, unlocked: boolean) => {
+    if (!unlocked) {
+      notify(upgradeCopy('The full device library'));
+      setLicenseOpen(true);
+      return;
+    }
+    setProject((current) => applyDeviceToPlatform(current, 'ios', option.id));
+    setCameraRecenterToken((n) => n + 1);
+    setDeviceChosen(true);
+  }, [notify, setProject]);
+  const onLibraryAndroidDevicePick = useCallback((option: DeviceModel, unlocked: boolean) => {
+    if (!unlocked) {
+      notify(upgradeCopy('The full device library'));
+      setLicenseOpen(true);
+      return;
+    }
+    setProject((current) => applyDeviceToPlatform(current, 'android', option.id));
+    setCameraRecenterToken((n) => n + 1);
+    setDeviceChosen(true);
+  }, [notify, setProject]);
 
   const prepareStudioTourChrome = useCallback(() => {
     setSidePanelsHidden(false);
@@ -3411,6 +3596,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       ...tab.project,
       cameraOrbit: liveCamera?.offset ? liveCamera : (tab.project.cameraOrbit ?? null),
     });
+    const savedJson = canonicalProjectJson(projectToSave);
+    // Hot path: identical scene already on disk — skip hydrate/externalize/hash.
+    if (
+      !nameOnlySaveRef.current.has(docId)
+      && baselineRef.current.get(tab.id) === savedJson
+    ) {
+      return;
+    }
     if (nameOnlySaveRef.current.has(docId)) {
       const baseline = baselineRef.current.get(tab.id);
       let nameOnly = false;
@@ -3440,7 +3633,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       }
       nameOnlySaveRef.current.delete(docId);
     }
-    const savedJson = canonicalProjectJson(projectToSave);
     await putProjectDocument(projectToSave, { id: docId, enqueueOutbox: true });
     const live = workspaceRef.current.tabs.find((item) => item.id === tab.id);
     const liveCameraNow = live && isActive ? sharedOrbitRef.current : null;
@@ -3456,7 +3648,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   pushTemplatesRef.current = async () => {
-    // Folder template sync retired — account sync owns the library.
+    // My Templates stay local — only the master catalog is published to Supabase by Dev.
   };
 
   pullTemplatesRef.current = async () => null;
@@ -3768,6 +3960,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     });
     notify(message);
   };
+  applyScreenImageRef.current = applyScreenImage;
 
   /** Rotato-style: flat stack on the glass + separate plates that lift with layerExplosion. */
   const applyScreenExplosion = async (
@@ -4504,7 +4697,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const placeLibraryDeviceOnCanvas = useCallback((deviceId: string) => {
-    if (!isDeviceUnlocked(license.tier, deviceId)) {
+    if (!isDeviceUnlocked(gatedTier, deviceId)) {
       notify(upgradeCopy('The full device library'));
       setLicenseOpen(true);
       return;
@@ -4520,7 +4713,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         return applyDeviceToPlatform(current, platform, deviceId);
       }
       if (current.devices.length >= entitlementsMaxDevices) {
-        message = license.tier === 'free'
+        message = gatedTier === 'free'
           ? upgradeCopy('Multi-device scenes')
           : `You can place up to ${entitlementsMaxDevices} devices`;
         return current;
@@ -4558,7 +4751,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     if (message.includes('Pro')) setLicenseOpen(true);
     notify(message);
     if (placed) setOpenSectionId('device');
-  }, [entitlementsMaxDevices, license.tier, notify]);
+  }, [entitlementsMaxDevices, gatedTier, notify]);
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -5174,7 +5367,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
       const scaled = scaledExportDimensions(size.width, size.height, maxScale as ExportScale);
       return Math.max(scaled.width, scaled.height);
     }));
-    if (!isResolutionAllowed(license.tier, largestEdge)) {
+    if (!isResolutionAllowed(gatedTier, largestEdge)) {
       notify(`Free exports up to Full HD. ${upgradeCopy('Higher resolutions')}`);
       setLicenseOpen(true);
       return;
@@ -5237,7 +5430,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const enableSplitComposition = () => {
-    if (license.tier === 'free') {
+    if (gatedTier === 'free') {
       notify(upgradeCopy('Multi-device / split compositions'));
       setLicenseOpen(true);
       return;
@@ -5356,6 +5549,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   }, [updateProject]);
 
   const onGizmoDraggingChange = useCallback((dragging: boolean) => {
+    gizmoDraggingRef.current = dragging;
     setGizmoDragging(dragging);
     // Device / prop / scene-light gizmo and free-drag update the project live;
     // seal the file when the pointer comes up so a quick reload cannot miss them.
@@ -5672,7 +5866,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         return current;
       }
       if (current.devices.length >= entitlementsMaxDevices) {
-        message = license.tier === 'free'
+        message = gatedTier === 'free'
           ? upgradeCopy('Multi-device scenes')
           : `You can place up to ${entitlementsMaxDevices} devices`;
         return current;
@@ -6070,10 +6264,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     })();
   };
 
-  const onAddShippedLibraryTemplate = (category: 'devices' | 'scenes') => {
+  const onAddShippedLibraryTemplate = (category: ShippedTemplateCategory) => {
     // Electron has no window.prompt — mint a blank library entry and open it as a new file.
     if (!isDeveloperToolset) setToolset('developer');
-    const fallback = category === 'scenes' ? 'New composition' : 'New layout';
+    const fallback = category === 'scenes'
+      ? 'New template'
+      : category === 'social'
+        ? 'New social template'
+        : 'New scene template';
     void (async () => {
       const blank = createBlankShippedTemplate(fallback, category);
       const result = await shipCompositionTemplate(blank);
@@ -6092,12 +6290,9 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   };
 
   const onDeleteShippedLibraryTemplate = async (template: CompositionTemplate) => {
-    if (!window.confirm(`Delete shipped “${template.label}”? User view will no longer show it.`)) return;
+    if (!window.confirm(`Delete “${template.label}” from the master catalog? Every user view will hide it.`)) return;
     const result = await deleteShippedTemplate(template.id);
-    if (!result.ok) {
-      notify(result.reason || 'Could not delete shipped template');
-      return;
-    }
+    invalidateTemplateThumb(template.id);
     setTemplatesTick((n) => n + 1);
     setCompositionPick((current) => (
       current?.templateId === template.id ? null : current
@@ -6108,7 +6303,20 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         tab.shippedTemplateId === template.id ? { ...tab, shippedTemplateId: null } : tab
       )),
     }));
-    notify(`Deleted shipped “${template.label}”`);
+    if (!result.ok) {
+      notify(result.reason
+        ? `Removed “${template.label}” here · ${result.reason}`
+        : `Removed “${template.label}” here · master file not saved`);
+      return;
+    }
+    const cloudNote = result.cloudError
+      ? ` · Supabase: ${result.cloudError}`
+      : ' · pushed to Supabase';
+    notify(
+      result.downloaded
+        ? `Deleted “${template.label}” · downloaded master JSON${cloudNote}`
+        : `Deleted “${template.label}” from the master catalog${cloudNote}`,
+    );
   };
 
   const onRenameCompositionScene = (sceneId: string, name: string) => {
@@ -6225,24 +6433,51 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     setTemplatesTick((n) => n + 1);
   }), []);
 
-  const canUseProMaxPack = canUseProMaxTemplates(license.tier) || isDeveloperToolset;
+  // Dev always sees / ships the full catalog. License override only gates User view (+ other features).
+  const includeAllTemplates = isDeveloperToolset;
+  const canUseDeviceLayouts = gatedTier !== 'free' || includeAllTemplates;
+  const canUseSocialAssets = canUseDeviceLayouts;
+  const canUseProMaxPack = canUseProMaxTemplates(gatedTier) || includeAllTemplates;
+  useEffect(() => {
+    if (templateCategory === 'scenes' && !canUseProMaxPack) {
+      setTemplateCategory(canUseDeviceLayouts ? 'devices' : 'saved');
+      return;
+    }
+    if ((templateCategory === 'devices' || templateCategory === 'social') && !canUseDeviceLayouts) {
+      setTemplateCategory('saved');
+    }
+  }, [templateCategory, canUseProMaxPack, canUseDeviceLayouts]);
+  const installedTemplateIds = useMemo(
+    () => (includeAllTemplates ? null : new Set(loadInstalledTemplateIds())),
+    [templatesTick, includeAllTemplates, templatePickerOpen],
+  );
   const sceneCompositions = useMemo(
     () => templatesVisibleForTier('scenes', {
-      canUseProMaxPack,
-      includeAll: isDeveloperToolset,
+      tier: gatedTier,
+      includeAll: includeAllTemplates,
+      installedIds: installedTemplateIds,
     }),
-    [templatesTick, canUseProMaxPack, isDeveloperToolset],
+    [templatesTick, gatedTier, includeAllTemplates, installedTemplateIds],
   );
   const deviceCompositions = useMemo(
     () => templatesVisibleForTier('devices', {
-      canUseProMaxPack,
-      includeAll: isDeveloperToolset,
+      tier: gatedTier,
+      includeAll: includeAllTemplates,
+      installedIds: installedTemplateIds,
     }),
-    [templatesTick, canUseProMaxPack, isDeveloperToolset],
+    [templatesTick, gatedTier, includeAllTemplates, installedTemplateIds],
+  );
+  const socialCompositions = useMemo(
+    () => templatesVisibleForTier('social', {
+      tier: gatedTier,
+      includeAll: includeAllTemplates,
+      installedIds: installedTemplateIds,
+    }),
+    [templatesTick, gatedTier, includeAllTemplates, installedTemplateIds],
   );
   const mainShipTargets = useMemo(
-    () => [...deviceCompositions, ...sceneCompositions],
-    [deviceCompositions, sceneCompositions],
+    () => [...deviceCompositions, ...socialCompositions, ...sceneCompositions],
+    [deviceCompositions, socialCompositions, sceneCompositions],
   );
   const activeCompositionId = (
     compositionPick?.tabId === workspace.activeId
@@ -6277,7 +6512,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     if (!tabId) return;
     if (
       isProMaxPackTemplate(template)
-      && !canUseProMaxTemplates(license.tier)
+      && !canUseProMaxTemplates(gatedTier)
       && !isDeveloperToolset
     ) {
       notify(upgradeCopyProMax('The Pro Max template & motion pack'));
@@ -6299,7 +6534,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     );
   };
 
-  /** Write the open shot (including device models) back into the file it came from. */
+  /** Overwrite a master catalog template (or the open project file) from the current shot. */
   const pushBackIntoPhoneFile = async (forcedId?: string | null) => {
     const tabId = workspace.activeId;
     if (!tabId || project.devices.length === 0) {
@@ -6311,25 +6546,40 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     const notes: string[] = [];
 
     if (targetId && isDevEditableTemplateId(targetId)) {
-      const category = existing?.category === 'scenes' ? 'scenes' as const : 'devices' as const;
-      // Keep the file’s name; overwrite its device list from the open shot.
+      // Preserve Devices / Scenes / Social so updates stay in the same master bucket.
+      const category = shippedCategoryOf(existing, 'devices');
       const label = existing?.label || project.name || 'Untitled composition';
       try {
         setShippingTemplate(true);
         const next = prepareShippedFromProject(label, project, category, {
           id: targetId,
           cameraOrbit: sharedOrbit,
+          description: existing?.description,
+          badge: existing?.badge,
+          preview: existing?.preview,
         });
         const result = await shipCompositionTemplate(next);
-        if (!result.ok) {
-          notify(result.reason || 'Could not overwrite devices in that file');
-          return;
-        }
+        invalidateTemplateThumb(result.template.id, projectFromTemplate(result.template));
         setTemplatesTick((n) => n + 1);
         linkShippedTemplate(tabId, result.template.id);
-        notes.push(`“${result.template.label}” devices`);
+        if (!result.ok) {
+          notify(result.reason
+            ? `Updated “${result.template.label}” here · ${result.reason}`
+            : `Updated “${result.template.label}” here · master file not saved`);
+          return;
+        }
+        notes.push(
+          result.downloaded
+            ? `“${result.template.label}” (download master JSON)`
+            : `“${result.template.label}” in master catalog`,
+        );
+        if (result.cloudError) {
+          notes.push(`Supabase: ${result.cloudError}`);
+        } else if (!result.downloaded) {
+          notes.push('Supabase');
+        }
       } catch (err) {
-        notify(err instanceof Error ? err.message : 'Could not overwrite devices in that file');
+        notify(err instanceof Error ? err.message : 'Could not update the master template');
         return;
       } finally {
         setShippingTemplate(false);
@@ -6348,14 +6598,14 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     }
 
     if (!notes.length) {
-      notify('Choose the Devices file to overwrite, then push');
+      notify('Choose a master template to update, then push');
       return;
     }
-    notify(`Overwrote ${notes.join(' + ')}`);
+    notify(`Pushed ${notes.join(' + ')} · User view sees it now`);
   };
 
-  /** Add the open shot as a new Devices / Scenes catalog template. */
-  const shipCurrentAsNewTemplate = async (category: 'devices' | 'scenes') => {
+  /** Add the open shot as a new master catalog template every user can see. */
+  const shipCurrentAsNewTemplate = async (category: ShippedTemplateCategory) => {
     if (project.devices.length === 0) {
       notify('Add a device before shipping');
       return;
@@ -6368,18 +6618,24 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         cameraOrbit: sharedOrbit,
       });
       const result = await shipCompositionTemplate(next);
-      if (!result.ok) {
-        notify(result.reason || 'Ship failed');
-        return;
-      }
+      invalidateTemplateThumb(result.template.id, projectFromTemplate(result.template));
       setTemplatesTick((n) => n + 1);
       setTemplateCategory(category);
       if (tabId && isDevEditableTemplateId(result.template.id)) {
         linkShippedTemplate(tabId, result.template.id);
       }
+      if (!result.ok) {
+        notify(result.reason
+          ? `Created “${result.template.label}” here · ${result.reason}`
+          : `Created “${result.template.label}” here · master file not saved`);
+        return;
+      }
+      const cloudNote = result.cloudError
+        ? ` · Supabase: ${result.cloudError}`
+        : ' · pushed to Supabase';
       const where = result.downloaded
-        ? ' · downloaded JSON (drop into src/data/)'
-        : ' · User view sees it now';
+        ? ` · downloaded master JSON (drop into src/data/)${cloudNote}`
+        : ` · master catalog${cloudNote}`;
       notify(`Shipped “${result.template.label}”${where}`);
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Ship failed');
@@ -6400,7 +6656,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
     notify(`Saved “${saved.label}” as template · ${project.devices.length} device${project.devices.length === 1 ? '' : 's'}${where}`);
   };
 
-  const onCopyBuiltinComposition = async (category: 'devices' | 'scenes' = 'devices') => {
+  const onCopyBuiltinComposition = async (category: ShippedTemplateCategory = 'devices') => {
     const source = formatBuiltinCompositionSource(compositionName || project.name, project, {
       category,
       cameraOrbit: sharedOrbit,
@@ -6460,11 +6716,11 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         <button
           type="button"
           className="brand-area"
-          title="mokstudio"
-          aria-label="mokstudio"
+          title={APP_DISPLAY_NAME}
+          aria-label={APP_DISPLAY_NAME}
           onClick={goToRecentProjects}
         >
-          <img className="brand-mark" src="./splash/logo.png" alt="" width={22} height={22} />
+          <img className="brand-mark" src={APP_LOGO_SRC} alt="" width={22} height={22} />
         </button>
         <div className="document-area">
           <div className="file-menu-wrap" ref={fileMenuRef}>
@@ -6742,7 +6998,10 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           onFeedback={() => setFeedbackOpen(true)}
           onShowOnboarding={onShowOnboarding}
           onShowStudioTour={requestStudioTour}
-          deviceUnlocked={(deviceId) => isDeviceUnlocked(license.tier, deviceId)}
+          deviceUnlocked={(deviceId) => isDeviceUnlocked(gatedTier, deviceId)}
+          gatedLicenseTier={gatedTier}
+          devLicenseOverride={devLicenseOverride}
+          onDevLicenseOverride={toolsetSwitchAvailable ? setDevLicenseOverride : undefined}
         />
       ) : (
       <div className={`workspace ${sidePanelsHidden ? 'panels-hidden' : ''} ${leftPanelHidden && !sidePanelsHidden ? 'left-panel-hidden' : ''} ${timelineOpen && !sidePanelsHidden ? 'timeline-open' : ''}`}>
@@ -7091,12 +7350,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 <button
                   type="button"
                   className="left-panel-settings"
-                  title={`License · ${planLabel(license.tier)} · Pro ${formatGbp(PLAN_PRICES_GBP.pro)}`}
+                  title={`License · ${planLabel(gatedTier, { markDevOverride: true })} · Pro ${formatGbp(PLAN_PRICES_GBP.pro)}`}
                   aria-label="License and plans"
                   onClick={() => setLicenseOpen(true)}
                 >
                   <KeyRound size={15} strokeWidth={1.9} />
-                  <span>{planLabel(license.tier)}</span>
+                  <span>{planLabel(gatedTier, { markDevOverride: true })}</span>
                 </button>
               )}
               <button
@@ -7653,41 +7912,50 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           )}
           <div className={`workspace-bottom-chrome ${timelineOpen && !sidePanelsHidden ? 'is-raised' : ''}`}>
             {toolsetSwitchAvailable && (
-              <div
-                className={`workspace-view-toggle${rightWorkspaceTab === 'agent' ? ' is-agent' : isDeveloperToolset ? ' is-dev' : ' is-user'}`}
-                role="group"
-                aria-label="Workspace view"
-              >
-                <button
-                  type="button"
-                  className={rightWorkspaceTab !== 'agent' && isDeveloperToolset ? 'is-active' : ''}
-                  aria-pressed={rightWorkspaceTab !== 'agent' && isDeveloperToolset}
-                  title="Dev view — quick-edit templates and ship updates to User"
-                  onClick={() => setToolset('developer')}
+              <div className="workspace-dev-controls">
+                <div
+                  className={`workspace-view-toggle${rightWorkspaceTab === 'agent' ? ' is-agent' : isDeveloperToolset ? ' is-dev' : ' is-user'}`}
+                  role="group"
+                  aria-label="Workspace view"
                 >
-                  <Wrench size={12} strokeWidth={2.2} aria-hidden />
-                  Dev
-                </button>
-                <button
-                  type="button"
-                  className={rightWorkspaceTab !== 'agent' && !isDeveloperToolset ? 'is-active' : ''}
-                  aria-pressed={rightWorkspaceTab !== 'agent' && !isDeveloperToolset}
-                  title="User view — preview the templates customers get"
-                  onClick={() => setToolset('user')}
-                >
-                  <UserRound size={12} strokeWidth={2.2} aria-hidden />
-                  User view
-                </button>
-                <button
-                  type="button"
-                  className={rightWorkspaceTab === 'agent' ? 'is-active' : ''}
-                  aria-pressed={rightWorkspaceTab === 'agent'}
-                  title="Agent mode — AI chat for animation"
-                  onClick={openAgentMode}
-                >
-                  <Bot size={12} strokeWidth={2.2} aria-hidden />
-                  Agent
-                </button>
+                  <button
+                    type="button"
+                    className={rightWorkspaceTab !== 'agent' && isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={rightWorkspaceTab !== 'agent' && isDeveloperToolset}
+                    title="Dev view — quick-edit templates and ship updates to User"
+                    onClick={() => setToolset('developer')}
+                  >
+                    <Wrench size={12} strokeWidth={2.2} aria-hidden />
+                    Dev
+                  </button>
+                  <button
+                    type="button"
+                    className={rightWorkspaceTab !== 'agent' && !isDeveloperToolset ? 'is-active' : ''}
+                    aria-pressed={rightWorkspaceTab !== 'agent' && !isDeveloperToolset}
+                    title="User view — preview the templates customers get"
+                    onClick={() => setToolset('user')}
+                  >
+                    <UserRound size={12} strokeWidth={2.2} aria-hidden />
+                    User view
+                  </button>
+                  <button
+                    type="button"
+                    className={rightWorkspaceTab === 'agent' ? 'is-active' : ''}
+                    aria-pressed={rightWorkspaceTab === 'agent'}
+                    title="Agent mode — AI chat for animation"
+                    onClick={openAgentMode}
+                  >
+                    <Bot size={12} strokeWidth={2.2} aria-hidden />
+                    Agent
+                  </button>
+                </div>
+                <DevLicenseSwitcher
+                  compact
+                  activeTier={gatedTier}
+                  overrideActive={devLicenseOverride !== null}
+                  onSelect={setDevLicenseOverride}
+                  onClear={() => setDevLicenseOverride(null)}
+                />
               </div>
             )}
               <div className="workspace-mode-cluster">
@@ -8012,15 +8280,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           ) : (
           <>
           {isDeveloperToolset && (
-            <div className="template-quick-edit" aria-label="Ship templates and compositions">
+            <div className="template-quick-edit" aria-label="Ship templates">
               <div className="template-quick-edit-copy">
-                <strong>Ship templates</strong>
+                <strong>Master catalog</strong>
                 <span>
                   {linkedShipTarget
-                    ? `Update “${linkedShipTarget.label}”, or ship the open shot as a new layout`
+                    ? `Update “${linkedShipTarget.label}” and publish to Supabase for every user (not My Templates)`
                     : phoneFilePath
-                      ? 'Push into this project file, or ship as a new catalog template'
-                      : 'Pick a Devices / Scenes template to update, or ship as new'}
+                      ? 'Push into this project file, or ship a new master template to Supabase'
+                      : 'Dev admin only — Update / Ship publishes master templates to Supabase for all users'}
                 </span>
               </div>
               <label className="template-quick-edit-target">
@@ -8036,15 +8304,22 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 >
                   <option value="">Choose template…</option>
                   {deviceCompositions.length > 0 && (
-                    <optgroup label="Devices">
+                    <optgroup label="Scene templates">
                       {deviceCompositions.map((item) => (
                         <option key={item.id} value={item.id}>{item.label}</option>
                       ))}
                     </optgroup>
                   )}
                   {sceneCompositions.length > 0 && (
-                    <optgroup label="Scenes">
+                    <optgroup label="Templates">
                       {sceneCompositions.map((item) => (
+                        <option key={item.id} value={item.id}>{item.label}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {socialCompositions.length > 0 && (
+                    <optgroup label="Social media">
+                      {socialCompositions.map((item) => (
                         <option key={item.id} value={item.id}>{item.label}</option>
                       ))}
                     </optgroup>
@@ -8055,7 +8330,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 <button
                   type="button"
                   className="text-button"
-                  title="Browse Devices templates"
+                  title="Browse templates"
                   onClick={() => {
                     setTemplateCategory('devices');
                     setTemplatePickerOpen(true);
@@ -8067,29 +8342,38 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   type="button"
                   className="button primary-button"
                   disabled={!canPushIntoPhoneFile || shippingTemplate}
-                  title="Overwrite the phones stored in that Devices / Scenes template"
+                  title="Overwrite this template in the master catalog for every user"
                   onClick={() => void pushBackIntoPhoneFile(shipTargetId || null)}
                 >
                   <RefreshCw size={13} />
-                  {linkedShipTarget ? `Update “${linkedShipTarget.label}”` : 'Update shipped'}
+                  {linkedShipTarget ? `Update “${linkedShipTarget.label}”` : 'Update master'}
                 </button>
                 <button
                   type="button"
                   className="button"
                   disabled={project.devices.length === 0 || shippingTemplate}
-                  title="Add this shot as a new Devices layout"
+                  title="Add this shot to the master catalog as a Devices template"
                   onClick={() => void shipCurrentAsNewTemplate('devices')}
                 >
-                  <Download size={13} /> Ship layout
+                  <Download size={13} /> Ship devices
                 </button>
                 <button
                   type="button"
                   className="button"
                   disabled={project.devices.length === 0 || shippingTemplate}
-                  title="Add this shot as a new composition"
+                  title="Add this shot to the master catalog as a Scenes template"
                   onClick={() => void shipCurrentAsNewTemplate('scenes')}
                 >
-                  <Download size={13} /> Ship composition
+                  <Download size={13} /> Ship scenes
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={project.devices.length === 0 || shippingTemplate}
+                  title="Add this shot to the master catalog as a Social template"
+                  onClick={() => void shipCurrentAsNewTemplate('social')}
+                >
+                  <Download size={13} /> Ship social
                 </button>
               </div>
             </div>
@@ -8614,24 +8898,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         <DeviceCardGrid
                           devices={platformDevices}
                           previewLayout={inspectorProposed ? 'fit' : deviceCardPreview}
-                          isSelected={(id) => device.deviceId === id}
-                          isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
-                          onLibraryDragStart={(id) => { draggingLibraryDeviceRef.current = id; }}
-                          onLibraryDragEnd={() => {
-                            draggingLibraryDeviceRef.current = null;
-                            setDragOver(false);
-                            setCanvasDropKind(null);
-                          }}
-                          onPick={(option, unlocked) => {
-                            if (!unlocked) {
-                              notify(upgradeCopy('The full device library'));
-                              setLicenseOpen(true);
-                              return;
-                            }
-                            setProject((current) => applyDeviceToPlatform(current, platform, option.id));
-                            setCameraRecenterToken((n) => n + 1);
-                            setDeviceChosen(true);
-                          }}
+                          selectedId={device.deviceId}
+                          licenseTier={gatedTier}
+                          onNotify={notify}
+                          onLibraryDragStart={onLibraryDragStart}
+                          onLibraryDragEnd={onLibraryDragEnd}
+                          onPick={platform === 'ios' ? onLibraryIosDevicePick : onLibraryAndroidDevicePick}
                         />
                         <FinishDots
                           ariaLabel={`${title} finish`}
@@ -8651,26 +8923,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   <DeviceCardGrid
                     devices={filteredDevices}
                     previewLayout={inspectorProposed ? 'fit' : deviceCardPreview}
-                    isSelected={(id) => project.deviceId === id}
-                    isUnlocked={(id) => isDeviceUnlocked(license.tier, id)}
-                    onLibraryDragStart={(id) => { draggingLibraryDeviceRef.current = id; }}
-                    onLibraryDragEnd={() => {
-                      draggingLibraryDeviceRef.current = null;
-                      setDragOver(false);
-                      setCanvasDropKind(null);
-                    }}
-                    onPick={(device, unlocked) => {
-                      if (!unlocked) {
-                        notify(upgradeCopy('The full device library'));
-                        setLicenseOpen(true);
-                        return;
-                      }
-                      patchSelectedDevice({ deviceId: device.id });
-                      setDeviceChosen(true);
-                      if (isPlaceholderScreenshot(activeEnvScreenshot)) {
-                        applyScreenImage(placeholderForDevice(device), device.label, 'Size guide updated');
-                      }
-                    }}
+                    selectedId={project.deviceId}
+                    licenseTier={gatedTier}
+                    onNotify={notify}
+                    onLibraryDragStart={onLibraryDragStart}
+                    onLibraryDragEnd={onLibraryDragEnd}
+                    onPick={onLibraryDevicePick}
                   />
                   <div className="device-card-import-row">
                     <button
@@ -10316,15 +10574,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
           chromeHidden={sidePanelsHidden}
           onToggle={toggleTimeline}
           clip={animation}
-          onChange={(next) => {
-            updateProject({ animation: next });
-            // Timeline drags fire often; debounce the file seal like camera orbit.
-            if (animSaveTimerRef.current != null) window.clearTimeout(animSaveTimerRef.current);
-            animSaveTimerRef.current = window.setTimeout(() => {
-              animSaveTimerRef.current = null;
-              flushActiveFile();
-            }, 280);
-          }}
+          onChange={onTimelineChange}
           currentTime={animTime}
           onSeek={setAnimTime}
           playing={animPlaying}
@@ -10535,7 +10785,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                     item.id === 'custom' ? customExportSize : undefined,
                   );
                 const longEdge = Math.max(preview.width, preview.height);
-                const allowed = isResolutionAllowed(license.tier, longEdge);
+                const allowed = isResolutionAllowed(gatedTier, longEdge);
                 return (
                   <button
                     key={item.id}
@@ -10875,15 +11125,6 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
               </div>
             )}
             <div className="template-category-tabs" role="tablist" aria-label="Template type">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={templateCategory === 'devices'}
-                className={templateCategory === 'devices' ? 'active' : ''}
-                onClick={() => setTemplateCategory('devices')}
-              >
-                <Smartphone size={14} /> Device templates
-              </button>
               {canUseProMaxPack && (
                 <button
                   type="button"
@@ -10892,7 +11133,29 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   className={templateCategory === 'scenes' ? 'active' : ''}
                   onClick={() => setTemplateCategory('scenes')}
                 >
-                  <Sparkles size={14} /> Pre-compositions
+                  <Sparkles size={14} /> Templates
+                </button>
+              )}
+              {canUseDeviceLayouts && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={templateCategory === 'devices'}
+                  className={templateCategory === 'devices' ? 'active' : ''}
+                  onClick={() => setTemplateCategory('devices')}
+                >
+                  <Smartphone size={14} /> Scene templates
+                </button>
+              )}
+              {canUseSocialAssets && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={templateCategory === 'social'}
+                  className={`template-tab-nested${templateCategory === 'social' ? ' active' : ''}`}
+                  onClick={() => setTemplateCategory('social')}
+                >
+                  <Share2 size={14} /> Social media
                 </button>
               )}
               <button
@@ -10907,10 +11170,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
             </div>
             <div className="modal-field-label">
               {templateCategory === 'devices'
-                ? (isDeveloperToolset ? 'DEV · DEVICE LAYOUTS' : 'DEVICE LAYOUTS')
-                : templateCategory === 'scenes'
-                  ? (isDeveloperToolset ? 'DEV · SCENE COMPOSITIONS' : 'SCENE COMPOSITIONS')
-                  : 'YOUR TEMPLATES'}
+                ? (isDeveloperToolset ? 'DEV · SCENE TEMPLATES' : 'SCENE TEMPLATES')
+                : templateCategory === 'social'
+                  ? (isDeveloperToolset ? 'DEV · SOCIAL MEDIA' : 'SOCIAL MEDIA')
+                  : templateCategory === 'scenes'
+                    ? (isDeveloperToolset ? 'DEV · TEMPLATES' : 'TEMPLATES')
+                    : 'YOUR TEMPLATES'}
               <span>{templateCategory === 'saved' ? savedCompositions.length : `${workspace.tabs.length}/${MAX_PROJECT_TABS} tabs`}</span>
             </div>
             {templateCategory === 'saved' && (
@@ -10974,12 +11239,15 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                 <span className="field-caption">Untitled studio — soft light, no template motion</span>
               </div>
             )}
-            <div className="template-grid">
+            <div className="template-grid-rail">
+              <div className="template-grid">
+                <div className="template-grid-track">
               {(templateCategory === 'saved'
                 ? savedCompositions
                 : templatesVisibleForTier(templateCategory, {
-                  canUseProMaxPack,
-                  includeAll: isDeveloperToolset,
+                  tier: gatedTier,
+                  includeAll: includeAllTemplates,
+                  installedIds: installedTemplateIds,
                 })
               ).map((template) => {
                 const editable = isDeveloperToolset && templateCategory !== 'saved';
@@ -11037,6 +11305,8 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   </div>
                 );
               })}
+                </div>
+              </div>
             </div>
             <div className="export-modal-actions">
               <button type="button" className="button subtle-button" onClick={() => setTemplatePickerOpen(false)}>Cancel</button>
@@ -11105,6 +11375,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         }}
       />
       {toast && <div className="toast"><span className="toast-dot" /> {toast}<button aria-label="Dismiss notification" onClick={() => setToast(null)}><X size={14} /></button></div>}
+      <TemplateThumbHost />
     </div>
   );
 }

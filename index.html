@@ -287,6 +287,17 @@
         if (navigator.userAgent.indexOf('Electron') !== -1) {
           document.documentElement.classList.add('is-desktop');
         }
+        // Dev server / Electron DEV — badged mark so it is obvious vs the DMG build.
+        var isDevHost = location.hostname === '127.0.0.1'
+          || location.hostname === 'localhost'
+          || location.port === '5175';
+        if (isDevHost) {
+          var splashLogo = document.querySelector('.splash-logo img');
+          if (splashLogo) splashLogo.setAttribute('src', './splash/logo-dev.png');
+          var splashWord = document.querySelector('.splash-word');
+          if (splashWord) splashWord.textContent = 'mokstudio Dev';
+          document.title = 'mokstudio Dev';
+        }
         var canvas = document.querySelector('.splash-canvas');
         function fitSplash() {
           if (!canvas) return;

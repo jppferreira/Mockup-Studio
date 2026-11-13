@@ -80,12 +80,13 @@ import { publishLiveOrbit, subscribeLiveOrbit, type LiveOrbit } from '../lib/liv
 import { recordOrbitFps } from '../lib/perfDiagnostics';
 
 /**
- * Live preview DPR — retina up to 1.5× (full 2× doubles grade + shadow fill-rate).
+ * Live preview DPR — cap at 1.25× (1.5×+ doubles grade + shadow fill-rate).
  * Export / capture paths pass an explicit pixelRatio.
  */
-const LIVE_CANVAS_DPR: [number, number] = [1, 1.5];
+const LIVE_CANVAS_DPR: [number, number] = [1, 1.25];
 const LIVE_GL = {
-  antialias: true,
+  // No MSAA on live canvas (Spline playbook); CaptureBridge / export can boost.
+  antialias: false,
   alpha: true,
   preserveDrawingBuffer: false,
   powerPreference: 'high-performance' as const,
@@ -2791,9 +2792,9 @@ function KeyLightRig({
   const boundsRef = useRef(new THREE.Box3());
   const lastFitKey = useRef('');
   const fitFrame = useRef(0);
-  // Always studio PCSS — orbit must not soften penumbra. Cost savings come from
-  // freezing the shadow map (autoUpdate=false), not from a lighter filter.
-  const pcssProfile: ProgressiveShadowProfile = 'studio';
+  // Orbit uses a thinner PCSS kernel; idle/export restore full studio filter.
+  // Shadow maps stay frozen (autoUpdate=false) while interactive.
+  const pcssProfile: ProgressiveShadowProfile = mode === 'interactive' ? 'interactive' : 'studio';
 
   useLayoutEffect(() => {
     const light = lightRef.current;

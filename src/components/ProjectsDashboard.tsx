@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  Check, Cuboid, Glasses, Headphones, Laptop, LayoutGrid, Monitor, Smartphone, Tablet, Trash2, UserRound, Watch, Wrench, X,
+  Bookmark, Check, Cuboid, Download, Glasses, Headphones, Laptop, LayoutGrid, LoaderCircle, Monitor, Smartphone, Store, Tablet, Trash2, UserRound, Watch, Wrench, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { hasAnimation } from '../lib/animation';
@@ -56,12 +56,40 @@ import {
 import { formatSyncedClock, lastSyncedStatus, useLastSyncedAt, type SyncConflict } from '../lib/cloudSync';
 import type { RecentScreenshot } from '../lib/recentScreenshots';
 import {
+  getCompositionTemplate,
+  listCatalogTemplatesForStore,
   templatesVisibleForTier,
   type CompositionTemplate,
   type TemplateCategory,
 } from '../lib/templates';
 import type { MockupProject } from '../types';
-import { canUseProMaxTemplates, isFreeDevice, planLabel, type LicenseState } from '../lib/license';
+import {
+  canUseProMaxTemplates,
+  isFreeDevice,
+  planLabel,
+  type LicenseState,
+  type LicenseTier,
+} from '../lib/license';
+import DevLicenseSwitcher from './DevLicenseSwitcher';
+import { isBundledLocalDevice } from '../lib/localDeviceModels';
+import {
+  downloadDeviceModel,
+  listCachedRemoteDeviceIds,
+  peekDeviceModelCached,
+  remoteModelsConfigured,
+} from '../lib/modelCache';
+import {
+  installTemplatePack,
+  installTemplates,
+  isPackFullyInstalled,
+  isTemplateInstalled,
+  loadInstalledTemplateIds,
+  packForTemplate,
+  TEMPLATE_STORE_PACKS,
+  type StorePackId,
+  uninstallTemplates,
+} from '../lib/installedTemplates';
+import { APP_LOGO_SRC } from '../lib/appBrand';
 import DeviceModelThumb from './DeviceModelThumb';
 import TemplateThumb, { ProjectThumb } from './TemplateThumb';
 import newProjectArt from '../assets/dashboard/new-project.svg';
@@ -77,18 +105,48 @@ import iconPlus from '../assets/dashboard/icon-plus.svg';
 import iconChevron from '../assets/dashboard/icon-chevron.svg';
 import iconDots from '../assets/dashboard/icon-dots.svg';
 
-type DashSection = 'projects' | 'models' | 'templates' | 'assets' | 'settings';
+type DashSection = 'projects' | 'models' | 'templates' | 'my-templates' | 'template-store' | 'assets' | 'settings';
 type SortMode = 'edited' | 'name';
+type DashNavIcon = string | LucideIcon;
 
 const LONG_PRESS_MS = 480;
 const LONG_PRESS_MOVE_PX = 12;
 
-const NAV: { id: DashSection; label: string; icon: string }[] = [
+const NAV: { id: DashSection; label: string; icon: DashNavIcon }[] = [
   { id: 'projects', label: 'Projects', icon: iconGrid },
   { id: 'models', label: '3D models', icon: iconCube },
   { id: 'templates', label: 'Templates', icon: iconLayers },
+  { id: 'my-templates', label: 'My templates', icon: Bookmark },
+  { id: 'template-store', label: 'Template store', icon: Store },
   { id: 'assets', label: 'My assets', icon: iconImage },
   { id: 'settings', label: 'Settings', icon: iconSettings },
+];
+
+type StoreMasonryTile = {
+  templateId: string;
+  packId: StorePackId;
+  /** Masonry span for staggered layout */
+  masonry: 'hero' | 'tall' | 'wide' | 'standard';
+};
+
+const STORE_MASONRY_CYCLE: StoreMasonryTile['masonry'][] = ['hero', 'tall', 'wide', 'standard', 'tall', 'wide'];
+
+/** Prefer featured tiles first, then the rest of the downloadable catalog. */
+const FEATURED_STORE_TILES: StoreMasonryTile[] = [
+  { templateId: 'solo-hero', packId: 'starter-layouts', masonry: 'standard' },
+  { templateId: 'obsidian-plinth', packId: 'pro-max-motion', masonry: 'hero' },
+  { templateId: 'triple-fan', packId: 'multi-device', masonry: 'tall' },
+  { templateId: 'clay-desk', packId: 'art-director', masonry: 'wide' },
+  { templateId: 'social-story-portrait', packId: 'social-studio', masonry: 'tall' },
+  { templateId: 'ivory-laptop', packId: 'desk-set', masonry: 'standard' },
+  { templateId: 'launch-pair', packId: 'pro-max-motion', masonry: 'wide' },
+  { templateId: 'ios-android', packId: 'multi-device', masonry: 'standard' },
+  { templateId: 'pedestal-stage', packId: 'art-director', masonry: 'tall' },
+  { templateId: 'social-feed-hero', packId: 'social-studio', masonry: 'standard' },
+  { templateId: 'concrete-lean', packId: 'desk-set', masonry: 'hero' },
+  { templateId: 'chrome-floor', packId: 'pro-max-motion', masonry: 'standard' },
+  { templateId: 'duo-stack', packId: 'multi-device', masonry: 'wide' },
+  { templateId: 'white-studio', packId: 'pro-max-motion', masonry: 'tall' },
 ];
 
 const DASH_TABS_KEY = 'mockup-studio-dash-tabs';
@@ -100,11 +158,17 @@ type DashTabMemory = {
 };
 
 function isDashSection(value: unknown): value is DashSection {
-  return value === 'projects' || value === 'models' || value === 'templates' || value === 'assets' || value === 'settings';
+  return value === 'projects'
+    || value === 'models'
+    || value === 'templates'
+    || value === 'my-templates'
+    || value === 'template-store'
+    || value === 'assets'
+    || value === 'settings';
 }
 
 function isTemplateCategory(value: unknown): value is TemplateCategory {
-  return value === 'devices' || value === 'scenes' || value === 'saved';
+  return value === 'devices' || value === 'scenes' || value === 'social' || value === 'saved';
 }
 
 function isDeviceFilter(value: unknown): value is DeviceCategoryFilter {
@@ -209,6 +273,9 @@ export default function ProjectsDashboard({
   toolsetSwitchAvailable,
   isDeveloperToolset,
   onSetToolset,
+  gatedLicenseTier,
+  devLicenseOverride,
+  onDevLicenseOverride,
   onExplorePro,
   onLicenseChange,
   onFeedback,
@@ -243,11 +310,14 @@ export default function ProjectsDashboard({
   onDeleteShippedTemplate?: (template: CompositionTemplate) => void;
   onDuplicateTemplate: (template: CompositionTemplate) => void;
   onRenameTemplate?: (template: CompositionTemplate) => void;
-  onAddShippedTemplate?: (category: 'devices' | 'scenes') => void;
+  onAddShippedTemplate?: (category: 'devices' | 'scenes' | 'social') => void;
   savedCompositions: CompositionTemplate[];
   toolsetSwitchAvailable?: boolean;
   isDeveloperToolset?: boolean;
   onSetToolset?: (toolset: 'developer' | 'user') => void;
+  gatedLicenseTier?: LicenseTier;
+  devLicenseOverride?: LicenseTier | null;
+  onDevLicenseOverride?: (tier: LicenseTier | null) => void;
   onExplorePro: () => void;
   onLicenseChange: (next: LicenseState) => void;
   onFeedback: () => void;
@@ -273,6 +343,9 @@ export default function ProjectsDashboard({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deviceFilter, setDeviceFilter] = useState<DeviceCategoryFilter>(rememberedTabs.deviceFilter);
   const [templateCategory, setTemplateCategory] = useState<TemplateCategory>(rememberedTabs.templateCategory);
+  const remoteModels = remoteModelsConfigured();
+  const [modelCacheById, setModelCacheById] = useState<Record<string, 'ready' | 'missing' | 'downloading' | 'error'>>({});
+  const [modelCacheNotice, setModelCacheNotice] = useState<string | null>(null);
   const syncMenuRef = useRef<HTMLDivElement>(null);
   const longPressRef = useRef<{
     id: string;
@@ -430,6 +503,39 @@ export default function ProjectsDashboard({
   useEffect(() => {
     if (section !== 'projects' && selectMode) exitSelectMode();
   }, [section, selectMode, exitSelectMode]);
+
+  useEffect(() => {
+    if (!remoteModels || section !== 'models') return undefined;
+    let cancelled = false;
+    void listCachedRemoteDeviceIds().then((ready) => {
+      if (cancelled) return;
+      setModelCacheById((prev) => {
+        const next = { ...prev };
+        for (const id of ready) {
+          if (prev[id] === 'downloading') continue;
+          next[id] = 'ready';
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [remoteModels, section, deviceFilter]);
+
+  const downloadDashModel = useCallback(async (device: DeviceModel) => {
+    if (!remoteModels || isBundledLocalDevice(device.id)) return;
+    setModelCacheById((prev) => ({ ...prev, [device.id]: 'downloading' }));
+    setModelCacheNotice(null);
+    try {
+      await downloadDeviceModel(device.id);
+      setModelCacheById((prev) => ({ ...prev, [device.id]: 'ready' }));
+      setModelCacheNotice(`${device.label} ready offline`);
+    } catch (err) {
+      setModelCacheById((prev) => ({ ...prev, [device.id]: 'error' }));
+      setModelCacheNotice(err instanceof Error ? err.message : `Could not download ${device.label}`);
+    }
+  }, [remoteModels]);
 
   useEffect(() => {
     if (!selectMode) return undefined;
@@ -590,16 +696,97 @@ export default function ProjectsDashboard({
     () => filterDevicesByCategory(devices, deviceFilter),
     [devices, deviceFilter],
   );
-  const canUseProMaxPack = canUseProMaxTemplates(license.tier) || Boolean(isDeveloperToolset);
-  const effectiveTemplateCategory: TemplateCategory = (
-    templateCategory === 'scenes' && !canUseProMaxPack ? 'devices' : templateCategory
+  const featureTier = gatedLicenseTier ?? license.tier;
+  // Dev always authors the full catalog; license override gates User view only.
+  const includeAllTemplates = Boolean(isDeveloperToolset);
+  const [installedTemplateIds, setInstalledTemplateIds] = useState(() => loadInstalledTemplateIds());
+  const installedIdSet = useMemo(() => new Set(installedTemplateIds), [installedTemplateIds]);
+  const canUseDeviceLayouts = featureTier !== 'free' || includeAllTemplates;
+  const canUseSocialAssets = canUseDeviceLayouts;
+  const canUseProMaxPack = canUseProMaxTemplates(featureTier) || includeAllTemplates;
+  useEffect(() => {
+    if (templateCategory === 'scenes' && !canUseProMaxPack) {
+      setTemplateCategory(canUseDeviceLayouts ? 'devices' : 'saved');
+      return;
+    }
+    if ((templateCategory === 'devices' || templateCategory === 'social') && !canUseDeviceLayouts) {
+      setTemplateCategory('saved');
+    }
+  }, [templateCategory, canUseProMaxPack, canUseDeviceLayouts]);
+  const templatesList = (category: Exclude<TemplateCategory, 'saved'>) => (
+    templatesVisibleForTier(category, {
+      tier: featureTier,
+      includeAll: includeAllTemplates,
+      // User library only shows downloaded templates — never the full catalog by default.
+      installedIds: includeAllTemplates ? null : installedIdSet,
+    })
   );
-  const visibleTemplates = effectiveTemplateCategory === 'saved'
-    ? savedCompositions
-    : templatesVisibleForTier(effectiveTemplateCategory, {
-      canUseProMaxPack,
-      includeAll: Boolean(isDeveloperToolset),
-    });
+  // Listing is install + tier gated inside templatesVisibleForTier (not prefilled).
+  const compositionTemplates = templatesList('scenes');
+  const sceneTemplates = templatesList('devices');
+  const socialTemplates = templatesList('social');
+  const templatesUpgradeHint = !includeAllTemplates && installedTemplateIds.length === 0
+    ? 'Download templates from the Template store — nothing is installed by default.'
+    : !includeAllTemplates && featureTier === 'free'
+      ? 'Starter layouts are free to download. Pro unlocks multi-device and social packs.'
+      : !includeAllTemplates && featureTier === 'pro' && !canUseProMaxPack
+        ? 'Pro Max unlocks scenic packs in the Template store.'
+        : null;
+
+  const storeTiles = useMemo(() => {
+    const catalog = listCatalogTemplatesForStore();
+    const featuredIds = new Set(FEATURED_STORE_TILES.map((tile) => tile.templateId));
+    const tiles: StoreMasonryTile[] = [];
+    for (const tile of FEATURED_STORE_TILES) {
+      if (catalog.some((item) => item.id === tile.templateId)) tiles.push(tile);
+    }
+    let cycle = 0;
+    for (const template of catalog) {
+      if (featuredIds.has(template.id)) continue;
+      const packId = packForTemplate(template.id)?.id;
+      if (!packId) continue;
+      tiles.push({
+        templateId: template.id,
+        packId,
+        masonry: STORE_MASONRY_CYCLE[cycle % STORE_MASONRY_CYCLE.length],
+      });
+      cycle += 1;
+    }
+    return tiles;
+  }, []);
+
+  const canDownloadPack = (packId: StorePackId) => {
+    const pack = TEMPLATE_STORE_PACKS[packId];
+    if (!pack) return false;
+    if (includeAllTemplates) return true;
+    if (pack.tier === 'free') return true;
+    if (pack.tier === 'pro' || pack.tier === 'addon') return featureTier === 'pro' || featureTier === 'pro_max';
+    if (pack.tier === 'pro_max') return featureTier === 'pro_max';
+    return false;
+  };
+
+  const downloadStoreTemplate = (templateId: string, packId: StorePackId) => {
+    if (!canDownloadPack(packId)) {
+      onExplorePro();
+      return;
+    }
+    const next = installTemplates([templateId]);
+    setInstalledTemplateIds(next);
+  };
+
+  const downloadStorePack = (packId: StorePackId) => {
+    if (!canDownloadPack(packId)) {
+      onExplorePro();
+      return;
+    }
+    const next = installTemplatePack(packId);
+    setInstalledTemplateIds(next);
+  };
+
+  const removeInstalledTemplate = (templateId: string) => {
+    const next = uninstallTemplates([templateId]);
+    setInstalledTemplateIds(next);
+  };
 
   const heading = section === 'projects'
     ? { kicker: 'Workspace', title: 'Your projects', sub: 'Open a project or create something new.' }
@@ -611,19 +798,31 @@ export default function ProjectsDashboard({
           title: toolsetSwitchAvailable
             ? (isDeveloperToolset ? 'Templates · Dev' : 'Templates · User')
             : 'Templates',
-          sub: toolsetSwitchAvailable
-            ? 'Home library — add, rename, duplicate, or delete Device layouts & Compositions from the cards.'
-            : 'Start from a device layout, a pre-built scene, or a template you saved.',
+          sub: includeAllTemplates
+            ? 'Master catalog — author and ship for every user.'
+            : 'Downloaded templates only. Get more from the Template store.',
         }
-        : section === 'assets'
-          ? { kicker: 'Library', title: 'My assets', sub: 'Screenshots saved from recent scenes.' }
-          : { kicker: 'Workspace', title: 'Settings', sub: 'Theme, license, project files, and feedback.' };
+        : section === 'my-templates'
+          ? {
+            kicker: 'Library',
+            title: 'My templates',
+            sub: 'Templates you saved from the studio. Signed-in accounts sync them with your cloud projects.',
+          }
+          : section === 'template-store'
+            ? {
+              kicker: 'Library',
+              title: 'Template store',
+              sub: 'Browse and download templates. Nothing is installed until you download it.',
+            }
+            : section === 'assets'
+              ? { kicker: 'Library', title: 'My assets', sub: 'Screenshots saved from recent scenes.' }
+              : { kicker: 'Workspace', title: 'Settings', sub: 'Theme, license, project files, and feedback.' };
 
   return (
     <div className={`projects-dash ${desktop ? 'is-desktop' : ''}`}>
       <header className="dash-header">
         <div className="dash-brand">
-          <img className="dash-logo" src="./splash/logo.png" alt="" width={28} height={28} />
+          <img className="dash-logo" src={APP_LOGO_SRC} alt="" width={28} height={28} />
           <strong>mokstudio</strong>
           <span className="dash-beta-badge" aria-label="Beta">Beta</span>
         </div>
@@ -631,35 +830,46 @@ export default function ProjectsDashboard({
         <span className="dash-header-label">Your workspace</span>
         <div className="dash-header-actions">
           {toolsetSwitchAvailable && onSetToolset && (
-            <div
-              className={`workspace-view-toggle dash-header-view-toggle${isDeveloperToolset ? ' is-dev' : ' is-user'}`}
-              role="group"
-              aria-label="Workspace view"
-            >
-              <button
-                type="button"
-                className={isDeveloperToolset ? 'is-active' : ''}
-                aria-pressed={Boolean(isDeveloperToolset)}
-                title="Dev view — templates & compositions open in edit mode"
-                onClick={() => {
-                  onSetToolset('developer');
-                  setSection('templates');
-                  setTemplateCategory('scenes');
-                }}
+            <div className="workspace-dev-controls dash-header-dev-controls">
+              <div
+                className={`workspace-view-toggle dash-header-view-toggle${isDeveloperToolset ? ' is-dev' : ' is-user'}`}
+                role="group"
+                aria-label="Workspace view"
               >
-                <Wrench size={12} strokeWidth={2.2} aria-hidden />
-                Dev
-              </button>
-              <button
-                type="button"
-                className={!isDeveloperToolset ? 'is-active' : ''}
-                aria-pressed={!isDeveloperToolset}
-                title="User view — browse the customer template library"
-                onClick={() => onSetToolset('user')}
-              >
-                <UserRound size={12} strokeWidth={2.2} aria-hidden />
-                User view
-              </button>
+                <button
+                  type="button"
+                  className={isDeveloperToolset ? 'is-active' : ''}
+                  aria-pressed={Boolean(isDeveloperToolset)}
+                  title="Dev view — templates open in edit mode"
+                  onClick={() => {
+                    onSetToolset('developer');
+                    setSection('templates');
+                    setTemplateCategory('scenes');
+                  }}
+                >
+                  <Wrench size={12} strokeWidth={2.2} aria-hidden />
+                  Dev
+                </button>
+                <button
+                  type="button"
+                  className={!isDeveloperToolset ? 'is-active' : ''}
+                  aria-pressed={!isDeveloperToolset}
+                  title="User view — browse the customer template library"
+                  onClick={() => onSetToolset('user')}
+                >
+                  <UserRound size={12} strokeWidth={2.2} aria-hidden />
+                  User view
+                </button>
+              </div>
+              {onDevLicenseOverride && (
+                <DevLicenseSwitcher
+                  compact
+                  activeTier={featureTier}
+                  overrideActive={devLicenseOverride != null}
+                  onSelect={onDevLicenseOverride}
+                  onClear={() => onDevLicenseOverride(null)}
+                />
+              )}
             </div>
           )}
           <div className="sync-menu-wrap dash-sync-menu" ref={syncMenuRef}>
@@ -695,6 +905,7 @@ export default function ProjectsDashboard({
           <div className="dash-nav-list" role="tablist">
             {NAV.map((item) => {
               const active = section === item.id;
+              const Icon = typeof item.icon === 'string' ? null : item.icon;
               return (
                 <button
                   key={item.id}
@@ -702,9 +913,16 @@ export default function ProjectsDashboard({
                   role="tab"
                   aria-selected={active}
                   className={`dash-nav-item ${active ? 'is-active' : ''}`}
-                  onClick={() => setSection(item.id)}
+                  onClick={() => {
+                    setSection(item.id);
+                    if (item.id === 'my-templates') setTemplateCategory('saved');
+                  }}
                 >
-                  <img src={item.icon} alt="" width={19} height={19} />
+                  {Icon ? (
+                    <Icon size={19} strokeWidth={1.75} aria-hidden />
+                  ) : (
+                    <img src={item.icon as string} alt="" width={19} height={19} />
+                  )}
                   {item.label}
                 </button>
               );
@@ -729,13 +947,13 @@ export default function ProjectsDashboard({
               <div
                 className={`workspace-view-toggle dash-template-view-toggle${isDeveloperToolset ? ' is-dev' : ' is-user'}`}
                 role="group"
-                aria-label="Templates and compositions view"
+                aria-label="Templates view"
               >
                 <button
                   type="button"
                   className={isDeveloperToolset ? 'is-active' : ''}
                   aria-pressed={Boolean(isDeveloperToolset)}
-                  title="Dev view — edit Device layouts & Pre-compositions"
+                  title="Dev view — edit templates, scene templates, and social media"
                   onClick={() => onSetToolset('developer')}
                 >
                   <Wrench size={12} strokeWidth={2.2} aria-hidden />
@@ -874,7 +1092,7 @@ export default function ProjectsDashboard({
                     </span>
                     <span className="dash-card-copy">
                       <strong>New from template</strong>
-                      <span>Start with a device layout or pre-composition</span>
+                      <span>Start with a template, scene template, or social layout</span>
                       <img className="dash-card-chevron" src={iconChevron} alt="" width={21} height={21} />
                     </span>
                   </button>
@@ -1109,27 +1327,75 @@ export default function ProjectsDashboard({
                   );
                 })}
               </div>
+              {modelCacheNotice ? (
+                <p className="dash-empty" role="status">{modelCacheNotice}</p>
+              ) : null}
               <div className="dash-grid dash-grid-models">
                 {visibleDevices.map((device) => {
                   const unlocked = deviceUnlocked(device.id);
                   const proFeature = !isFreeDevice(device.id);
+                  const bundled = isBundledLocalDevice(device.id);
+                  const cache = bundled
+                    ? 'ready'
+                    : (modelCacheById[device.id]
+                      ?? (peekDeviceModelCached(device.id) ? 'ready' : 'missing'));
+                  const showDownload = remoteModels && !bundled && unlocked;
                   return (
-                    <button
-                      key={device.id}
-                      type="button"
-                      className={`dash-card dash-model-card ${unlocked ? '' : 'is-locked'} ${proFeature ? 'is-pro-feature' : ''}`}
-                      onClick={() => onStartDevice(device.id)}
-                      title={unlocked ? `Start with ${device.label}` : `${device.label} is a Pro model`}
-                    >
-                      {!unlocked ? <span className="pro-feature-tag" aria-label="Locked">Locked</span> : null}
-                      <span className="dash-card-thumb dash-model-thumb">
-                        <DeviceModelThumb deviceId={device.id} />
-                      </span>
-                      <span className="dash-card-copy">
-                        <strong>{device.label}</strong>
-                        <span>{device.subtitle}</span>
-                      </span>
-                    </button>
+                    <div key={device.id} className="dash-model-card-wrap">
+                      <button
+                        type="button"
+                        className={`dash-card dash-model-card ${unlocked ? '' : 'is-locked'} ${proFeature ? 'is-pro-feature' : ''}`}
+                        onClick={() => onStartDevice(device.id)}
+                        title={unlocked ? `Start with ${device.label}` : `${device.label} is a Pro model`}
+                      >
+                        {!unlocked ? <span className="pro-feature-tag" aria-label="Locked">Locked</span> : null}
+                        {bundled ? <span className="device-model-local-tag" aria-label="Ships with app">Local</span> : null}
+                        <span className="dash-card-thumb dash-model-thumb">
+                          <DeviceModelThumb deviceId={device.id} />
+                        </span>
+                        <span className="dash-card-copy">
+                          <strong>{device.label}</strong>
+                          <span>{device.subtitle}</span>
+                        </span>
+                      </button>
+                      {showDownload ? (
+                        <button
+                          type="button"
+                          className={`device-model-card-download is-${cache}`}
+                          disabled={cache === 'downloading' || cache === 'ready'}
+                          aria-label={
+                            cache === 'ready'
+                              ? `${device.label} downloaded`
+                              : cache === 'downloading'
+                                ? `Downloading ${device.label}`
+                                : `Download ${device.label} for offline use`
+                          }
+                          title={
+                            cache === 'ready'
+                              ? 'Downloaded — ready to use offline'
+                              : cache === 'downloading'
+                                ? 'Downloading…'
+                                : cache === 'error'
+                                  ? 'Retry download'
+                                  : 'Download model so it’s ready to use'
+                          }
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            if (cache === 'ready' || cache === 'downloading') return;
+                            void downloadDashModel(device);
+                          }}
+                        >
+                          {cache === 'downloading' ? (
+                            <LoaderCircle size={12} className="is-spinning" aria-hidden />
+                          ) : cache === 'ready' ? (
+                            <Check size={12} aria-hidden />
+                          ) : (
+                            <Download size={12} aria-hidden />
+                          )}
+                        </button>
+                      ) : null}
+                    </div>
                   );
                 })}
               </div>
@@ -1137,65 +1403,565 @@ export default function ProjectsDashboard({
           )}
 
           {section === 'templates' && (
-            <>
-              <div className="dash-templates-toolbar">
-                <div className="dash-chips" role="tablist" aria-label="Template type">
-                  <button type="button" role="tab" aria-selected={templateCategory === 'devices'} className={templateCategory === 'devices' ? 'is-active' : ''} onClick={() => setTemplateCategory('devices')}>
-                    Device layouts
-                  </button>
-                  {canUseProMaxPack && (
-                    <button type="button" role="tab" aria-selected={templateCategory === 'scenes'} className={templateCategory === 'scenes' ? 'is-active' : ''} onClick={() => setTemplateCategory('scenes')}>
-                      {toolsetSwitchAvailable ? 'Compositions' : 'Pre-compositions'}
+            <div className="dash-template-stack">
+              {templatesUpgradeHint && !canUseProMaxPack && !canUseDeviceLayouts ? (
+                <p className="dash-empty">{templatesUpgradeHint}</p>
+              ) : null}
+
+              <section className="dash-template-block" aria-labelledby="dash-templates-heading">
+                <div className="dash-template-block-head">
+                  <h2 id="dash-templates-heading">Templates</h2>
+                  {toolsetSwitchAvailable && onAddShippedTemplate && canUseProMaxPack && (
+                    <button
+                      type="button"
+                      className="dash-new dash-template-add"
+                      onClick={() => {
+                        if (!isDeveloperToolset) onSetToolset?.('developer');
+                        setTemplateCategory('scenes');
+                        onAddShippedTemplate('scenes');
+                      }}
+                    >
+                      <img src={iconPlus} alt="" width={20} height={20} />
+                      New template
                     </button>
                   )}
-                  <button type="button" role="tab" aria-selected={templateCategory === 'saved'} className={templateCategory === 'saved' ? 'is-active' : ''} onClick={() => setTemplateCategory('saved')}>
-                    Your templates
-                  </button>
                 </div>
-                {toolsetSwitchAvailable && templateCategory !== 'saved' && onAddShippedTemplate && (
-                  <button
-                    type="button"
-                    className="dash-new dash-template-add"
-                    onClick={() => {
-                      if (!isDeveloperToolset) onSetToolset?.('developer');
-                      onAddShippedTemplate(templateCategory === 'scenes' ? 'scenes' : 'devices');
-                    }}
-                  >
-                    <img src={iconPlus} alt="" width={20} height={20} />
-                    {templateCategory === 'scenes' ? 'New composition' : 'New layout'}
-                  </button>
+                {!canUseProMaxPack && compositionTemplates.length === 0 ? (
+                  <p className="dash-empty">{templatesUpgradeHint || 'Scenic templates unlock with Pro Max in the Template store.'}</p>
+                ) : compositionTemplates.length === 0 && !(toolsetSwitchAvailable && onAddShippedTemplate) ? (
+                  <p className="dash-empty">
+                    {templatesUpgradeHint || 'No scenic templates downloaded yet. Open the Template store to install some.'}
+                  </p>
+                ) : (
+                  <div className="dash-template-rail">
+                    <div className="dash-template-carousel" role="list">
+                      <div className="dash-template-carousel-track">
+                    {toolsetSwitchAvailable && onAddShippedTemplate && (
+                      <button
+                        type="button"
+                        className="dash-template-create dash-template-create-rail"
+                        title="New template"
+                        aria-label="New template"
+                        onClick={() => {
+                          if (!isDeveloperToolset) onSetToolset?.('developer');
+                          setTemplateCategory('scenes');
+                          onAddShippedTemplate('scenes');
+                        }}
+                      >
+                        <img src={iconPlus} alt="" width={28} height={28} />
+                        <strong>New template</strong>
+                      </button>
+                    )}
+                    {compositionTemplates.map((template) => {
+                      const menuKey = `template:${template.id}`;
+                      const canManageShipped = Boolean(toolsetSwitchAvailable);
+                      return (
+                        <article
+                          key={template.id}
+                          role="listitem"
+                          className={`dash-card dash-template-card${canManageShipped ? ' is-dev-editable' : ''}${menuId === menuKey ? ' is-menu-open' : ''}`}
+                        >
+                          <button type="button" className="dash-card-open" onClick={() => onStartTemplate(template)}>
+                            <span className="dash-card-thumb dash-template-thumb">
+                              <TemplateThumb template={template} />
+                            </span>
+                            <span className="dash-card-copy">
+                              <strong>{template.label}</strong>
+                            </span>
+                          </button>
+                          <div className="dash-card-menu" onPointerDown={(event) => event.stopPropagation()}>
+                            <button
+                              type="button"
+                              className="dash-card-more"
+                              aria-label={`Actions for ${template.label}`}
+                              aria-expanded={menuId === menuKey}
+                              onClick={() => setMenuId((current) => (current === menuKey ? null : menuKey))}
+                            >
+                              <img src={iconDots} alt="" width={19} height={19} />
+                            </button>
+                            {menuId === menuKey && (
+                              <div className="dash-pop dash-pop-card">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setMenuId(null);
+                                    if (canManageShipped && !isDeveloperToolset) onSetToolset?.('developer');
+                                    onStartTemplate(template);
+                                  }}
+                                >
+                                  {canManageShipped ? 'Edit' : 'Open'}
+                                </button>
+                                {canManageShipped && onRenameTemplate && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      if (!isDeveloperToolset) onSetToolset?.('developer');
+                                      onRenameTemplate(template);
+                                    }}
+                                  >
+                                    Rename
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setMenuId(null);
+                                    if (canManageShipped && !isDeveloperToolset) onSetToolset?.('developer');
+                                    onDuplicateTemplate(template);
+                                  }}
+                                >
+                                  {canManageShipped ? 'Duplicate' : 'Duplicate to Yours'}
+                                </button>
+                                {canManageShipped && (
+                                  <button
+                                    type="button"
+                                    className="is-danger"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      if (!isDeveloperToolset) onSetToolset?.('developer');
+                                      onDeleteShippedTemplate?.(template);
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                )}
+                                {!includeAllTemplates && installedIdSet.has(template.id) && (
+                                  <button
+                                    type="button"
+                                    className="is-danger"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      removeInstalledTemplate(template.id);
+                                    }}
+                                  >
+                                    Remove download
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                      </div>
+                    </div>
+                  </div>
                 )}
+              </section>
+
+              <section className="dash-template-block" aria-labelledby="dash-scene-templates-heading">
+                <div className="dash-template-block-head">
+                  <h2 id="dash-scene-templates-heading">Scene templates</h2>
+                  {toolsetSwitchAvailable && onAddShippedTemplate && canUseDeviceLayouts && (
+                    <button
+                      type="button"
+                      className="dash-new dash-template-add"
+                      onClick={() => {
+                        if (!isDeveloperToolset) onSetToolset?.('developer');
+                        setTemplateCategory('devices');
+                        onAddShippedTemplate('devices');
+                      }}
+                    >
+                      <img src={iconPlus} alt="" width={20} height={20} />
+                      New scene template
+                    </button>
+                  )}
+                </div>
+                {!canUseDeviceLayouts && sceneTemplates.length === 0 ? (
+                  <p className="dash-empty">
+                    {templatesUpgradeHint || 'Download free starter layouts from the Template store, or upgrade to Pro for more.'}
+                  </p>
+                ) : sceneTemplates.length === 0 && !(toolsetSwitchAvailable && onAddShippedTemplate) ? (
+                  <p className="dash-empty">
+                    {templatesUpgradeHint || 'No scene templates downloaded yet. Open the Template store to install some.'}
+                  </p>
+                ) : (
+                  <div className="dash-template-rail">
+                    <div className="dash-template-carousel" role="list">
+                      <div className="dash-template-carousel-track">
+                    {toolsetSwitchAvailable && onAddShippedTemplate && (
+                      <button
+                        type="button"
+                        className="dash-template-create dash-template-create-rail"
+                        title="New scene template"
+                        aria-label="New scene template"
+                        onClick={() => {
+                          if (!isDeveloperToolset) onSetToolset?.('developer');
+                          setTemplateCategory('devices');
+                          onAddShippedTemplate('devices');
+                        }}
+                      >
+                        <img src={iconPlus} alt="" width={28} height={28} />
+                        <strong>New scene template</strong>
+                      </button>
+                    )}
+                    {sceneTemplates.map((template) => {
+                      const menuKey = `template:${template.id}`;
+                      const canManageShipped = Boolean(toolsetSwitchAvailable);
+                      return (
+                        <article
+                          key={template.id}
+                          role="listitem"
+                          className={`dash-card dash-template-card${canManageShipped ? ' is-dev-editable' : ''}${menuId === menuKey ? ' is-menu-open' : ''}`}
+                        >
+                          <button type="button" className="dash-card-open" onClick={() => onStartTemplate(template)}>
+                            <span className="dash-card-thumb dash-template-thumb">
+                              <TemplateThumb template={template} />
+                            </span>
+                            <span className="dash-card-copy">
+                              <strong>{template.label}</strong>
+                            </span>
+                          </button>
+                          <div className="dash-card-menu" onPointerDown={(event) => event.stopPropagation()}>
+                            <button
+                              type="button"
+                              className="dash-card-more"
+                              aria-label={`Actions for ${template.label}`}
+                              aria-expanded={menuId === menuKey}
+                              onClick={() => setMenuId((current) => (current === menuKey ? null : menuKey))}
+                            >
+                              <img src={iconDots} alt="" width={19} height={19} />
+                            </button>
+                            {menuId === menuKey && (
+                              <div className="dash-pop dash-pop-card">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setMenuId(null);
+                                    if (canManageShipped && !isDeveloperToolset) onSetToolset?.('developer');
+                                    onStartTemplate(template);
+                                  }}
+                                >
+                                  {canManageShipped ? 'Edit' : 'Open'}
+                                </button>
+                                {canManageShipped && onRenameTemplate && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      if (!isDeveloperToolset) onSetToolset?.('developer');
+                                      onRenameTemplate(template);
+                                    }}
+                                  >
+                                    Rename
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setMenuId(null);
+                                    if (canManageShipped && !isDeveloperToolset) onSetToolset?.('developer');
+                                    onDuplicateTemplate(template);
+                                  }}
+                                >
+                                  {canManageShipped ? 'Duplicate' : 'Duplicate to Yours'}
+                                </button>
+                                {canManageShipped && (
+                                  <button
+                                    type="button"
+                                    className="is-danger"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      if (!isDeveloperToolset) onSetToolset?.('developer');
+                                      onDeleteShippedTemplate?.(template);
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                )}
+                                {!includeAllTemplates && installedIdSet.has(template.id) && (
+                                  <button
+                                    type="button"
+                                    className="is-danger"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      removeInstalledTemplate(template.id);
+                                    }}
+                                  >
+                                    Remove download
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="dash-template-nest" aria-labelledby="dash-social-heading">
+                  <div className="dash-template-block-head">
+                    <h3 id="dash-social-heading">Social media</h3>
+                    {toolsetSwitchAvailable && onAddShippedTemplate && canUseSocialAssets && (
+                      <button
+                        type="button"
+                        className="dash-new dash-template-add"
+                        onClick={() => {
+                          if (!isDeveloperToolset) onSetToolset?.('developer');
+                          setTemplateCategory('social');
+                          onAddShippedTemplate('social');
+                        }}
+                      >
+                        <img src={iconPlus} alt="" width={20} height={20} />
+                        New social template
+                      </button>
+                    )}
+                  </div>
+                  {!canUseSocialAssets && socialTemplates.length === 0 ? (
+                    <p className="dash-empty">Social media packs unlock with Pro in the Template store.</p>
+                  ) : socialTemplates.length === 0 && !(toolsetSwitchAvailable && onAddShippedTemplate) ? (
+                    <p className="dash-empty">
+                      {templatesUpgradeHint || 'No social templates downloaded yet. Open the Template store to install some.'}
+                    </p>
+                  ) : (
+                    <div className="dash-template-rail">
+                      <div className="dash-template-carousel" role="list">
+                        <div className="dash-template-carousel-track">
+                      {toolsetSwitchAvailable && onAddShippedTemplate && (
+                        <button
+                          type="button"
+                          className="dash-template-create dash-template-create-rail"
+                          title="New social template"
+                          aria-label="New social template"
+                          onClick={() => {
+                            if (!isDeveloperToolset) onSetToolset?.('developer');
+                            setTemplateCategory('social');
+                            onAddShippedTemplate('social');
+                          }}
+                        >
+                          <img src={iconPlus} alt="" width={28} height={28} />
+                          <strong>New social template</strong>
+                        </button>
+                      )}
+                      {socialTemplates.map((template) => {
+                        const menuKey = `template:${template.id}`;
+                        const canManageShipped = Boolean(toolsetSwitchAvailable);
+                        return (
+                          <article
+                            key={template.id}
+                            role="listitem"
+                            className={`dash-card dash-template-card${canManageShipped ? ' is-dev-editable' : ''}${menuId === menuKey ? ' is-menu-open' : ''}`}
+                          >
+                            <button type="button" className="dash-card-open" onClick={() => onStartTemplate(template)}>
+                              <span className="dash-card-thumb dash-template-thumb">
+                                <TemplateThumb template={template} />
+                              </span>
+                              <span className="dash-card-copy">
+                                <strong>{template.label}</strong>
+                              </span>
+                            </button>
+                            <div className="dash-card-menu" onPointerDown={(event) => event.stopPropagation()}>
+                              <button
+                                type="button"
+                                className="dash-card-more"
+                                aria-label={`Actions for ${template.label}`}
+                                aria-expanded={menuId === menuKey}
+                                onClick={() => setMenuId((current) => (current === menuKey ? null : menuKey))}
+                              >
+                                <img src={iconDots} alt="" width={19} height={19} />
+                              </button>
+                              {menuId === menuKey && (
+                                <div className="dash-pop dash-pop-card">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      if (canManageShipped && !isDeveloperToolset) onSetToolset?.('developer');
+                                      onStartTemplate(template);
+                                    }}
+                                  >
+                                    {canManageShipped ? 'Edit' : 'Open'}
+                                  </button>
+                                  {canManageShipped && onRenameTemplate && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setMenuId(null);
+                                        if (!isDeveloperToolset) onSetToolset?.('developer');
+                                        onRenameTemplate(template);
+                                      }}
+                                    >
+                                      Rename
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setMenuId(null);
+                                      if (canManageShipped && !isDeveloperToolset) onSetToolset?.('developer');
+                                      onDuplicateTemplate(template);
+                                    }}
+                                  >
+                                    {canManageShipped ? 'Duplicate' : 'Duplicate to Yours'}
+                                  </button>
+                                  {canManageShipped && (
+                                    <button
+                                      type="button"
+                                      className="is-danger"
+                                      onClick={() => {
+                                        setMenuId(null);
+                                        if (!isDeveloperToolset) onSetToolset?.('developer');
+                                        onDeleteShippedTemplate?.(template);
+                                      }}
+                                    >
+                                      Delete
+                                    </button>
+                                  )}
+                                  {!includeAllTemplates && installedIdSet.has(template.id) && (
+                                    <button
+                                      type="button"
+                                      className="is-danger"
+                                      onClick={() => {
+                                        setMenuId(null);
+                                        removeInstalledTemplate(template.id);
+                                      }}
+                                    >
+                                      Remove download
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </article>
+                        );
+                      })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+            </div>
+          )}
+
+          {section === 'template-store' && (
+            <div className="dash-store">
+              <p className="dash-store-lead">
+                Every template is downloadable. Nothing appears under Templates until you install it here.
+              </p>
+              <div className="dash-store-pack-actions" role="list" aria-label="Download packs">
+                {(Object.values(TEMPLATE_STORE_PACKS) as typeof TEMPLATE_STORE_PACKS[StorePackId][]).map((pack) => {
+                  const unlocked = canDownloadPack(pack.id);
+                  const installed = isPackFullyInstalled(pack.id);
+                  return (
+                    <button
+                      key={pack.id}
+                      type="button"
+                      role="listitem"
+                      className={`dash-store-pack-row${installed ? ' is-owned' : ''}${unlocked ? '' : ' is-locked'}`}
+                      onClick={() => {
+                        if (!unlocked) {
+                          onExplorePro();
+                          return;
+                        }
+                        if (installed) {
+                          setSection('templates');
+                          setTemplateCategory(
+                            pack.id === 'social-studio'
+                              ? 'social'
+                              : pack.id === 'starter-layouts' || pack.id === 'multi-device'
+                                ? 'devices'
+                                : 'scenes',
+                          );
+                          return;
+                        }
+                        downloadStorePack(pack.id);
+                      }}
+                    >
+                      <span className="dash-store-pack-row-copy">
+                        <strong>{pack.name}</strong>
+                        <em>{installed ? 'Installed' : pack.priceLabel}</em>
+                      </span>
+                      <span className={`dash-store-pack-cta${installed || !unlocked ? '' : ' is-primary'}`}>
+                        {installed
+                          ? 'Open library'
+                          : unlocked
+                            ? (licensingDisabled ? 'Download pack' : 'Download pack')
+                            : pack.tier === 'pro_max'
+                              ? (licensingDisabled ? 'View plans' : 'Unlock with Pro Max')
+                              : (licensingDisabled ? 'View plans' : 'Unlock with Pro')}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
-              {effectiveTemplateCategory === 'saved' && visibleTemplates.length === 0 ? (
-                <p className="dash-empty">Save as template from the File menu or Transform while a project is open. Signed-in accounts sync templates with your cloud projects.</p>
-              ) : (
-              <div className="dash-grid">
-                {toolsetSwitchAvailable && effectiveTemplateCategory !== 'saved' && onAddShippedTemplate && (
-                  <button
-                    type="button"
-                    className="dash-template-create"
-                    title={effectiveTemplateCategory === 'scenes' ? 'New composition' : 'New layout'}
-                    aria-label={effectiveTemplateCategory === 'scenes' ? 'New composition' : 'New layout'}
-                    onClick={() => {
-                      if (!isDeveloperToolset) onSetToolset?.('developer');
-                      onAddShippedTemplate(effectiveTemplateCategory === 'scenes' ? 'scenes' : 'devices');
-                    }}
-                  >
-                    <img src={iconPlus} alt="" width={28} height={28} />
-                    <strong>
-                      {effectiveTemplateCategory === 'scenes' ? 'New composition' : 'New layout'}
-                    </strong>
-                  </button>
-                )}
-                {visibleTemplates.map((template) => {
+              <div className="dash-store-masonry" role="list">
+                {storeTiles.map((tile) => {
+                  const template = getCompositionTemplate(tile.templateId);
+                  if (!template) return null;
+                  const pack = TEMPLATE_STORE_PACKS[tile.packId];
+                  const unlocked = canDownloadPack(tile.packId);
+                  const installed = installedIdSet.has(tile.templateId) || isTemplateInstalled(tile.templateId);
+                  const actionLabel = installed
+                    ? 'Open'
+                    : unlocked
+                      ? 'Download'
+                      : pack.tier === 'pro_max'
+                        ? (licensingDisabled ? 'View plans' : 'Buy Pro Max')
+                        : pack.tier === 'free'
+                          ? 'Download'
+                          : (licensingDisabled ? 'View plans' : 'Buy Pro');
+                  return (
+                    <button
+                      key={`${tile.packId}:${tile.templateId}`}
+                      type="button"
+                      role="listitem"
+                      className={`dash-store-pack is-${tile.masonry}${installed ? ' is-owned' : ''}`}
+                      onClick={() => {
+                        if (!unlocked) {
+                          onExplorePro();
+                          return;
+                        }
+                        if (installed) {
+                          onStartTemplate(template);
+                          return;
+                        }
+                        downloadStoreTemplate(tile.templateId, tile.packId);
+                      }}
+                    >
+                      <span className="dash-store-pack-media" aria-hidden>
+                        <TemplateThumb template={template} />
+                      </span>
+                      <span className="dash-store-pack-copy">
+                        <em>{installed ? 'Installed' : pack.priceLabel}</em>
+                        <strong>{template.label}</strong>
+                        <span className="dash-store-pack-name">{pack.name}</span>
+                        <ul className="dash-store-pack-includes">
+                          {pack.includes.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                      </span>
+                      <span className={`dash-store-pack-cta${installed || !unlocked ? '' : ' is-primary'}`}>
+                        <Download size={13} aria-hidden />
+                        {actionLabel}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {section === 'my-templates' && (
+            savedCompositions.length === 0 ? (
+              <p className="dash-empty">Save as template from the File menu or Transform while a project is open. Signed-in accounts sync templates with your cloud projects.</p>
+            ) : (
+              <div className="dash-template-rail">
+                <div className="dash-template-carousel" role="list">
+                  <div className="dash-template-carousel-track">
+                {savedCompositions.map((template) => {
                   const menuKey = `template:${template.id}`;
-                  const canManageShipped = Boolean(toolsetSwitchAvailable) && effectiveTemplateCategory !== 'saved';
-                  const canDelete = effectiveTemplateCategory === 'saved' || canManageShipped;
-                  const canRename = effectiveTemplateCategory === 'saved' || canManageShipped;
                   return (
                     <article
                       key={template.id}
-                      className={`dash-card dash-template-card${canManageShipped ? ' is-dev-editable' : ''}${menuId === menuKey ? ' is-menu-open' : ''}`}
+                      role="listitem"
+                      className={`dash-card dash-template-card${menuId === menuKey ? ' is-menu-open' : ''}`}
                     >
                       <button type="button" className="dash-card-open" onClick={() => onStartTemplate(template)}>
                         <span className="dash-card-thumb dash-template-thumb">
@@ -1203,17 +1969,9 @@ export default function ProjectsDashboard({
                         </span>
                         <span className="dash-card-copy">
                           <strong>{template.label}</strong>
-                          <span>
-                            {canManageShipped
-                              ? 'Home library · ⋯ to rename, duplicate, or delete'
-                              : template.description}
-                          </span>
                         </span>
                       </button>
-                      <div
-                        className="dash-card-menu"
-                        onPointerDown={(event) => event.stopPropagation()}
-                      >
+                      <div className="dash-card-menu" onPointerDown={(event) => event.stopPropagation()}>
                         <button
                           type="button"
                           className="dash-card-more"
@@ -1229,18 +1987,16 @@ export default function ProjectsDashboard({
                               type="button"
                               onClick={() => {
                                 setMenuId(null);
-                                if (canManageShipped && !isDeveloperToolset) onSetToolset?.('developer');
                                 onStartTemplate(template);
                               }}
                             >
-                              {canManageShipped ? 'Edit' : 'Open'}
+                              Open
                             </button>
-                            {canRename && onRenameTemplate && (
+                            {onRenameTemplate && (
                               <button
                                 type="button"
                                 onClick={() => {
                                   setMenuId(null);
-                                  if (canManageShipped && !isDeveloperToolset) onSetToolset?.('developer');
                                   onRenameTemplate(template);
                                 }}
                               >
@@ -1251,39 +2007,31 @@ export default function ProjectsDashboard({
                               type="button"
                               onClick={() => {
                                 setMenuId(null);
-                                if (canManageShipped && !isDeveloperToolset) onSetToolset?.('developer');
                                 onDuplicateTemplate(template);
                               }}
                             >
-                              {templateCategory === 'saved' || canManageShipped
-                                ? 'Duplicate'
-                                : 'Duplicate to Yours'}
+                              Duplicate
                             </button>
-                            {canDelete && (
-                              <button
-                                type="button"
-                                className="is-danger"
-                                onClick={() => {
-                                  setMenuId(null);
-                                  if (templateCategory === 'saved') onDeleteSavedTemplate(template.id);
-                                  else {
-                                    if (!isDeveloperToolset) onSetToolset?.('developer');
-                                    onDeleteShippedTemplate?.(template);
-                                  }
-                                }}
-                              >
-                                Delete
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              className="is-danger"
+                              onClick={() => {
+                                setMenuId(null);
+                                onDeleteSavedTemplate(template.id);
+                              }}
+                            >
+                              Delete
+                            </button>
                           </div>
                         )}
                       </div>
                     </article>
                   );
                 })}
+                  </div>
+                </div>
               </div>
-              )}
-            </>
+            )
           )}
 
           {section === 'assets' && (
@@ -1331,7 +2079,7 @@ export default function ProjectsDashboard({
               {!licensingDisabled && (
                 <button type="button" className="dash-setting" onClick={onExplorePro}>
                   <strong>Explore Pro</strong>
-                  <span>Devices, video export, and higher resolutions · {planLabel(license.tier)}</span>
+                  <span>Devices, video export, and higher resolutions · {planLabel(featureTier, { markDevOverride: true })}</span>
                 </button>
               )}
               <button type="button" className="dash-setting" onClick={onFeedback}>

@@ -734,7 +734,7 @@ export function formatBuiltinCompositionSource(
   label: string,
   project: MockupProject,
   options?: {
-    category?: 'devices' | 'scenes';
+    category?: 'devices' | 'scenes' | 'social';
     id?: string;
     cameraOrbit?: CompositionTemplate['cameraOrbit'] | null;
   },
@@ -743,7 +743,7 @@ export function formatBuiltinCompositionSource(
   const template = compositionFromProject(label, project, {
     id: options?.id ?? slugifyCompositionId(label.trim() || project.name || 'composition'),
     category,
-    badge: category === 'scenes' ? 'Scene' : 'Layout',
+    badge: category === 'scenes' ? 'Scene' : category === 'social' ? 'Social' : 'Layout',
     cameraOrbit: options?.cameraOrbit,
   });
   const body = JSON.stringify(roundExportValue(template), null, 2)

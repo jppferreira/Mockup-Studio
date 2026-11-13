@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
+import { APP_LOGO_SRC } from '../lib/appBrand';
 import {
   completeDesktopOAuthCallback,
   getAuthSnapshot,
@@ -142,7 +143,7 @@ export function DesktopSignIn({
   return (
     <div className="desktop-signin">
       <div className="desktop-signin-card">
-        <img className="desktop-signin-logo" src="./splash/logo.png" alt="" width={56} height={56} />
+        <img className="desktop-signin-logo" src={APP_LOGO_SRC} alt="" width={56} height={56} />
         <h1>Welcome to mokstudio</h1>
         <p className="desktop-signin-sub">
           Sign in so projects and your license sync between the Mac app and the web app.

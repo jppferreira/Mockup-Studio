@@ -4,10 +4,16 @@ import {
 } from 'lucide-react';
 import { importCustomDevices } from '../lib/customDevices';
 import { MATERIAL_PRESETS, type MaterialPresetId } from '../lib/materialPresets';
-import { isDevEditableTemplateId, type CompositionTemplate } from '../lib/templates';
+import {
+  getCompositionTemplate,
+  isDevEditableTemplateId,
+  type CompositionTemplate,
+  type ShippedTemplateCategory,
+} from '../lib/templates';
 import {
   prepareShippedFromProject,
   shipCompositionTemplate,
+  shippedCategoryOf,
 } from '../lib/shippedTemplates';
 import {
   MAX_SCENE_LIGHTS, createSceneLight, createSceneProp,
@@ -138,9 +144,12 @@ export default function ModelingModePanel({
   const mapInputRef = useRef<HTMLInputElement>(null);
   const normalInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
-  const [category, setCategory] = useState<'devices' | 'scenes'>('devices');
+  const [category, setCategory] = useState<ShippedTemplateCategory>('devices');
 
   const canUpdateExisting = isDevEditableTemplateId(activeTemplateId);
+  const linkedTemplate = canUpdateExisting && activeTemplateId
+    ? getCompositionTemplate(activeTemplateId)
+    : null;
   const showStudioSet = project.background !== 'transparent';
   const stageSelected = selectedProp?.kind === 'stage';
   const backdropPropSelected = selectedProp?.kind === 'studio_backdrop';
@@ -194,28 +203,40 @@ export default function ModelingModePanel({
   const promoteCurrent = async (mode: 'new' | 'update') => {
     setBusy(true);
     try {
-      const label = compositionName || project.name || 'Untitled composition';
+      const existing = mode === 'update' ? linkedTemplate : null;
+      const shipCategory = mode === 'update'
+        ? shippedCategoryOf(existing, category)
+        : category;
+      const label = (mode === 'update' && existing?.label)
+        || compositionName
+        || project.name
+        || 'Untitled composition';
       const next = prepareShippedFromProject(
         label,
         project,
-        category,
+        shipCategory,
         {
           ...(mode === 'update' && activeTemplateId ? { id: activeTemplateId } : {}),
           cameraOrbit,
+          description: existing?.description,
+          badge: existing?.badge,
+          preview: existing?.preview,
         },
       );
       const result = await shipCompositionTemplate(next);
+      onPromoted(result.template);
       if (!result.ok) {
-        onNotify(result.reason || 'Ship failed');
+        onNotify(result.reason
+          ? `Saved “${result.template.label}” here · ${result.reason}`
+          : `Saved “${result.template.label}” here · master file not saved`);
         return;
       }
-      onPromoted(result.template);
       const where = result.downloaded
-        ? ' · downloaded JSON (drop into src/data/)'
-        : ' · User toolset sees it now';
+        ? ' · downloaded master JSON (drop into src/data/)'
+        : ' · master catalog · User view sees it now';
       onNotify(
         mode === 'update'
-          ? `Updated shipped “${result.template.label}”${where}`
+          ? `Updated “${result.template.label}”${where}`
           : `Shipped “${result.template.label}”${where}`,
       );
     } catch (err) {
@@ -690,15 +711,17 @@ export default function ModelingModePanel({
       </section>
 
       <section className="modeling-mode-section">
-        <h4><LayoutTemplate size={14} /> Ship for all users</h4>
+        <h4><LayoutTemplate size={14} /> Master catalog</h4>
         <p>
-          Push into the main Devices/Scenes templates
-          (<code>src/data/shippedTemplates.json</code>). Update overwrites the linked
-          layout; Ship as new adds one. Flip to <strong>User</strong> to verify.
+          Publish master templates to Supabase for every user (not My Templates).
+          Also writes <code>src/data/shippedTemplates.json</code> in Dev.
+          Update overwrites the linked template; Ship as new adds one. Flip to{' '}
+          <strong>User</strong> to verify.
         </p>
         {canUpdateExisting && (
           <p className="modeling-mode-active-id">
-            Editing shipped <code>{activeTemplateId}</code>
+            Editing master <code>{activeTemplateId}</code>
+            {linkedTemplate ? ` · ${linkedTemplate.category}` : ''}
           </p>
         )}
         <div className="modeling-mode-chip-row">
@@ -716,6 +739,13 @@ export default function ModelingModePanel({
           >
             Scenes
           </button>
+          <button
+            type="button"
+            className={category === 'social' ? 'text-button is-active' : 'text-button'}
+            onClick={() => setCategory('social')}
+          >
+            Social
+          </button>
         </div>
         {canUpdateExisting && (
           <button
@@ -724,7 +754,7 @@ export default function ModelingModePanel({
             disabled={busy || project.devices.length === 0}
             onClick={() => void promoteCurrent('update')}
           >
-            <RefreshCw size={14} /> Update shipped layout
+            <RefreshCw size={14} /> Update master template
           </button>
         )}
         <button
@@ -733,7 +763,7 @@ export default function ModelingModePanel({
           disabled={busy || project.devices.length === 0}
           onClick={() => void promoteCurrent('new')}
         >
-          <Download size={14} /> Ship as new layout
+          <Download size={14} /> Ship as new template
         </button>
       </section>
     </aside>

@@ -3,7 +3,8 @@ const fs = require('node:fs/promises');
 const { existsSync, appendFileSync } = require('node:fs');
 const path = require('node:path');
 
-const APP_NAME = 'mokstudio';
+const isDevRuntime = Boolean(process.env.VITE_DEV_SERVER_URL);
+const APP_NAME = isDevRuntime ? 'mokstudio Dev' : 'mokstudio';
 const AUTH_PROTOCOL = 'mokstudio';
 app.setName(APP_NAME);
 
@@ -19,7 +20,10 @@ function distributionChannel() {
 (() => {
   const channel = distributionChannel();
   const base = app.getPath('userData');
-  if (channel === 'mac_mas' && !base.endsWith('MAS')) {
+  // Dev Electron must not share the installed app's single-instance lock / userData.
+  if (isDevRuntime && !base.endsWith('-Dev')) {
+    app.setPath('userData', `${base}-Dev`);
+  } else if (channel === 'mac_mas' && !base.endsWith('MAS')) {
     app.setPath('userData', `${base}-MAS`);
   } else if (channel === 'mac_direct' && !base.endsWith('-Direct') && process.env.MOCKUP_FORCE_DIRECT_USERDATA === '1') {
     app.setPath('userData', `${base}-Direct`);

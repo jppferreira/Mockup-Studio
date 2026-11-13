@@ -10,17 +10,17 @@ import cleanShadowmapParsFragment from 'three/src/renderers/shaders/ShaderChunk/
  * another canvas's shadows. Instead this always rebuilds the chunk from the
  * stock import, so every call (and every HMR cycle) lands on the same string.
  *
- * Live preview and export share the same contact-hardening filter so orbit
- * never softens the look. Orbit savings come from freezing shadow-map updates,
- * not from a thinner PCSS kernel. Standard PCF stays if the Three.js shader changes.
+ * Idle / export keep the full contact-hardening filter. Orbit / gizmos switch to
+ * a thinner interactive kernel (maps stay frozen) so every lit fragment is cheaper.
+ * Standard PCF stays if the Three.js shader changes.
  */
 export type ProgressiveShadowProfile = 'interactive' | 'studio';
 
-const MARKER = '/* MOCKUP_STUDIO_PCSS_V5 */';
+const MARKER = '/* MOCKUP_STUDIO_PCSS_V6 */';
 
 const PROFILE_SAMPLES: Record<ProgressiveShadowProfile, { blockers: number; filter: number }> = {
-  // Kept identical to studio so any leftover interactive retain calls match pixels.
-  interactive: { blockers: 16, filter: 24 },
+  // Orbit / gizmo / playback — ~4× fewer depth taps than studio.
+  interactive: { blockers: 6, filter: 10 },
   // Idle preview + export: full contact-hardening filter.
   studio: { blockers: 16, filter: 24 },
 };

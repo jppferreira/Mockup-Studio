@@ -4,14 +4,14 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { DesktopSignIn, shouldShowDesktopSignIn } from './components/DesktopSignIn';
 import OnboardingFlow from './components/OnboardingFlow';
-import { isSiteUnlocked, SiteGate } from './components/SiteGate';
+import { isSiteUnlocked, SiteGate, webAuthRequired } from './components/SiteGate';
 import { applyAccentTheme, readAccentColor, readAccentTheme } from './lib/accentTheme';
 import { installNumberScrub } from './lib/numberScrub';
 import { clearOnboardingComplete, isOnboardingComplete } from './lib/onboarding';
 import { clearStudioTourComplete } from './lib/studioTour';
 import { prepareModelCache } from './lib/modelCache';
 import { warmGltfDecoders } from './lib/gltfDecoders';
-import { getAuthSnapshot } from './lib/supabaseClient';
+import { getAuthSnapshot, onAuthChange } from './lib/supabaseClient';
 import { perfMark } from './lib/perfDiagnostics';
 import './styles.css';
 
@@ -87,6 +87,14 @@ function Root() {
   useEffect(() => {
     dismissSplash(locked || desktopAuth !== 'done');
   }, [locked, desktopAuth]);
+
+  // Online studio: if they sign out, send them back to the email / OAuth gate.
+  useEffect(() => {
+    if (!webAuthRequired()) return undefined;
+    return onAuthChange((snap) => {
+      if (!snap.user) setLocked(true);
+    });
+  }, []);
 
   useEffect(() => {
     if (desktopAuth !== 'checking') return undefined;

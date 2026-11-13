@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, type MutableRefObject, type RefObject } from 'react';
 import { useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
@@ -13,6 +13,10 @@ function ensureRectAreaLights() {
   RectAreaLightUniformsLib.init();
   rectAreaReady = true;
 }
+
+type LivePoseApi = {
+  setPosition: (position: Vec3) => void;
+};
 
 function useAdaptiveShadowMap(
   lightRef: RefObject<THREE.Light | null>,
@@ -39,7 +43,13 @@ function useAdaptiveShadowMap(
   }, [lightRef, castShadow, mode, gl]);
 }
 
-function AimingAreaLight({ light }: { light: SceneLight }) {
+function AimingAreaLight({
+  light,
+  liveApiRef,
+}: {
+  light: SceneLight;
+  liveApiRef: MutableRefObject<LivePoseApi | null>;
+}) {
   const ref = useRef<THREE.RectAreaLight>(null);
   useLayoutEffect(() => {
     ensureRectAreaLights();
@@ -47,9 +57,19 @@ function AimingAreaLight({ light }: { light: SceneLight }) {
     if (!node) return;
     node.position.set(light.position.x, light.position.y, light.position.z);
     node.lookAt(light.target.x, light.target.y, light.target.z);
+    liveApiRef.current = {
+      setPosition: (position) => {
+        node.position.set(position.x, position.y, position.z);
+        node.lookAt(light.target.x, light.target.y, light.target.z);
+      },
+    };
+    return () => {
+      liveApiRef.current = null;
+    };
   }, [
     light.position.x, light.position.y, light.position.z,
     light.target.x, light.target.y, light.target.z,
+    liveApiRef,
   ]);
   if (!light.enabled || light.intensity <= 0.001) return null;
   return (
@@ -64,7 +84,13 @@ function AimingAreaLight({ light }: { light: SceneLight }) {
   );
 }
 
-function AimingDirectionalLight({ light }: { light: SceneLight }) {
+function AimingDirectionalLight({
+  light,
+  liveApiRef,
+}: {
+  light: SceneLight;
+  liveApiRef: MutableRefObject<LivePoseApi | null>;
+}) {
   const lightRef = useRef<THREE.DirectionalLight>(null);
   useAdaptiveShadowMap(lightRef, Boolean(light.castShadow));
   useLayoutEffect(() => {
@@ -73,9 +99,20 @@ function AimingDirectionalLight({ light }: { light: SceneLight }) {
     node.position.set(light.position.x, light.position.y, light.position.z);
     node.target.position.set(light.target.x, light.target.y, light.target.z);
     node.target.updateMatrixWorld();
+    liveApiRef.current = {
+      setPosition: (position) => {
+        node.position.set(position.x, position.y, position.z);
+        node.target.position.set(light.target.x, light.target.y, light.target.z);
+        node.target.updateMatrixWorld();
+      },
+    };
+    return () => {
+      liveApiRef.current = null;
+    };
   }, [
     light.position.x, light.position.y, light.position.z,
     light.target.x, light.target.y, light.target.z,
+    liveApiRef,
   ]);
   if (!light.enabled || light.intensity <= 0.001) return null;
   return (
@@ -93,7 +130,13 @@ function AimingDirectionalLight({ light }: { light: SceneLight }) {
   );
 }
 
-function AimingSpotLight({ light }: { light: SceneLight }) {
+function AimingSpotLight({
+  light,
+  liveApiRef,
+}: {
+  light: SceneLight;
+  liveApiRef: MutableRefObject<LivePoseApi | null>;
+}) {
   const lightRef = useRef<THREE.SpotLight>(null);
   useAdaptiveShadowMap(lightRef, Boolean(light.castShadow));
   useLayoutEffect(() => {
@@ -102,9 +145,20 @@ function AimingSpotLight({ light }: { light: SceneLight }) {
     node.position.set(light.position.x, light.position.y, light.position.z);
     node.target.position.set(light.target.x, light.target.y, light.target.z);
     node.target.updateMatrixWorld();
+    liveApiRef.current = {
+      setPosition: (position) => {
+        node.position.set(position.x, position.y, position.z);
+        node.target.position.set(light.target.x, light.target.y, light.target.z);
+        node.target.updateMatrixWorld();
+      },
+    };
+    return () => {
+      liveApiRef.current = null;
+    };
   }, [
     light.position.x, light.position.y, light.position.z,
     light.target.x, light.target.y, light.target.z,
+    liveApiRef,
   ]);
   if (!light.enabled || light.intensity <= 0.001) return null;
   return (
@@ -126,13 +180,31 @@ function AimingSpotLight({ light }: { light: SceneLight }) {
   );
 }
 
-function SceneLightNode({ light }: { light: SceneLight }) {
+function PointSceneLight({
+  light,
+  liveApiRef,
+}: {
+  light: SceneLight;
+  liveApiRef: MutableRefObject<LivePoseApi | null>;
+}) {
+  const lightRef = useRef<THREE.PointLight>(null);
+  useLayoutEffect(() => {
+    const node = lightRef.current;
+    if (!node) return;
+    node.position.set(light.position.x, light.position.y, light.position.z);
+    liveApiRef.current = {
+      setPosition: (position) => {
+        node.position.set(position.x, position.y, position.z);
+      },
+    };
+    return () => {
+      liveApiRef.current = null;
+    };
+  }, [light.position.x, light.position.y, light.position.z, liveApiRef]);
   if (!light.enabled || light.intensity <= 0.001) return null;
-  if (light.kind === 'area') return <AimingAreaLight light={light} />;
-  if (light.kind === 'directional') return <AimingDirectionalLight light={light} />;
-  if (light.kind === 'spot') return <AimingSpotLight light={light} />;
   return (
     <pointLight
+      ref={lightRef}
       color={light.color}
       intensity={light.intensity}
       position={[light.position.x, light.position.y, light.position.z]}
@@ -142,6 +214,55 @@ function SceneLightNode({ light }: { light: SceneLight }) {
       shadow-mapSize={[512, 512]}
       shadow-bias={-0.0002}
     />
+  );
+}
+
+function SceneLightNode({
+  light,
+  liveApiRef,
+}: {
+  light: SceneLight;
+  liveApiRef: MutableRefObject<LivePoseApi | null>;
+}) {
+  if (!light.enabled || light.intensity <= 0.001) return null;
+  if (light.kind === 'area') return <AimingAreaLight light={light} liveApiRef={liveApiRef} />;
+  if (light.kind === 'directional') return <AimingDirectionalLight light={light} liveApiRef={liveApiRef} />;
+  if (light.kind === 'spot') return <AimingSpotLight light={light} liveApiRef={liveApiRef} />;
+  return <PointSceneLight light={light} liveApiRef={liveApiRef} />;
+}
+
+function SceneLightEntry({
+  light,
+  selected,
+  onSelect,
+  onPositionChange,
+  onDraggingChange,
+}: {
+  light: SceneLight;
+  selected: boolean;
+  onSelect?: (id: string) => void;
+  onPositionChange?: (id: string, position: Vec3) => void;
+  onDraggingChange?: (dragging: boolean) => void;
+}) {
+  const liveApiRef = useRef<LivePoseApi | null>(null);
+  return (
+    <group>
+      <SceneLightNode light={light} liveApiRef={liveApiRef} />
+      {light.enabled ? (
+        <LightTranslateGizmo
+          position={light.position}
+          color={light.color}
+          active={selected}
+          size={0.12}
+          onSelect={() => onSelect?.(light.id)}
+          onDraggingChange={onDraggingChange}
+          onLiveChange={(position) => {
+            liveApiRef.current?.setPosition(position);
+          }}
+          onPositionChange={(position) => onPositionChange?.(light.id, position)}
+        />
+      ) : null}
+    </group>
   );
 }
 
@@ -166,26 +287,16 @@ export default function SceneLights({
   if (!lights.length) return null;
   return (
     <group>
-      {lights.map((light) => {
-        const selected = gizmoActive && selectedId === light.id && light.enabled;
-        return (
-          <group key={light.id}>
-            <SceneLightNode light={light} />
-            {light.enabled ? (
-              <LightTranslateGizmo
-                position={light.position}
-                color={light.color}
-                active={selected}
-                size={0.12}
-                onSelect={() => onSelect?.(light.id)}
-                onDraggingChange={onDraggingChange}
-                onLiveChange={(position) => onPositionChange?.(light.id, position)}
-                onPositionChange={(position) => onPositionChange?.(light.id, position)}
-              />
-            ) : null}
-          </group>
-        );
-      })}
+      {lights.map((light) => (
+        <SceneLightEntry
+          key={light.id}
+          light={light}
+          selected={Boolean(gizmoActive && selectedId === light.id && light.enabled)}
+          onSelect={onSelect}
+          onPositionChange={onPositionChange}
+          onDraggingChange={onDraggingChange}
+        />
+      ))}
     </group>
   );
 }

@@ -20,7 +20,10 @@ import type { SceneOverlay } from './overlays';
 import { normalizeReflectionStyle, type ReflectionStyle } from './reflectionStyle';
 import { getDevice, type DeviceId } from './devices';
 
-export type TemplateCategory = 'devices' | 'scenes' | 'saved';
+export type TemplateCategory = 'devices' | 'scenes' | 'social' | 'saved';
+
+/** Shipped library buckets (excludes user-saved). */
+export type ShippedTemplateCategory = 'devices' | 'scenes' | 'social';
 
 /**
  * Soft white cyclorama — Apple product-studio falloff so depth of field
@@ -376,6 +379,121 @@ export const COMPOSITION_TEMPLATES: CompositionTemplate[] = [
       position: { x: 0, y: 0, z: 0 },
       scale: 1,
     }],
+  },
+
+  // —— Social media mockup assets ——
+  // White-studio compositions for posts, stories, and short video.
+  {
+    id: 'social-feed-hero',
+    label: 'Feed Hero',
+    description: 'Square-friendly phone hero on a white cyclorama',
+    badge: 'Feed',
+    category: 'social',
+    preview: 'studio',
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
+    compositionMode: 'single',
+    lightIntensity: 0.94,
+    fillIntensity: 1.15,
+    showGroundBase: false,
+    lightPosition: { x: -2.8, y: 5.8, z: 4.6 },
+    lightColor: '#fff8f0',
+    reflectionMap: 'studio',
+    motion: 'float',
+    devices: [{
+      deviceId: 'iphone_15_pro_max',
+      rotation: { x: 8, y: -22, z: 0 },
+      position: { x: 0, y: 0.22, z: 0.35 },
+      scale: 0.98,
+    }],
+    sceneProps: [
+      {
+        id: 'cyclorama',
+        kind: 'studio_backdrop',
+        position: { x: 0, y: -1.55, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: 1,
+        color: '#ffffff',
+      },
+    ],
+  },
+  {
+    id: 'social-story-portrait',
+    label: 'Story Portrait',
+    description: 'Tall portrait on a white cyclorama for Stories, Reels, and TikTok',
+    badge: 'Story',
+    category: 'social',
+    preview: 'studio',
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
+    compositionMode: 'single',
+    lightIntensity: 0.96,
+    fillIntensity: 1.22,
+    showGroundBase: false,
+    lightPosition: { x: 2.2, y: 5.8, z: 5.0 },
+    lightColor: '#fffaf4',
+    reflectionMap: 'studio',
+    motion: 'float',
+    devices: [{
+      deviceId: 'iphone_15_pro_max',
+      // Near-front for readable story UI; slight yaw for studio depth
+      rotation: { x: -4, y: 10, z: -2 },
+      position: { x: 0, y: 0.3, z: 0.42 },
+      scale: 1.05,
+    }],
+    sceneProps: [
+      {
+        id: 'cyclorama',
+        kind: 'studio_backdrop',
+        position: { x: 0, y: -1.55, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: 1,
+        color: '#ffffff',
+      },
+    ],
+  },
+  {
+    id: 'social-duo-post',
+    label: 'Duo Post',
+    description: 'Two phones on a white cyclorama for before/after social posts',
+    badge: 'Duo',
+    category: 'social',
+    preview: 'studio',
+    background: 'studio',
+    gradient: { ...TEMPLATE_BACKDROP },
+    compositionMode: 'split',
+    linkSplitTransform: true,
+    lightIntensity: 0.94,
+    fillIntensity: 1.18,
+    showGroundBase: false,
+    lightPosition: { x: 0, y: 5.8, z: 5.2 },
+    lightColor: '#fff8f0',
+    reflectionMap: 'studio',
+    motion: 'float',
+    devices: [
+      {
+        deviceId: 'iphone_15_pro_max',
+        rotation: { x: 6, y: -18, z: -2 },
+        position: { x: -0.55, y: 0.24, z: 0.32 },
+        scale: 0.92,
+      },
+      {
+        deviceId: 'iphone_15_pro_max',
+        rotation: { x: 6, y: 18, z: 2 },
+        position: { x: 0.55, y: 0.24, z: 0.32 },
+        scale: 0.92,
+      },
+    ],
+    sceneProps: [
+      {
+        id: 'cyclorama',
+        kind: 'studio_backdrop',
+        position: { x: 0, y: -1.55, z: 0 },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: 1,
+        color: '#ffffff',
+      },
+    ],
   },
 
   // —— Scenic pre-compositions ——
@@ -905,17 +1023,55 @@ export function isProMaxPackTemplate(template: Pick<CompositionTemplate, 'catego
 }
 
 /**
- * Templates visible for a license tier.
- * Free/Pro keep device layouts + saved; Pro Max pack (scenes) only for pro_max (or includeAll for Dev).
+ * Templates visible for a license tier + local installs.
+ * - Catalog templates are downloadable from the Template Store (not pre-installed)
+ * - free → none until a free pack is downloaded (and still gated below)
+ * - pro → device layouts + social media assets (when installed)
+ * - pro_max → device layouts + social + scene compositions (when installed)
+ * `includeAll` is Dev authoring only — always bypass so Ship / Update can target every layout.
  */
 export function templatesVisibleForTier(
   category: TemplateCategory,
-  options: { canUseProMaxPack: boolean; includeAll?: boolean },
+  options: {
+    tier: 'free' | 'pro' | 'pro_max';
+    includeAll?: boolean;
+    /** When set (User view), only show templates the user has downloaded. */
+    installedIds?: ReadonlySet<string> | readonly string[] | null;
+  },
 ): CompositionTemplate[] {
   if (category === 'saved') return [];
-  const list = templatesByCategory(category);
-  if (options.includeAll || options.canUseProMaxPack) return list;
-  return list.filter((item) => !isProMaxPackTemplate(item));
+  let list = templatesByCategory(category);
+  if (options.includeAll) return list;
+  const installed = options.installedIds
+    ? (options.installedIds instanceof Set
+      ? options.installedIds
+      : new Set(options.installedIds))
+    : null;
+  if (installed) {
+    list = list.filter((item) => installed.has(item.id));
+  }
+  const tier = options.tier;
+  if (tier === 'free') {
+    // Free may keep downloaded starter layouts only (no Pro / Pro Max packs).
+    return list.filter((item) => item.category === 'devices' && !isProMaxPackTemplate(item));
+  }
+  if (tier === 'pro') return list.filter((item) => !isProMaxPackTemplate(item));
+  return list;
+}
+
+/** Full catalog for Template Store browse (ignores local installs). */
+export function listCatalogTemplatesForStore(): CompositionTemplate[] {
+  return listShippedCompositionTemplates();
+}
+
+export function isShippedTemplateCategory(value: unknown): value is ShippedTemplateCategory {
+  return value === 'devices' || value === 'scenes' || value === 'social';
+}
+
+export function shippedCategoryLabel(category: ShippedTemplateCategory): string {
+  if (category === 'scenes') return 'template';
+  if (category === 'social') return 'social template';
+  return 'scene template';
 }
 
 function remapStoredAnimation(clip: AnimationClip, devices: DeviceInstance[]): AnimationClip {

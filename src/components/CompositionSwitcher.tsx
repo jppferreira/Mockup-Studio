@@ -213,7 +213,7 @@ export default function CompositionSwitcher({
 
   const valueLabel = selected
     ? `${selected.label}. ${selected.description}`
-    : 'Choose a composition. Restages the shot. Your devices stay.';
+    : 'Choose a template. Restages the shot. Your devices stay.';
 
   return (
     <section className={`composition-switch is-compact ${open ? 'is-open' : ''}${isDev ? ' is-dev-toolset' : ''}`} ref={rootRef}>
@@ -225,12 +225,12 @@ export default function CompositionSwitcher({
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
         aria-labelledby={labelId}
-        aria-label={`Compositions. ${valueLabel}`}
+        aria-label={`Templates. ${valueLabel}`}
         disabled={!templates.length}
         onClick={() => (open ? closeMenu(false) : openMenu())}
         onKeyDown={onTriggerKeyDown}
       >
-        <span className="composition-switch-label" id={labelId}>Composition</span>
+        <span className="composition-switch-label" id={labelId}>Template</span>
         {selected ? (
           <>
             <span className="composition-switch-thumb" aria-hidden>
@@ -270,30 +270,30 @@ export default function CompositionSwitcher({
                 <button
                   type="button"
                   className="composition-switch-create"
-                  title="Create a new device layout"
-                  aria-label="Create a new device layout"
+                  title="Create a new scene template"
+                  aria-label="Create a new scene template"
                   onClick={() => {
                     closeMenu(false);
                     onCreateLayout();
                   }}
                 >
                   <Plus size={13} strokeWidth={2.2} aria-hidden />
-                  New layout
+                  New scene template
                 </button>
               )}
               {onCreate && (
                 <button
                   type="button"
                   className="composition-switch-create"
-                  title="Create a new composition"
-                  aria-label="Create a new composition"
+                  title="Create a new template"
+                  aria-label="Create a new template"
                   onClick={() => {
                     closeMenu(false);
                     onCreate();
                   }}
                 >
                   <Plus size={13} strokeWidth={2.2} aria-hidden />
-                  New composition
+                  New template
                 </button>
               )}
             </div>

@@ -13,17 +13,17 @@ export type StudioShadowMode = 'interactive' | 'studio';
 export type RenderQualityTier = 'interactive' | 'preview' | 'export';
 
 /** Idle delay before progressive studio refinement (ms). */
-export const STUDIO_SHADOW_IDLE_MS = 260;
+export const STUDIO_SHADOW_IDLE_MS = 400;
 
 /**
  * Suggested shadow-map budgets by tier.
- * Live preview keeps a stable 2048 atlas across interactive↔studio so mode flips
- * never dispose/reallocate. Export may bump to 4096. Interactive freezes updates
- * instead of shrinking to 1024 (avoids atlas thrash + shader stalls).
+ * Live preview keeps a stable 1024 atlas across interactive↔studio so mode flips
+ * never dispose/reallocate. Export may bump to 2048/4096. Interactive freezes
+ * updates and uses a thinner PCSS kernel instead of resizing the atlas mid-orbit.
  */
 export const SHADOW_MAP_BUDGET = {
-  interactive: 2048,
-  preview: 2048,
+  interactive: 1024,
+  preview: 1024,
   export: 4096,
 } as const;
 
@@ -257,13 +257,12 @@ export function resolveKeyShadowMapSize(
   exportBoost: boolean,
   maxTextureSize: number,
 ): number {
-  // Always use the studio atlas size (even while orbiting) so mode flips never
-  // dispose/reallocate the map. Orbit freezes updates instead of shrinking.
+  // Stable live atlas (even while orbiting) so mode flips never dispose/reallocate.
+  // Orbit freezes updates + thinner PCSS; export may bump for stills/video.
   void mode;
-  let size = 2048;
-  if (exportBoost || quality === 'ultra') size = 4096;
-  else if (quality === 'high' || quality === 'auto') size = 2048;
-  else size = 2048;
+  let size: number = SHADOW_MAP_BUDGET.preview;
+  if (exportBoost || quality === 'ultra') size = SHADOW_MAP_BUDGET.export;
+  else if (quality === 'high') size = Math.max(SHADOW_MAP_BUDGET.preview, 2048);
   const cap = Math.max(512, Math.min(4096, maxTextureSize || 4096));
   let out = size;
   while (out > cap) out = Math.floor(out / 2);
@@ -277,10 +276,12 @@ export function resolveFloorShadowResolution(
   exportBoost: boolean,
   maxTextureSize: number,
 ): number {
-  // Stable studio resolution in both modes — plate stays visible/frozen on orbit.
+  // Stable live resolution in both modes — plate stays visible/frozen on orbit.
   void mode;
-  let size = 2048;
-  if (exportBoost || quality === 'ultra' || quality === 'high') size = 2048;
+  let size: number = SHADOW_MAP_BUDGET.preview;
+  if (exportBoost || quality === 'ultra' || quality === 'high') {
+    size = exportBoost ? 2048 : Math.max(SHADOW_MAP_BUDGET.preview, 1024);
+  }
   const cap = Math.max(512, Math.min(2048, maxTextureSize || 2048));
   let out = size;
   while (out > cap) out = Math.floor(out / 2);
@@ -294,7 +295,7 @@ export function resolveSceneLightShadowMapSize(
   maxTextureSize: number,
 ): number {
   void mode;
-  let size = exportBoost ? 2048 : 2048;
+  let size = exportBoost ? 2048 : SHADOW_MAP_BUDGET.preview;
   const cap = Math.max(512, Math.min(2048, maxTextureSize || 2048));
   let out = size;
   while (out > cap) out = Math.floor(out / 2);

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
+import { APP_LOGO_SRC } from '../lib/appBrand';
 import {
   getAuthSnapshot,
   getSupabase,
@@ -14,14 +15,33 @@ const STORAGE_KEY = 'mockup-studio.site-gate';
 
 type GateMode = 'signup' | 'signin' | 'password';
 
-export function webGateEnabled(): boolean {
+/** Online studio with Supabase — must sign in (email / OAuth); password cannot bypass. */
+export function webAuthRequired(): boolean {
   return typeof window !== 'undefined'
     && !window.mockupDesktop
+    && isSupabaseConfigured();
+}
+
+/** Legacy beta password only when cloud auth is unavailable. */
+export function webPasswordGateEnabled(): boolean {
+  return typeof window !== 'undefined'
+    && !window.mockupDesktop
+    && !isSupabaseConfigured()
     && Boolean(__SITE_GATE_SHA256__);
 }
 
+export function webGateEnabled(): boolean {
+  return webAuthRequired() || webPasswordGateEnabled();
+}
+
+/**
+ * Sync unlock check for first paint.
+ * Auth-required web always starts locked — SiteGate opens after a real session.
+ * Password-only beta still uses sessionStorage.
+ */
 export function isSiteUnlocked(): boolean {
   if (!webGateEnabled()) return true;
+  if (webAuthRequired()) return false;
   try {
     return sessionStorage.getItem(STORAGE_KEY) === '1';
   } catch {
@@ -77,7 +97,8 @@ export function SiteGate({ onUnlock }: { onUnlock: () => void }) {
   const [finishingOAuth, setFinishingOAuth] = useState(() => accountEnabled && oauthCallbackPending());
 
   const unlock = () => {
-    markUnlocked();
+    // Only persist a password unlock. Auth unlocks are session-based.
+    if (!accountEnabled) markUnlocked();
     clearOAuthParamsFromUrl();
     onUnlock();
   };
@@ -140,7 +161,7 @@ export function SiteGate({ onUnlock }: { onUnlock: () => void }) {
 
   async function submitPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || accountEnabled) return;
     const entered = new FormData(event.currentTarget).get('studio-gate');
     const attempt = String(entered ?? password).trim();
     setBusy(true);
@@ -205,9 +226,9 @@ export function SiteGate({ onUnlock }: { onUnlock: () => void }) {
 
   const modeCopy =
     mode === 'signup'
-      ? 'Create a free account with Google, Apple, or email. No studio password needed.'
+      ? 'Create a free account with Google, Apple, or email to use the studio.'
       : mode === 'signin'
-        ? 'Sign in with Google, Apple, or a one-time email code.'
+        ? 'Sign in with Google, Apple, or a one-time email code to use the studio.'
         : 'Enter the beta password to open the studio.';
 
   if (finishingOAuth) {
@@ -215,7 +236,7 @@ export function SiteGate({ onUnlock }: { onUnlock: () => void }) {
       <div className="site-gate">
         <div className="site-gate-card">
           <div className="site-gate-brand">
-            <img className="site-gate-logo" src="./splash/logo.png" alt="" width={72} height={72} />
+            <img className="site-gate-logo" src={APP_LOGO_SRC} alt="" width={72} height={72} />
             <div className="site-gate-title">
               <h1>mokstudio</h1>
               <span className="dash-beta-badge" aria-label="Beta">Beta</span>
@@ -231,7 +252,7 @@ export function SiteGate({ onUnlock }: { onUnlock: () => void }) {
     <div className="site-gate">
       <div className="site-gate-card">
         <div className="site-gate-brand">
-          <img className="site-gate-logo" src="./splash/logo.png" alt="" width={72} height={72} />
+          <img className="site-gate-logo" src={APP_LOGO_SRC} alt="" width={72} height={72} />
           <div className="site-gate-title">
             <h1>mokstudio</h1>
             <span className="dash-beta-badge" aria-label="Beta">Beta</span>
@@ -257,15 +278,6 @@ export function SiteGate({ onUnlock }: { onUnlock: () => void }) {
               onClick={() => setMode('signin')}
             >
               Sign in
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'password'}
-              className={mode === 'password' ? 'is-active' : undefined}
-              onClick={() => setMode('password')}
-            >
-              Password
             </button>
           </div>
         )}

@@ -95,7 +95,8 @@ export function useScreenEmissiveMap({
       if (!texRef.current) {
         texRef.current = new THREE.CanvasTexture(canvas);
         texRef.current.colorSpace = THREE.SRGBColorSpace;
-        texRef.current.anisotropy = 8;
+        // Live screen plates do not need 8× anisotropy — cuts sampler cost.
+        texRef.current.anisotropy = 2;
       }
       const tex = texRef.current;
       applyUv?.(tex, originalEmissiveMap ?? null);

@@ -25,12 +25,52 @@ export {
 export type { LicenseTier, PlanId };
 
 const STORAGE_KEY = 'mockup-studio.license.v1';
+/** Dev-only tier override — does not replace a real key; gates read this when set. */
+const DEV_OVERRIDE_KEY = 'mockup-studio.dev-license-override.v1';
 
 /**
  * Testing bypass — unlocks Pro Max entitlements without a key.
  * Keep `false` for freemium (few free devices; Pro unlocks the full library).
  */
 export const LICENSING_DISABLED = false;
+
+const DEV_LICENSE_TIERS: LicenseTier[] = ['free', 'pro', 'pro_max'];
+
+export function isLicenseTier(value: unknown): value is LicenseTier {
+  return value === 'free' || value === 'pro' || value === 'pro_max';
+}
+
+/** Persisted Free / Pro / Pro Max override for local testing (ignored when LICENSING_DISABLED). */
+export function loadDevLicenseOverride(): LicenseTier | null {
+  try {
+    const raw = localStorage.getItem(DEV_OVERRIDE_KEY);
+    return isLicenseTier(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveDevLicenseOverride(tier: LicenseTier | null): void {
+  try {
+    if (!tier) localStorage.removeItem(DEV_OVERRIDE_KEY);
+    else localStorage.setItem(DEV_OVERRIDE_KEY, tier);
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+/**
+ * Tier used by feature gates.
+ * Priority: LICENSING_DISABLED → pro_max; else dev override; else the stored license tier.
+ */
+export function effectiveLicenseTier(tier: LicenseTier): LicenseTier {
+  if (LICENSING_DISABLED) return 'pro_max';
+  return loadDevLicenseOverride() ?? tier;
+}
+
+export function devLicenseTierOptions(): readonly LicenseTier[] {
+  return DEV_LICENSE_TIERS;
+}
 
 /** How the current entitlement was unlocked. `account` = Supabase-bound; `mas` reserved for App Store. */
 export type LicenseSource = 'none' | 'key' | 'mas' | 'account';
@@ -266,7 +306,7 @@ export function clearLicense(): LicenseState {
 }
 
 export function entitlementsFor(tier: LicenseTier) {
-  return ENTITLEMENTS[LICENSING_DISABLED ? 'pro_max' : tier];
+  return ENTITLEMENTS[effectiveLicenseTier(tier)];
 }
 
 /** True for the freemium starter set (and custom imports). Paid catalog devices are Pro. */
@@ -278,7 +318,8 @@ export function isFreeDevice(deviceId: string): boolean {
 }
 
 export function isDeviceUnlocked(tier: LicenseTier, deviceId: string): boolean {
-  if (LICENSING_DISABLED || ENTITLEMENTS[tier].allDevices) return true;
+  const effective = effectiveLicenseTier(tier);
+  if (ENTITLEMENTS[effective].allDevices) return true;
   return isFreeDevice(deviceId);
 }
 
@@ -294,16 +335,16 @@ export function modelAccessLicenseKey(license: LicenseState = loadLicense()): st
 }
 
 export function maxDevicesFor(tier: LicenseTier): number {
-  return ENTITLEMENTS[LICENSING_DISABLED ? 'pro_max' : tier].maxDevicesInScene;
+  return ENTITLEMENTS[effectiveLicenseTier(tier)].maxDevicesInScene;
 }
 
 export function canExportVideo(tier: LicenseTier): boolean {
-  return LICENSING_DISABLED || ENTITLEMENTS[tier].videoExport;
+  return ENTITLEMENTS[effectiveLicenseTier(tier)].videoExport;
 }
 
 /** Pro Max template / motion pack (scene compositions). Free and Pro stay locked out. */
 export function canUseProMaxTemplates(tier: LicenseTier): boolean {
-  return LICENSING_DISABLED || ENTITLEMENTS[tier].proMaxTemplates;
+  return ENTITLEMENTS[effectiveLicenseTier(tier)].proMaxTemplates;
 }
 
 export function upgradeCopyProMax(feature: string): string {
@@ -311,19 +352,19 @@ export function upgradeCopyProMax(feature: string): string {
 }
 
 export function maxStillLongEdge(tier: LicenseTier): number {
-  return ENTITLEMENTS[LICENSING_DISABLED ? 'pro_max' : tier].maxStillLongEdge;
+  return ENTITLEMENTS[effectiveLicenseTier(tier)].maxStillLongEdge;
 }
 
 export function isResolutionAllowed(tier: LicenseTier, longEdge: number): boolean {
-  if (LICENSING_DISABLED) return true;
-  return longEdge <= ENTITLEMENTS[tier].maxStillLongEdge;
+  return longEdge <= ENTITLEMENTS[effectiveLicenseTier(tier)].maxStillLongEdge;
 }
 
-export function planLabel(tier: LicenseTier): string {
+export function planLabel(tier: LicenseTier, options?: { markDevOverride?: boolean }): string {
   if (LICENSING_DISABLED) return 'Pro Max (test)';
-  if (tier === 'pro_max') return 'Pro Max';
-  if (tier === 'pro') return 'Pro';
-  return 'Free';
+  const effective = effectiveLicenseTier(tier);
+  const base = effective === 'pro_max' ? 'Pro Max' : effective === 'pro' ? 'Pro' : 'Free';
+  if (options?.markDevOverride && loadDevLicenseOverride()) return `${base} · dev`;
+  return base;
 }
 
 export function planPriceLabel(tier: LicenseTier | 'update_pass'): string {

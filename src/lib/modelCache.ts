@@ -251,6 +251,79 @@ export function peekDeviceModelUrl(deviceId: string | undefined): string | null 
   return liveUrls.get(deviceId) ?? null;
 }
 
+/** True when this device already has a warm session blob URL (no IDB read). */
+export function peekDeviceModelCached(deviceId: string | undefined): boolean {
+  if (!deviceId) return false;
+  if (bundledLocalModelUrl(deviceId)) return true;
+  return liveUrls.has(deviceId);
+}
+
+async function idbHas(key: string): Promise<boolean> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const store = tx.objectStore(STORE);
+    const req = typeof store.count === 'function'
+      ? store.count(IDBKeyRange.only(key))
+      : store.get(key);
+    req.onsuccess = () => {
+      if (typeof req.result === 'number') resolve(req.result > 0);
+      else resolve(Boolean(req.result));
+    };
+    req.onerror = () => reject(req.error ?? new Error('indexedDB has failed'));
+  });
+}
+
+/**
+ * True when the GLB is bundled, warm in-session, or already encrypted in IndexedDB.
+ * Does not decrypt — safe for card UI status checks.
+ */
+export async function isDeviceModelCached(deviceId: string): Promise<boolean> {
+  if (bundledLocalModelUrl(deviceId)) return true;
+  if (liveUrls.has(deviceId)) return true;
+  if (!remoteModelsConfigured()) return false;
+  try {
+    return await idbHas(cacheKey(deviceId));
+  } catch {
+    return false;
+  }
+}
+
+/** Prefetch + encrypt into IndexedDB so the device is ready before placing it. */
+export async function downloadDeviceModel(deviceId: string): Promise<string> {
+  return resolveDeviceModelUrl(deviceId);
+}
+
+/**
+ * Scan IndexedDB for remote models already cached for this pack version.
+ * Bundled free starters are omitted (they are always local).
+ */
+export async function listCachedRemoteDeviceIds(): Promise<Set<string>> {
+  const ready = new Set<string>();
+  if (!remoteModelsConfigured()) return ready;
+  try {
+    const db = await openDb();
+    const prefix = `${CACHE_PREFIX}:${DEVICE_MODEL_PACK_VERSION}:`;
+    const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readonly');
+      const req = tx.objectStore(STORE).getAllKeys();
+      req.onsuccess = () => resolve(req.result ?? []);
+      req.onerror = () => reject(req.error ?? new Error('indexedDB keys failed'));
+    });
+    for (const key of keys) {
+      if (typeof key !== 'string' || !key.startsWith(prefix)) continue;
+      const deviceId = key.slice(prefix.length);
+      if (deviceId && !bundledLocalModelUrl(deviceId)) ready.add(deviceId);
+    }
+  } catch {
+    /* Card UI falls back to per-device checks. */
+  }
+  for (const deviceId of liveUrls.keys()) {
+    if (!bundledLocalModelUrl(deviceId)) ready.add(deviceId);
+  }
+  return ready;
+}
+
 /**
  * Resolve a loadable URL for a catalog device GLB.
  * Free starters return the bundled Vite asset (no network).

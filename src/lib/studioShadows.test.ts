@@ -3,6 +3,7 @@ import {
   resolveFloorShadowResolution,
   resolveKeyShadowMapSize,
   resolveSceneLightShadowMapSize,
+  SHADOW_MAP_BUDGET,
 } from './studioShadows';
 
 describe('studio shadow map sizes', () => {
@@ -10,21 +11,21 @@ describe('studio shadow map sizes', () => {
     const studio = resolveKeyShadowMapSize('auto', 'studio', false, 8192);
     const interactive = resolveKeyShadowMapSize('auto', 'interactive', false, 8192);
     expect(interactive).toBe(studio);
-    expect(studio).toBe(2048);
+    expect(studio).toBe(SHADOW_MAP_BUDGET.preview);
   });
 
   it('keeps floor plate resolution stable across interactive↔studio', () => {
-    const studio = resolveFloorShadowResolution('high', 'studio', false, 8192);
-    const interactive = resolveFloorShadowResolution('high', 'interactive', false, 8192);
+    const studio = resolveFloorShadowResolution('auto', 'studio', false, 8192);
+    const interactive = resolveFloorShadowResolution('auto', 'interactive', false, 8192);
     expect(interactive).toBe(studio);
-    expect(studio).toBe(2048);
+    expect(studio).toBe(SHADOW_MAP_BUDGET.preview);
   });
 
   it('keeps scene light map size stable across modes', () => {
     const studio = resolveSceneLightShadowMapSize('studio', false, 8192);
     const interactive = resolveSceneLightShadowMapSize('interactive', false, 8192);
     expect(interactive).toBe(studio);
-    expect(studio).toBe(2048);
+    expect(studio).toBe(SHADOW_MAP_BUDGET.preview);
   });
 
   it('allows export / ultra to bump key map size', () => {

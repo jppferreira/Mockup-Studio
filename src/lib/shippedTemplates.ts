@@ -1,8 +1,10 @@
 import shippedPack from '../data/shippedTemplates.json';
 import {
   TEMPLATE_BACKDROP,
+  isShippedTemplateCategory,
   withAppleStudioLook,
   type CompositionTemplate,
+  type ShippedTemplateCategory,
 } from './templates';
 import {
   compositionFromProject,
@@ -79,59 +81,114 @@ function roundExportValue(value: unknown): unknown {
   return value;
 }
 
+function resolveShippedCategory(
+  template: Pick<CompositionTemplate, 'category'>,
+  category?: ShippedTemplateCategory,
+): ShippedTemplateCategory {
+  if (category && isShippedTemplateCategory(category)) return category;
+  if (isShippedTemplateCategory(template.category)) return template.category;
+  return 'devices';
+}
+
+function shippedBadgeFor(category: ShippedTemplateCategory): string {
+  if (category === 'scenes') return 'Scene';
+  if (category === 'social') return 'Social';
+  return 'Layout';
+}
+
 export function prepareShippedTemplate(
   template: CompositionTemplate,
-  category: 'devices' | 'scenes' = template.category === 'scenes' ? 'scenes' : 'devices',
+  category?: ShippedTemplateCategory,
 ): CompositionTemplate {
+  const resolved = resolveShippedCategory(template, category);
   const id = template.id.startsWith('comp-')
     ? slugify(template.label)
     : template.id;
   return withAppleStudioLook({
     ...template,
     id,
-    category,
+    category: resolved,
     badge: template.badge === 'Template'
-      ? (category === 'scenes' ? 'Scene' : 'Layout')
+      ? shippedBadgeFor(resolved)
       : template.badge,
   });
+}
+
+/** Keep Devices / Scenes / Social when overwriting a master catalog entry. */
+export function shippedCategoryOf(
+  template: Pick<CompositionTemplate, 'category'> | null | undefined,
+  fallback: ShippedTemplateCategory = 'devices',
+): ShippedTemplateCategory {
+  return resolveShippedCategory(template ?? { category: fallback }, fallback);
 }
 
 export function prepareShippedFromProject(
   label: string,
   project: MockupProject,
-  category: 'devices' | 'scenes' = 'devices',
+  category: ShippedTemplateCategory = 'devices',
   options?: {
     id?: string;
     cameraOrbit?: CompositionTemplate['cameraOrbit'] | null;
+    description?: string;
+    badge?: string;
+    preview?: CompositionTemplate['preview'];
   },
 ): CompositionTemplate {
   const resolvedId = options?.id?.trim()
     || slugify(label.trim() || project.name || 'composition');
+  const hasCyclorama = (project.sceneProps ?? []).some((prop) => prop.kind === 'studio_backdrop');
   return prepareShippedTemplate(
     compositionFromProject(label, project, {
       id: resolvedId,
       category,
-      badge: category === 'scenes' ? 'Scene' : 'Layout',
+      description: options?.description,
+      badge: options?.badge ?? shippedBadgeFor(category),
+      preview: options?.preview ?? (hasCyclorama ? 'studio' : undefined),
       cameraOrbit: options?.cameraOrbit,
     }),
     category,
   );
 }
 
-/** Persist one template into the pack + live session so User toolset sees it immediately. */
+/** Apply a remote master pack (Supabase) into this session so User/Dev both see it. */
+export function applyRemoteShippedPack(raw: unknown): {
+  templates: CompositionTemplate[];
+  removedIds: string[];
+} {
+  const templates = parseShippedTemplatePack(raw);
+  const removedIds = parseRemovedIds(raw);
+  rememberSessionPack(templates, removedIds);
+  runtimeRemovedIds = [...new Set([...runtimeRemovedIds, ...removedIds])];
+  // Drop promotions that the remote pack soft-deleted.
+  runtimePromoted = runtimePromoted.filter((item) => !removedIds.includes(item.id));
+  notifyRuntimeListeners();
+  return { templates, removedIds };
+}
+
+/** Persist into the master pack (`shippedTemplates.json`) + live session so User view sees it now. */
 export async function shipCompositionTemplate(
   template: CompositionTemplate,
-): Promise<{ ok: boolean; template: CompositionTemplate; path?: string; downloaded?: boolean; reason?: string }> {
+): Promise<{ ok: boolean; template: CompositionTemplate; path?: string; downloaded?: boolean; reason?: string; cloudError?: string }> {
   const prepared = prepareShippedTemplate(template);
   runtimeRemovedIds = runtimeRemovedIds.filter((id) => id !== prepared.id);
   registerRuntimePromoted([prepared]);
   const pack = await resolveShippedPackForWrite();
   const removedIds = pack.removedIds.filter((id) => id !== prepared.id);
   const templates = upsertShippedTemplates(pack.templates, [prepared]);
+  // Keep the master catalog in memory even if the disk write fails (browser download / permissions).
+  rememberSessionPack(templates, removedIds);
   const contents = serializeShippedTemplatePack(templates, removedIds);
   const result = await writeShippedTemplatePack(contents);
-  if (result.ok) rememberSessionPack(templates, removedIds);
-  return { ...result, template: prepared };
+  // Mirror to Supabase so every signed-in user can pull the update.
+  let cloudError: string | undefined;
+  try {
+    const { pushMasterTemplateCatalog } = await import('./cloudTemplates');
+    const cloud = await pushMasterTemplateCatalog({ contents });
+    if (!cloud.ok && !cloud.skipped) cloudError = cloud.error;
+  } catch (err) {
+    cloudError = err instanceof Error ? err.message : 'Could not sync master catalog to Supabase';
+  }
+  return { ...result, template: prepared, cloudError };
 }
 
 export async function duplicateShippedTemplate(
@@ -175,7 +232,7 @@ function uniqueShippedLabel(base: string, taken: Set<string>): string {
 /** Brand-new shipped Device layout or Composition for Dev authoring. */
 export function createBlankShippedTemplate(
   label: string,
-  category: 'devices' | 'scenes',
+  category: ShippedTemplateCategory,
   deviceId = 'iphone_15_pro_max',
 ): CompositionTemplate {
   const pack = readShippedPack();
@@ -187,13 +244,21 @@ export function createBlankShippedTemplate(
     ...pack.templates.map((item) => item.label.toLowerCase()),
     ...runtimePromoted.map((item) => item.label.toLowerCase()),
   ]);
-  const fallback = category === 'scenes' ? 'New composition' : 'New layout';
+  const fallback = category === 'scenes'
+    ? 'New template'
+    : category === 'social'
+      ? 'New social template'
+      : 'New scene template';
   const nextLabel = uniqueShippedLabel(label.trim() || fallback, takenLabels);
   return prepareShippedTemplate({
     id: uniqueShippedId(nextLabel, taken),
     label: nextLabel,
-    description: category === 'scenes' ? 'Blank composition' : 'Blank device layout',
-    badge: category === 'scenes' ? 'Scene' : 'Layout',
+    description: category === 'scenes'
+      ? 'Blank template'
+      : category === 'social'
+        ? 'Blank social media mockup'
+        : 'Blank scene template',
+    badge: shippedBadgeFor(category),
     category,
     preview: 'solo',
     background: 'studio',
@@ -212,7 +277,7 @@ export function createBlankShippedTemplate(
 
 export async function deleteShippedTemplate(
   id: string,
-): Promise<{ ok: boolean; path?: string; downloaded?: boolean; reason?: string }> {
+): Promise<{ ok: boolean; path?: string; downloaded?: boolean; reason?: string; cloudError?: string }> {
   if (!id.trim()) return { ok: false, reason: 'Missing template id' };
   runtimePromoted = runtimePromoted.filter((item) => item.id !== id);
   if (!runtimeRemovedIds.includes(id)) runtimeRemovedIds = [...runtimeRemovedIds, id];
@@ -220,9 +285,18 @@ export async function deleteShippedTemplate(
   const pack = await resolveShippedPackForWrite();
   const templates = pack.templates.filter((item) => item.id !== id);
   const removedIds = pack.removedIds.includes(id) ? pack.removedIds : [...pack.removedIds, id];
-  const result = await writeShippedTemplatePack(serializeShippedTemplatePack(templates, removedIds));
-  if (result.ok) rememberSessionPack(templates, removedIds);
-  return result;
+  rememberSessionPack(templates, removedIds);
+  const contents = serializeShippedTemplatePack(templates, removedIds);
+  const result = await writeShippedTemplatePack(contents);
+  let cloudError: string | undefined;
+  try {
+    const { pushMasterTemplateCatalog } = await import('./cloudTemplates');
+    const cloud = await pushMasterTemplateCatalog({ contents });
+    if (!cloud.ok && !cloud.skipped) cloudError = cloud.error;
+  } catch (err) {
+    cloudError = err instanceof Error ? err.message : 'Could not sync master catalog to Supabase';
+  }
+  return { ...result, cloudError };
 }
 
 function parseRemovedIds(raw: unknown): string[] {
@@ -247,7 +321,7 @@ export function parseShippedTemplatePack(raw: unknown): CompositionTemplate[] {
     if (removed.has(item.id)) return [];
     if (typeof item.label !== 'string' || !item.label.trim()) return [];
     if (!Array.isArray(item.devices) || item.devices.length === 0) return [];
-    const category = item.category === 'scenes' ? 'scenes' as const : 'devices' as const;
+    const category = isShippedTemplateCategory(item.category) ? item.category : 'devices';
     return [prepareShippedTemplate(item as CompositionTemplate, category)];
   });
 }

@@ -382,12 +382,11 @@ export function StudioShadowInteractionProvider({
       wasBusy.current = true;
       return;
     }
-    // Interaction just ended — clear stale progressive buffers before refining.
-    if (wasBusy.current) {
-      apiRef.current?.reset();
-      wasBusy.current = false;
-    }
+    // Wait out the settle window before remounting ContactShadows — resetting
+    // immediately on pointer-up caused a post-orbit hitch every time.
+    wasBusy.current = false;
     idleTimer.current = window.setTimeout(() => {
+      apiRef.current?.reset();
       setMode('studio');
       idleTimer.current = null;
     }, STUDIO_SHADOW_IDLE_MS);
