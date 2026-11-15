@@ -151,7 +151,7 @@ export function createNeutralStudioHdri(width = 1024): THREE.DataTexture {
   return texture;
 }
 
-export function createNeutralStudioEnvironment(gl: THREE.WebGLRenderer) {
+export function createNeutralStudioEnvironment(gl: THREE.WebGLRenderer, hdriWidth = 1024) {
   const hit = studioEnvByGl.get(gl);
   if (hit) {
     hit.retainers += 1;
@@ -166,7 +166,7 @@ export function createNeutralStudioEnvironment(gl: THREE.WebGLRenderer) {
     };
   }
 
-  const source = createNeutralStudioHdri();
+  const source = createNeutralStudioHdri(hdriWidth);
   const pmrem = new THREE.PMREMGenerator(gl);
   pmrem.compileEquirectangularShader();
   const target = pmrem.fromEquirectangular(source);
@@ -388,11 +388,33 @@ const dofStates = new WeakMap<THREE.WebGLRenderer, DofState>();
 const aoStates = new WeakMap<THREE.WebGLRenderer, number>();
 /** Orbit / gizmo: skip the offscreen grade buffer and render straight to the canvas. */
 const liveFastStates = new WeakMap<THREE.WebGLRenderer, boolean>();
+/** Export-only MSAA on the grade / depth offscreen targets (0 = none). */
+const exportGradeSamples = new WeakMap<THREE.WebGLRenderer, number>();
+const gradeBuffers = new WeakMap<THREE.WebGLRenderer, {
+  buffer: THREE.WebGLRenderTarget;
+  depthTarget: THREE.WebGLRenderTarget;
+  applySamples: (samples: number) => void;
+}>();
 
 /** Live interaction path — idle + export keep the full grade / DoF / AO stack. */
 export function setLivePreviewFast(gl: THREE.WebGLRenderer, fast: boolean) {
   if (liveFastStates.get(gl) === fast) return;
   liveFastStates.set(gl, fast);
+}
+
+/**
+ * Raise MSAA on the grade path during capture (Ultra). Call with 0 when done.
+ * No-ops if the renderer has not installed the grade stack yet.
+ */
+export function setExportGradeSamples(gl: THREE.WebGLRenderer, samples: number) {
+  const next = Math.max(0, Math.min(8, Math.floor(samples)));
+  if (exportGradeSamples.get(gl) === next) return;
+  exportGradeSamples.set(gl, next);
+  gradeBuffers.get(gl)?.applySamples(next);
+}
+
+export function getExportGradeSamples(gl: THREE.WebGLRenderer): number {
+  return exportGradeSamples.get(gl) ?? 0;
 }
 
 function readLiveFast(gl: THREE.WebGLRenderer): boolean {
@@ -513,6 +535,14 @@ export function installRenderGrade(gl: THREE.WebGLRenderer) {
     depthTexture,
   });
   depthTarget.texture.generateMipmaps = false;
+
+  const applySamples = (samples: number) => {
+    const next = Math.max(0, Math.min(8, Math.floor(samples)));
+    if (buffer.samples !== next) buffer.samples = next;
+    if (depthTarget.samples !== next) depthTarget.samples = next;
+  };
+  gradeBuffers.set(gl, { buffer, depthTarget, applySamples });
+  applySamples(exportGradeSamples.get(gl) ?? 0);
 
   const dofTarget = new THREE.WebGLRenderTarget(1, 1, {
     depthBuffer: false,

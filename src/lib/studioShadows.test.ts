@@ -5,6 +5,7 @@ import {
   resolveSceneLightShadowMapSize,
   SHADOW_MAP_BUDGET,
 } from './studioShadows';
+import { getRenderQualityBudget } from './renderQuality';
 
 describe('studio shadow map sizes', () => {
   it('keeps key map size stable across interactive↔studio (no atlas thrash)', () => {
@@ -31,5 +32,17 @@ describe('studio shadow map sizes', () => {
   it('allows export / ultra to bump key map size', () => {
     expect(resolveKeyShadowMapSize('ultra', 'studio', true, 8192)).toBe(4096);
     expect(resolveKeyShadowMapSize('auto', 'studio', true, 8192)).toBe(4096);
+  });
+
+  it('caps live maps under the Performance render preset', () => {
+    expect(resolveKeyShadowMapSize('ultra', 'studio', false, 8192, 'performance')).toBe(1024);
+    expect(resolveFloorShadowResolution('high', 'studio', false, 8192, 'performance')).toBe(512);
+    expect(resolveKeyShadowMapSize('auto', 'studio', true, 8192, 'performance')).toBe(2048);
+  });
+
+  it('raises idle maps under the Ultra render preset', () => {
+    const ultra = getRenderQualityBudget('ultra');
+    expect(resolveKeyShadowMapSize('auto', 'studio', false, 8192, 'ultra')).toBe(ultra.previewShadowMap);
+    expect(resolveFloorShadowResolution('auto', 'studio', false, 8192, 'ultra')).toBe(ultra.floorPreview);
   });
 });

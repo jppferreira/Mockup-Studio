@@ -314,6 +314,13 @@ import {
   type PublishTarget, type ReflectionMapSetting, type SceneLight, type ScenePreset, type SceneProp,
   type ScenePropKind, type ShadowType, type Vec3,
 } from './types';
+import {
+  DEFAULT_RENDER_QUALITY,
+  loadRenderQuality,
+  RENDER_QUALITY_PRESETS,
+  saveRenderQuality,
+  type RenderQualityPreset,
+} from './lib/renderQuality';
 
 /** Top-left pinned tabs: Layer hierarchy vs Assets library (plus change log). */
 type LeftWorkspaceTab = 'scenes' | 'assets' | 'log';
@@ -1180,6 +1187,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
   const [animatedExportEntries, setAnimatedExportEntries] = useState<ExportEntry[]>(() => [createExportEntry('mp4')]);
   const [exportVideoCodec, setExportVideoCodec] = useState<VideoCodecId>('auto');
   const [exporting, setExporting] = useState(false);
+  const [renderQuality, setRenderQuality] = useState<RenderQualityPreset>(() => loadRenderQuality());
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [canvasDropKind, setCanvasDropKind] = useState<'files' | 'device' | null>(null);
@@ -7677,6 +7685,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         project={iosDisplayProject}
                         captureRef={iosCaptureRef}
                         shadowExportBoost={exporting}
+                        renderQuality={renderQuality}
                         mediaPlaying={animPlaying}
                         liveStream={mirrorSource === 'ios' || (!mirrorSource && activePublishTarget === 'ios') ? mirrorStream : null}
                         liveStreamDeviceId={liveStreamDeviceId}
@@ -7747,6 +7756,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         project={androidDisplayProject}
                         captureRef={androidCaptureRef}
                         shadowExportBoost={exporting}
+                        renderQuality={renderQuality}
                         mediaPlaying={animPlaying}
                         liveStream={mirrorSource === 'android' || (!mirrorSource && activePublishTarget === 'android') ? mirrorStream : null}
                         liveStreamDeviceId={liveStreamDeviceId}
@@ -7810,6 +7820,7 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                   project={displayProject}
                   captureRef={captureRef}
                   shadowExportBoost={exporting}
+                        renderQuality={renderQuality}
                   mediaPlaying={animPlaying}
                   liveStream={mirrorStream}
                   liveStreamDeviceId={liveStreamDeviceId}
@@ -10261,7 +10272,28 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
                         })}
                       />
                     </div>
-                    <div className="field-caption" style={{ marginTop: 10 }}>Quality</div>
+                    <div className="field-caption" style={{ marginTop: 10 }}>Render</div>
+                    <div className="camera-preset-grid">
+                      {RENDER_QUALITY_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          title={preset.hint}
+                          onClick={() => {
+                            setRenderQuality(preset.id);
+                            saveRenderQuality(preset.id);
+                          }}
+                          className={(renderQuality ?? DEFAULT_RENDER_QUALITY) === preset.id ? 'selected' : ''}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="field-caption" style={{ marginTop: 8 }}>
+                      {RENDER_QUALITY_PRESETS.find((preset) => preset.id === (renderQuality ?? DEFAULT_RENDER_QUALITY))?.hint
+                        ?? 'Best default — premium studio look at interactive frame rates'}
+                    </p>
+                    <div className="field-caption" style={{ marginTop: 10 }}>Shadow maps</div>
                     <div className="camera-preset-grid">
                       {SHADOW_QUALITIES.map((quality) => (
                         <button

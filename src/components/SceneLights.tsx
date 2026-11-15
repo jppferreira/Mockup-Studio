@@ -4,8 +4,9 @@ import * as THREE from 'three';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import type { SceneLight, Vec3 } from '../types';
 import { resolveSceneLightShadowMapSize } from '../lib/studioShadows';
+import { getRenderQualityBudget } from '../lib/renderQuality';
 import LightTranslateGizmo from './LightTranslateGizmo';
-import { useStudioShadowInteraction } from './StudioEnvironment';
+import { useRenderQuality, useStudioShadowInteraction } from './StudioEnvironment';
 
 let rectAreaReady = false;
 function ensureRectAreaLights() {
@@ -24,23 +25,31 @@ function useAdaptiveShadowMap(
 ) {
   const gl = useThree((s) => s.gl);
   const interaction = useStudioShadowInteraction();
+  const renderQuality = useRenderQuality();
   const mode = interaction?.mode ?? 'studio';
+  const exportBoost = interaction?.exportBoost === true;
 
   useEffect(() => {
     const light = lightRef.current as (THREE.Light & { shadow?: THREE.LightShadow }) | null;
     if (!light?.shadow || !castShadow) return;
     // Stable size across interactive↔studio — avoid atlas thrash on orbit.
-    const size = resolveSceneLightShadowMapSize('studio', false, gl.capabilities.maxTextureSize || 2048);
+    const budget = getRenderQualityBudget(renderQuality);
+    const size = resolveSceneLightShadowMapSize(
+      'studio',
+      exportBoost,
+      gl.capabilities.maxTextureSize || 2048,
+      renderQuality,
+    );
     light.shadow.mapSize.set(size, size);
-    light.shadow.autoUpdate = mode !== 'interactive';
-    light.shadow.needsUpdate = mode !== 'interactive';
-    light.shadow.blurSamples = 4;
+    light.shadow.autoUpdate = mode !== 'interactive' || exportBoost;
+    light.shadow.needsUpdate = mode !== 'interactive' || exportBoost;
+    light.shadow.blurSamples = exportBoost ? budget.keyBlurSamplesExport : budget.keyBlurSamplesLive;
     if (light.shadow.map && (light.shadow.map.width !== size || light.shadow.map.height !== size)) {
       light.shadow.map.dispose();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (light.shadow as any).map = null;
     }
-  }, [lightRef, castShadow, mode, gl]);
+  }, [lightRef, castShadow, mode, exportBoost, renderQuality, gl]);
 }
 
 function AimingAreaLight({

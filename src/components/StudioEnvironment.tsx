@@ -21,6 +21,11 @@ import {
   setLivePreviewFast,
 } from '../lib/renderRealism';
 import {
+  DEFAULT_RENDER_QUALITY,
+  getRenderQualityBudget,
+  type RenderQualityPreset,
+} from '../lib/renderQuality';
+import {
   resolveStudioPreset,
   STUDIO_FLOOR_Y,
   type StudioPreset,
@@ -53,6 +58,26 @@ function ensureRectAreaLights() {
   if (rectAreaReady) return;
   RectAreaLightUniformsLib.init();
   rectAreaReady = true;
+}
+
+const RenderQualityContext = createContext<RenderQualityPreset>(DEFAULT_RENDER_QUALITY);
+
+export function useRenderQuality(): RenderQualityPreset {
+  return useContext(RenderQualityContext);
+}
+
+export function RenderQualityProvider({
+  value,
+  children,
+}: {
+  value: RenderQualityPreset;
+  children: ReactNode;
+}) {
+  return (
+    <RenderQualityContext.Provider value={value}>
+      {children}
+    </RenderQualityContext.Provider>
+  );
 }
 
 /** Softbox that aims at the product. Rect area lights do not cast shadows. */
@@ -101,9 +126,12 @@ function Softbox({
 /** Always-on neutral studio HDRI — reflections stay photographic even on transparent BG. */
 export function StudioHdri({ intensity }: { intensity: number }) {
   const { gl, scene } = useThree();
+  const renderQuality = useRenderQuality();
+  const hdriWidth = getRenderQualityBudget(renderQuality).hdriWidth;
   // Build PMREM once per WebGL context — intensity is a scene uniform, not a rebuild.
+  // Preset width only applies on first create for this GL (cache is per-renderer).
   useEffect(() => {
-    const environment = createNeutralStudioEnvironment(gl);
+    const environment = createNeutralStudioEnvironment(gl, hdriWidth);
     const previous = scene.environment;
     const previousIntensity = scene.environmentIntensity;
     scene.environment = environment.texture;
@@ -114,7 +142,7 @@ export function StudioHdri({ intensity }: { intensity: number }) {
       }
       environment.dispose();
     };
-  }, [gl, scene]);
+  }, [gl, scene, hdriWidth]);
   useEffect(() => {
     scene.environmentIntensity = intensity;
   }, [scene, intensity]);
@@ -134,13 +162,18 @@ export function StudioExposure({ exposure }: { exposure: number }) {
 export function StudioAmbientOcclusion({ amount }: { amount: number }) {
   const gl = useThree((state) => state.gl);
   const interaction = useStudioShadowInteraction();
+  const renderQuality = useRenderQuality();
   const amountRef = useRef(amount);
+  const qualityRef = useRef(renderQuality);
   amountRef.current = amount;
+  qualityRef.current = renderQuality;
   useFrame(() => {
     // Interactive: drop the SSAO re-render (12 taps + depth). Idle / export restore.
     // Lighting + materials stay on — only the screen-space pass is gated.
     const live = interaction?.mode === 'interactive';
-    setAmbientOcclusion(gl, live ? 0 : amountRef.current);
+    const exportBoost = interaction?.exportBoost === true;
+    const scale = exportBoost ? 1 : getRenderQualityBudget(qualityRef.current).idleAoScale;
+    setAmbientOcclusion(gl, live ? 0 : amountRef.current * scale);
   });
   return null;
 }
@@ -149,17 +182,22 @@ export function StudioAmbientOcclusion({ amount }: { amount: number }) {
 export function StudioDepthOfField({ amount, focus }: { amount: number; focus: Vec3 }) {
   const gl = useThree((state) => state.gl);
   const interaction = useStudioShadowInteraction();
+  const renderQuality = useRenderQuality();
   const amountRef = useRef(amount);
   const focusRef = useRef(focus);
+  const qualityRef = useRef(renderQuality);
   amountRef.current = amount;
   focusRef.current = focus;
+  qualityRef.current = renderQuality;
   useFrame(() => {
     // Interactive: skip 64-tap DoF + enable grade fast path (single scene pass).
     // Softboxes / HDRI / materials stay lit — never darken the product.
     const live = interaction?.mode === 'interactive';
+    const exportBoost = interaction?.exportBoost === true;
+    const scale = exportBoost ? 1 : getRenderQualityBudget(qualityRef.current).idleDofScale;
     setLivePreviewFast(gl, live);
     setDepthOfField(gl, {
-      amount: live ? 0 : amountRef.current,
+      amount: live ? 0 : amountRef.current * scale,
       focus: focusRef.current,
     });
   });
@@ -326,6 +364,8 @@ type ShadowInteractionApi = {
   notifySceneChanged: () => void;
   apiRef: MutableRefObject<StudioShadowApi | null>;
   mode: StudioShadowMode;
+  /** True while still/video capture forces studio-quality rendering. */
+  exportBoost: boolean;
 };
 
 const ShadowInteractionContext = createContext<ShadowInteractionApi | null>(null);
@@ -403,6 +443,7 @@ export function StudioShadowInteractionProvider({
     notifySceneChanged,
     apiRef,
     mode: exportBoost ? 'studio' : mode,
+    exportBoost,
   }), [setBusy, notifySceneChanged, mode, exportBoost]);
 
   return (
@@ -533,7 +574,8 @@ function StudioSoftFloorShadows({
   const scale = useAdaptiveShadowExtent(lightPosition, lightTarget, y, 6);
   const penumbra = softnessToPenumbra(softness);
   const strength = opacityToShadowStrength(opacity, 1);
-  const resolution = resolveFloorShadowResolution(quality, mode, exportBoost, maxTex);
+  const renderQuality = useRenderQuality();
+  const resolution = resolveFloorShadowResolution(quality, mode, exportBoost, maxTex, renderQuality);
   const [refreshToken, setRefreshToken] = useState(0);
   // Orbit / gizmo used to set frames={Infinity}, which re-baked ContactShadows
   // every frame and tanked FPS. Keep the plate visible and freeze it (frames=1);
@@ -587,7 +629,7 @@ function StudioSoftFloorShadows({
     reset,
     lightPosition.x, lightPosition.y, lightPosition.z,
     lightTarget.x, lightTarget.y, lightTarget.z,
-    softness, opacity, contact, contactEnabled, distance, quality, exportBoost, lightStrength, color,
+    softness, opacity, contact, contactEnabled, distance, quality, exportBoost, renderQuality, lightStrength, color,
   ]);
 
   useLayoutEffect(() => {

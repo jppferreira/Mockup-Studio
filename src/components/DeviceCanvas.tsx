@@ -15,6 +15,7 @@ import { accentPair, useAccentTheme } from '../lib/accentTheme';
 import {
   installRenderGrade,
   renderOutputGain,
+  setExportGradeSamples,
   setRenderGradeGain,
 } from '../lib/renderRealism';
 import {
@@ -22,6 +23,7 @@ import {
   refreshShadowMaterials,
   releaseProgressiveShadowProfile,
   retainProgressiveShadowProfile,
+  setProgressiveShadowQuality,
   type ProgressiveShadowProfile,
 } from '../lib/progressiveShadows';
 import { useScreenEmissiveMap } from '../lib/useScreenTexture';
@@ -41,15 +43,23 @@ import ExtrudedText from './ExtrudedText';
 import ExtrudedShape from './ExtrudedShape';
 import { AnnotationDrawController, ModelAnnotationLayer, type AnnotationMark } from './ModelAnnotations';
 import {
+  RenderQualityProvider,
   StudioAmbientOcclusion,
   StudioDepthOfField,
   StudioExposure,
   StudioHdri,
   StudioLighting,
   StudioShadowInteractionProvider,
+  useRenderQuality,
   useStudioPreset,
   useStudioShadowInteraction,
 } from './StudioEnvironment';
+import {
+  DEFAULT_RENDER_QUALITY,
+  getRenderQualityBudget,
+  type RenderQualityPreset,
+} from '../lib/renderQuality';
+import { recordFrameStats, recordOrbitFps } from '../lib/perfDiagnostics';
 import SceneLights from './SceneLights';
 import LightTranslateGizmo from './LightTranslateGizmo';
 import { STUDIO_DEVICE_HEIGHT } from '../lib/studioEnvironment';
@@ -77,10 +87,9 @@ import {
   sampleTrack,
 } from '../lib/animation';
 import { publishLiveOrbit, subscribeLiveOrbit, type LiveOrbit } from '../lib/liveOrbit';
-import { recordOrbitFps } from '../lib/perfDiagnostics';
 
 /**
- * Live preview DPR — cap at 1.25× (1.5×+ doubles grade + shadow fill-rate).
+ * Live preview DPR fallback (Balanced). Prefer getRenderQualityBudget(preset).liveDpr.
  * Export / capture paths pass an explicit pixelRatio.
  */
 const LIVE_CANVAS_DPR: [number, number] = [1, 1.25];
@@ -222,6 +231,11 @@ interface Props {
   onAnnotation?: (mark: AnnotationMark) => void;
   /** Pixel ratio override. Thumbnails pass 1 to stay light. */
   pixelRatio?: [number, number];
+  /**
+   * Editor render preset (Performance / Balanced / Ultra).
+   * Local preference only — never written into saved compositions.
+   */
+  renderQuality?: RenderQualityPreset;
   /** Lock orbit / pan / zoom — used by offscreen card bakers. */
   freezeFraming?: boolean;
   /** Fires after the device meshes have mounted — thumbnails wait on this. */
@@ -1037,6 +1051,50 @@ function OrbitFpsProbe() {
   });
   return null;
 }
+
+/**
+ * Keep PCSS sample budgets aligned with the editor render preset.
+ * Interactive orbit still uses the thin kernel; studio taps follow the preset.
+ */
+function RenderQualitySync() {
+  const renderQuality = useRenderQuality();
+  const scene = useThree((s) => s.scene);
+  useEffect(() => {
+    if (setProgressiveShadowQuality(renderQuality)) {
+      refreshShadowMaterials(scene);
+    }
+  }, [renderQuality, scene]);
+  return null;
+}
+
+/** DEV / ?perf=1 — continuous draw-call / triangle / texture sampling while idle. */
+function FrameStatsProbe() {
+  const interaction = useStudioShadowInteraction();
+  const gl = useThree((s) => s.gl);
+  const last = useRef(0);
+  const mode = interaction?.mode ?? 'studio';
+  useFrame(() => {
+    if (typeof window === 'undefined') return;
+    const enabled = import.meta.env.DEV || new URLSearchParams(window.location.search).has('perf');
+    if (!enabled) return;
+    const now = performance.now();
+    if (last.current > 0 && now - last.current < 500) return;
+    const dt = last.current > 0 ? now - last.current : 16.7;
+    last.current = now;
+    const info = gl.info;
+    recordFrameStats({
+      fps: Math.round((1000 / Math.max(dt, 1)) * 10) / 10,
+      frameMs: Math.round(dt * 10) / 10,
+      drawCalls: info.render.calls,
+      triangles: info.render.triangles,
+      geometries: info.memory.geometries,
+      textures: info.memory.textures,
+      shadowMode: mode,
+    });
+  });
+  return null;
+}
+
 
 const DEG = Math.PI / 180;
 
@@ -2766,6 +2824,7 @@ function KeyLightRig({
   shadowDistance = 3.6,
   shadowQuality = 'auto',
   shadowExportBoost = false,
+  renderQuality = DEFAULT_RENDER_QUALITY,
   gizmoActive,
   target,
   onPositionChange,
@@ -2781,6 +2840,7 @@ function KeyLightRig({
   shadowDistance?: number;
   shadowQuality?: ShadowQuality;
   shadowExportBoost?: boolean;
+  renderQuality?: RenderQualityPreset;
   gizmoActive: boolean;
   target: Vec3;
   onPositionChange?: (position: Vec3) => void;
@@ -2825,7 +2885,8 @@ function KeyLightRig({
     light.castShadow = castShadow;
     const maxTex = gl.capabilities.maxTextureSize || 4096;
     // Size ignores interactive mode so orbit busy flips never thrash the atlas.
-    const size = resolveKeyShadowMapSize(shadowQuality, 'studio', shadowExportBoost, maxTex);
+    const budget = getRenderQualityBudget(renderQuality);
+    const size = resolveKeyShadowMapSize(shadowQuality, 'studio', shadowExportBoost, maxTex, renderQuality);
     const penumbra = softnessToPenumbra(shadowSoftness);
     light.shadow.mapSize.set(size, size);
     // The PCSS shader treats shadow radius as emitter size (texels), so Softness
@@ -2836,8 +2897,10 @@ function KeyLightRig({
     const softnessT = THREE.MathUtils.smoothstep(0.2, 14, shadowSoftness);
     light.shadow.bias = -0.00018;
     light.shadow.normalBias = THREE.MathUtils.lerp(0.022, 0.05, softnessT);
-    // Soft PCF blur taps are costly — keep them low for live; export may bump via size.
-    light.shadow.blurSamples = shadowExportBoost ? (size >= 2048 ? 12 : 8) : 4;
+    // Soft PCF blur taps are costly — keep them low for live; export may bump via budget.
+    light.shadow.blurSamples = shadowExportBoost
+      ? budget.keyBlurSamplesExport
+      : budget.keyBlurSamplesLive;
     // 0 fades the cast out; 1 is the soft default core; above 1 crushes soft
     // penumbras that never fully occlude (shader clamps the darkened result).
     light.shadow.intensity = Math.max(0, shadowIntensityCurve(shadowOpacity, 1, 2.6));
@@ -2851,7 +2914,7 @@ function KeyLightRig({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (light.shadow as any).map = null;
     }
-  }, [castShadow, shadowSoftness, shadowOpacity, shadowQuality, shadowExportBoost, mode, gl]);
+  }, [castShadow, shadowSoftness, shadowOpacity, shadowQuality, shadowExportBoost, renderQuality, mode, gl]);
 
   // Adaptive ortho frustum — tight around casters so texels aren't wasted.
   // Frozen during interactive orbit so we never rebuild the shadow map mid-drag.
@@ -3664,8 +3727,11 @@ function CaptureBridge({
 }) {
   const { gl, scene, camera } = useThree();
   const shadowInteraction = useStudioShadowInteraction();
+  const renderQuality = useRenderQuality();
   const shadowApiRef = useRef(shadowInteraction);
   shadowApiRef.current = shadowInteraction;
+  const qualityRef = useRef(renderQuality);
+  qualityRef.current = renderQuality;
   const poseApplyLocalRef = useRef(poseApplyRef);
   poseApplyLocalRef.current = poseApplyRef;
   const edgeBlurActive = (edgeBlurTop || edgeBlurBottom) && edgeBlurAmount > 0;
@@ -3687,12 +3753,17 @@ function CaptureBridge({
     };
 
     /** Resolve soft floor shadows before the capture readback. */
-    const settleShadows = () => {
+    const settleShadows = (passes: number) => {
       const api = shadowApiRef.current?.apiRef.current;
       if (!api) return;
       // Update world matrices so adaptive shadow cameras see the posed frame.
       scene.updateMatrixWorld(true);
       api.settle();
+      // ContactShadows with frames={Infinity} needs several renders to accumulate.
+      const n = Math.max(1, Math.min(16, Math.floor(passes)));
+      for (let i = 0; i < n; i += 1) {
+        gl.render(scene, camera);
+      }
     };
 
     const withSizedRender = <T,>(width: number, height: number, use: () => T): T => {
@@ -3707,16 +3778,19 @@ function CaptureBridge({
       const originalDpr = gl.getPixelRatio();
       const originalAspect = camera.aspect;
       const restoreHelpers = hideEditorHelpers(scene);
+      const budget = getRenderQualityBudget(qualityRef.current);
       try {
+        setExportGradeSamples(gl, budget.exportGradeSamples);
         gl.setPixelRatio(1);
         gl.setSize(width, height, false);
         camera.aspect = width / height;
         camera.updateProjectionMatrix();
         scene.updateMatrixWorld(true);
-        settleShadows();
+        settleShadows(budget.exportSettleFrames);
         gl.render(scene, camera);
         return use();
       } finally {
+        setExportGradeSamples(gl, 0);
         restoreHelpers();
         gl.setPixelRatio(originalDpr);
         gl.setSize(originalSize.x, originalSize.y, false);
@@ -4153,6 +4227,7 @@ function DeviceCanvasImpl({
   annotateInk,
   onAnnotation,
   pixelRatio,
+  renderQuality = DEFAULT_RENDER_QUALITY,
   freezeFraming = false,
   onSceneReady,
   shadowExportBoost = false,
@@ -4213,12 +4288,13 @@ function DeviceCanvasImpl({
   const animDriveActive = Boolean(playheadRef && project.animation && hasAnimation(project.animation));
   const drivenCameraOut = useRef<Vec3 | null>(null);
   const poseApplyRef = useRef<(() => void) | null>(null);
+  const liveDpr = pixelRatio ?? getRenderQualityBudget(renderQuality).liveDpr;
   return (
     <Canvas
       key={canvasId}
       // Idle scenes should not burn GPU — orbit / gizmos / playback call invalidate().
       frameloop="demand"
-      dpr={pixelRatio ?? LIVE_CANVAS_DPR}
+      dpr={liveDpr}
       shadows
       // No MSAA on live canvas (Spline playbook); CaptureBridge / export can boost.
       gl={LIVE_GL}
@@ -4230,6 +4306,7 @@ function DeviceCanvasImpl({
         gl.toneMappingExposure = toneMappingExposure;
         // Rebuilds the shared shadow chunk from stock + PCSS so every canvas
         // (split view, thumbnails, exports) and HMR cycle lands on the same shader.
+        setProgressiveShadowQuality(renderQuality);
         installProgressiveShadowShader('studio');
         gl.shadowMap.enabled = true;
         // PCSS (contact-hardening) for mesh-to-mesh and floor cast; ContactShadows adds a light foot kiss.
@@ -4238,9 +4315,12 @@ function DeviceCanvasImpl({
       }}
       onPointerMissed={() => onClearSelection?.()}
     >
+      <RenderQualityProvider value={renderQuality}>
       <StudioShadowInteractionProvider exportBoost={shadowExportBoost} busyExternal={shadowBusy}>
         <DemandKeepAlive active={shadowBusy || Boolean(mediaPlaying)} />
         <OrbitFpsProbe />
+        <FrameStatsProbe />
+        <RenderQualitySync />
         <Background
           preset={project.background}
           colors={project.background === 'transparent' ? null : project.gradientColors}
@@ -4304,6 +4384,7 @@ function DeviceCanvasImpl({
             shadowDistance={project.shadowDistance ?? DEFAULT_PROJECT.shadowDistance}
             shadowQuality={project.shadowQuality ?? DEFAULT_PROJECT.shadowQuality}
             shadowExportBoost={shadowExportBoost}
+            renderQuality={renderQuality}
             gizmoActive={lightGizmoActive && gizmoActive && keyIntensity > 0.001}
             target={resolvedFocus}
             onPositionChange={onLightPositionChange}
@@ -4432,6 +4513,7 @@ function DeviceCanvasImpl({
           poseApplyRef={poseApplyRef}
         />
       </StudioShadowInteractionProvider>
+      </RenderQualityProvider>
     </Canvas>
   );
 }

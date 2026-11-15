@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import cleanShadowmapParsFragment from 'three/src/renderers/shaders/ShaderChunk/shadowmap_pars_fragment.glsl.js';
+import {
+  DEFAULT_RENDER_QUALITY,
+  getRenderQualityBudget,
+  type RenderQualityPreset,
+} from './renderQuality';
 
 /**
  * Install one shared PCSS filter for the WebGL renderer (Three.js r170).
@@ -18,20 +23,25 @@ export type ProgressiveShadowProfile = 'interactive' | 'studio';
 
 const MARKER = '/* MOCKUP_STUDIO_PCSS_V6 */';
 
-const PROFILE_SAMPLES: Record<ProgressiveShadowProfile, { blockers: number; filter: number }> = {
-  // Orbit / gizmo / playback — ~4× fewer depth taps than studio.
-  interactive: { blockers: 6, filter: 10 },
-  // Idle preview + export: full contact-hardening filter.
-  studio: { blockers: 16, filter: 24 },
-};
+let activeRenderQuality: RenderQualityPreset = DEFAULT_RENDER_QUALITY;
+
+function profileSamples(profile: ProgressiveShadowProfile): { blockers: number; filter: number } {
+  const budget = getRenderQualityBudget(activeRenderQuality);
+  return profile === 'interactive' ? budget.pcssInteractive : budget.pcssStudio;
+}
 
 let activeProfile: ProgressiveShadowProfile = 'studio';
-const cachedByProfile: Partial<Record<ProgressiveShadowProfile, string>> = {};
+const cachedByProfile: Partial<Record<string, string>> = {};
 /** Canvases currently requesting each profile — interactive wins while any pane is busy. */
 const profileUsers: Record<ProgressiveShadowProfile, number> = {
   interactive: 0,
   studio: 0,
 };
+
+function cacheKey(profile: ProgressiveShadowProfile): string {
+  const s = profileSamples(profile);
+  return `${activeRenderQuality}:${profile}:${s.blockers}x${s.filter}`;
+}
 
 function buildPcssGlsl(blockers: number, filter: number): string {
   return /* glsl */ `
@@ -90,10 +100,11 @@ float studioProgressiveShadow(
 }
 
 function buildProgressiveShadowChunk(profile: ProgressiveShadowProfile): string | null {
-  const hit = cachedByProfile[profile];
+  const key = cacheKey(profile);
+  const hit = cachedByProfile[key];
   if (hit) return hit;
   const original = cleanShadowmapParsFragment;
-  const { blockers, filter } = PROFILE_SAMPLES[profile];
+  const { blockers, filter } = profileSamples(profile);
   const pcss = buildPcssGlsl(blockers, filter);
 
   const start = '#ifdef USE_SHADOWMAP';
@@ -116,7 +127,7 @@ function buildProgressiveShadowChunk(profile: ProgressiveShadowProfile): string 
   return clamp(1.0 - (1.0 - shadow) * shadowIntensity, 0.0, 1.0);
 #endif`;
   shader = shader.slice(0, at) + replacement + shader.slice(at + frustumStart.length);
-  cachedByProfile[profile] = shader;
+  cachedByProfile[key] = shader;
   return shader;
 }
 
@@ -154,6 +165,22 @@ export function installProgressiveShadowShader(
 
 export function getProgressiveShadowProfile(): ProgressiveShadowProfile {
   return activeProfile;
+}
+
+/** Apply Performance / Balanced / Ultra PCSS tap budgets. Returns true if the shader changed. */
+export function setProgressiveShadowQuality(preset: RenderQualityPreset): boolean {
+  if (activeRenderQuality === preset) return false;
+  activeRenderQuality = preset;
+  // Drop cached GLSL so the next install rebuilds with new sample counts.
+  for (const key of Object.keys(cachedByProfile)) delete cachedByProfile[key];
+  const desired: ProgressiveShadowProfile = profileUsers.interactive > 0
+    ? 'interactive'
+    : 'studio';
+  return installProgressiveShadowShader(desired);
+}
+
+export function getProgressiveShadowQuality(): RenderQualityPreset {
+  return activeRenderQuality;
 }
 
 /**

@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import type { ShadowQuality, Vec3 } from '../types';
+import {
+  DEFAULT_RENDER_QUALITY,
+  getRenderQualityBudget,
+  type RenderQualityPreset,
+} from './renderQuality';
 
 /**
  * Internal render quality.
@@ -21,6 +26,7 @@ export const STUDIO_SHADOW_IDLE_MS = 400;
  * never dispose/reallocate. Export may bump to 2048/4096. Interactive freezes
  * updates and uses a thinner PCSS kernel instead of resizing the atlas mid-orbit.
  */
+/** @deprecated Prefer getRenderQualityBudget(preset) — kept for docs / benches. */
 export const SHADOW_MAP_BUDGET = {
   interactive: 1024,
   preview: 1024,
@@ -256,13 +262,20 @@ export function resolveKeyShadowMapSize(
   mode: StudioShadowMode,
   exportBoost: boolean,
   maxTextureSize: number,
+  renderQuality: RenderQualityPreset = DEFAULT_RENDER_QUALITY,
 ): number {
   // Stable live atlas (even while orbiting) so mode flips never dispose/reallocate.
   // Orbit freezes updates + thinner PCSS; export may bump for stills/video.
   void mode;
-  let size: number = SHADOW_MAP_BUDGET.preview;
-  if (exportBoost || quality === 'ultra') size = SHADOW_MAP_BUDGET.export;
-  else if (quality === 'high') size = Math.max(SHADOW_MAP_BUDGET.preview, 2048);
+  const budget = getRenderQualityBudget(renderQuality);
+  let size: number = budget.previewShadowMap;
+  if (exportBoost) size = budget.exportShadowMap;
+  else if (quality === 'ultra') size = Math.max(budget.previewShadowMap, Math.min(4096, budget.exportShadowMap));
+  else if (quality === 'high') size = Math.max(budget.previewShadowMap, 2048);
+  // Performance preset caps High/Ultra map requests so the atlas stays cheap.
+  if (renderQuality === 'performance' && !exportBoost) {
+    size = Math.min(size, budget.previewShadowMap);
+  }
   const cap = Math.max(512, Math.min(4096, maxTextureSize || 4096));
   let out = size;
   while (out > cap) out = Math.floor(out / 2);
@@ -275,12 +288,15 @@ export function resolveFloorShadowResolution(
   mode: StudioShadowMode,
   exportBoost: boolean,
   maxTextureSize: number,
+  renderQuality: RenderQualityPreset = DEFAULT_RENDER_QUALITY,
 ): number {
   // Stable live resolution in both modes — plate stays visible/frozen on orbit.
   void mode;
-  let size: number = SHADOW_MAP_BUDGET.preview;
-  if (exportBoost || quality === 'ultra' || quality === 'high') {
-    size = exportBoost ? 2048 : Math.max(SHADOW_MAP_BUDGET.preview, 1024);
+  const budget = getRenderQualityBudget(renderQuality);
+  let size: number = budget.floorPreview;
+  if (exportBoost) size = budget.floorExport;
+  else if (quality === 'ultra' || quality === 'high') {
+    size = Math.max(budget.floorPreview, renderQuality === 'performance' ? budget.floorPreview : 1024);
   }
   const cap = Math.max(512, Math.min(2048, maxTextureSize || 2048));
   let out = size;
@@ -293,9 +309,11 @@ export function resolveSceneLightShadowMapSize(
   mode: StudioShadowMode,
   exportBoost: boolean,
   maxTextureSize: number,
+  renderQuality: RenderQualityPreset = DEFAULT_RENDER_QUALITY,
 ): number {
   void mode;
-  let size = exportBoost ? 2048 : SHADOW_MAP_BUDGET.preview;
+  const budget = getRenderQualityBudget(renderQuality);
+  let size = exportBoost ? budget.sceneLightExport : budget.sceneLightPreview;
   const cap = Math.max(512, Math.min(2048, maxTextureSize || 2048));
   let out = size;
   while (out > cap) out = Math.floor(out / 2);
