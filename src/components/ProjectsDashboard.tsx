@@ -55,6 +55,7 @@ import {
 } from '../lib/recentProjects';
 import { formatSyncedClock, lastSyncedStatus, useLastSyncedAt, type SyncConflict } from '../lib/cloudSync';
 import type { RecentScreenshot } from '../lib/recentScreenshots';
+import { subscribeRuntimePromoted } from '../lib/shippedTemplates';
 import {
   getCompositionTemplate,
   listCatalogTemplatesForStore,
@@ -85,6 +86,7 @@ import {
   isTemplateInstalled,
   loadInstalledTemplateIds,
   packForTemplate,
+  storePackForCloudTemplate,
   TEMPLATE_STORE_PACKS,
   type StorePackId,
   uninstallTemplates,
@@ -93,7 +95,12 @@ import { APP_LOGO_SRC } from '../lib/appBrand';
 import DeviceModelThumb from './DeviceModelThumb';
 import TemplateThumb, { ProjectThumb } from './TemplateThumb';
 import AdminPublishedTemplatesPanel from './AdminPublishedTemplatesPanel';
-import type { PublishedTemplateRecord } from '../lib/publishedTemplates';
+import {
+  getPublishedCatalogStubs,
+  installCloudTemplate,
+  subscribePublishedCatalog,
+  type PublishedTemplateRecord,
+} from '../lib/publishedTemplates';
 import newProjectArt from '../assets/dashboard/new-project.svg';
 import iconGrid from '../assets/dashboard/icon-grid.svg';
 import iconCube from '../assets/dashboard/icon-cube.svg';
@@ -711,6 +718,15 @@ export default function ProjectsDashboard({
   const includeAllTemplates = Boolean(isDeveloperToolset);
   const [installedTemplateIds, setInstalledTemplateIds] = useState(() => loadInstalledTemplateIds());
   const installedIdSet = useMemo(() => new Set(installedTemplateIds), [installedTemplateIds]);
+  const [catalogTick, setCatalogTick] = useState(0);
+  const [libraryTick, setLibraryTick] = useState(0);
+  const [cloudDownloadingId, setCloudDownloadingId] = useState<string | null>(null);
+  useEffect(() => subscribePublishedCatalog(() => {
+    setCatalogTick((n) => n + 1);
+  }), []);
+  useEffect(() => subscribeRuntimePromoted(() => {
+    setLibraryTick((n) => n + 1);
+  }), []);
   const canUseDeviceLayouts = featureTier !== 'free' || includeAllTemplates;
   const canUseSocialAssets = canUseDeviceLayouts;
   const canUseProMaxPack = canUseProMaxTemplates(featureTier) || includeAllTemplates;
@@ -723,13 +739,7 @@ export default function ProjectsDashboard({
       setTemplateCategory('saved');
     }
   }, [templateCategory, canUseProMaxPack, canUseDeviceLayouts]);
-  const templatesList = (category: Exclude<TemplateCategory, 'saved'>) => {
-    const list = templatesVisibleForTier(category, {
-      tier: featureTier,
-      includeAll: includeAllTemplates,
-      // User library only shows downloaded templates — never the full catalog by default.
-      installedIds: includeAllTemplates ? null : installedIdSet,
-    });
+  const filterTemplateQuery = useCallback((list: CompositionTemplate[]) => {
     const needle = query.trim().toLowerCase();
     if (!needle || section !== 'templates') return list;
     return list.filter((item) => (
@@ -737,11 +747,25 @@ export default function ProjectsDashboard({
       || item.description.toLowerCase().includes(needle)
       || item.badge.toLowerCase().includes(needle)
     ));
-  };
+  }, [query, section]);
+
   // Listing is install + tier gated inside templatesVisibleForTier (not prefilled).
-  const compositionTemplates = templatesList('scenes');
-  const sceneTemplates = templatesList('devices');
-  const socialTemplates = templatesList('social');
+  // libraryTick refreshes when cloud scenes hydrate after download / sign-in.
+  const compositionTemplates = useMemo(() => filterTemplateQuery(templatesVisibleForTier('scenes', {
+    tier: featureTier,
+    includeAll: includeAllTemplates,
+    installedIds: includeAllTemplates ? null : installedIdSet,
+  })), [filterTemplateQuery, featureTier, includeAllTemplates, installedIdSet, libraryTick]);
+  const sceneTemplates = useMemo(() => filterTemplateQuery(templatesVisibleForTier('devices', {
+    tier: featureTier,
+    includeAll: includeAllTemplates,
+    installedIds: includeAllTemplates ? null : installedIdSet,
+  })), [filterTemplateQuery, featureTier, includeAllTemplates, installedIdSet, libraryTick]);
+  const socialTemplates = useMemo(() => filterTemplateQuery(templatesVisibleForTier('social', {
+    tier: featureTier,
+    includeAll: includeAllTemplates,
+    installedIds: includeAllTemplates ? null : installedIdSet,
+  })), [filterTemplateQuery, featureTier, includeAllTemplates, installedIdSet, libraryTick]);
   const templatesUpgradeHint = !includeAllTemplates && installedTemplateIds.length === 0
     ? 'Download templates from the Template store — nothing is installed by default.'
     : !includeAllTemplates && featureTier === 'free'
@@ -750,8 +774,21 @@ export default function ProjectsDashboard({
         ? 'Pro Max unlocks scenic packs in the Template store.'
         : null;
 
+  const resolveStoreTemplate = useCallback((templateId: string) => (
+    getCompositionTemplate(templateId)
+    ?? getPublishedCatalogStubs().find((item) => item.id === templateId)
+    ?? null
+  ), [catalogTick]);
+
   const storeTiles = useMemo(() => {
-    const catalog = listCatalogTemplatesForStore();
+    const shipped = listCatalogTemplatesForStore();
+    const cloud = getPublishedCatalogStubs();
+    const byId = new Map<string, CompositionTemplate>();
+    for (const item of shipped) byId.set(item.id, item);
+    for (const item of cloud) {
+      if (!byId.has(item.id)) byId.set(item.id, item);
+    }
+    const catalog = [...byId.values()];
     const featuredIds = new Set(FEATURED_STORE_TILES.map((tile) => tile.templateId));
     const tiles: StoreMasonryTile[] = [];
     for (const tile of FEATURED_STORE_TILES) {
@@ -760,7 +797,10 @@ export default function ProjectsDashboard({
     let cycle = 0;
     for (const template of catalog) {
       if (featuredIds.has(template.id)) continue;
-      const packId = packForTemplate(template.id)?.id;
+      const packId = packForTemplate(template.id)?.id
+        ?? (template.cloudPublished
+          ? storePackForCloudTemplate(template.accessTier).id
+          : null);
       if (!packId) continue;
       tiles.push({
         templateId: template.id,
@@ -770,7 +810,7 @@ export default function ProjectsDashboard({
       cycle += 1;
     }
     return tiles;
-  }, []);
+  }, [catalogTick]);
 
   const canDownloadPack = (packId: StorePackId) => {
     const pack = TEMPLATE_STORE_PACKS[packId];
@@ -782,9 +822,26 @@ export default function ProjectsDashboard({
     return false;
   };
 
-  const downloadStoreTemplate = (templateId: string, packId: StorePackId) => {
+  const downloadStoreTemplate = async (templateId: string, packId: StorePackId) => {
     if (!canDownloadPack(packId)) {
       onExplorePro();
+      return;
+    }
+    const template = resolveStoreTemplate(templateId);
+    if (template?.cloudPublished) {
+      if (cloudDownloadingId) return;
+      setCloudDownloadingId(templateId);
+      try {
+        const result = await installCloudTemplate(templateId);
+        if (!result.ok || !result.installedIds) {
+          onNotify?.(result.error || 'Could not download template.');
+          return;
+        }
+        setInstalledTemplateIds(result.installedIds);
+        onNotify?.(`Installed “${result.template?.label || template.label}”`);
+      } finally {
+        setCloudDownloadingId(null);
+      }
       return;
     }
     const next = installTemplates([templateId]);
@@ -1871,7 +1928,9 @@ export default function ProjectsDashboard({
                 Every template is downloadable. Nothing appears under Templates until you install it here.
               </p>
               <div className="dash-store-pack-actions" role="list" aria-label="Download packs">
-                {(Object.values(TEMPLATE_STORE_PACKS) as typeof TEMPLATE_STORE_PACKS[StorePackId][]).map((pack) => {
+                {(Object.values(TEMPLATE_STORE_PACKS) as typeof TEMPLATE_STORE_PACKS[StorePackId][])
+                  .filter((pack) => pack.templateIds.length > 0)
+                  .map((pack) => {
                   const unlocked = canDownloadPack(pack.id);
                   const installed = isPackFullyInstalled(pack.id);
                   return (
@@ -1918,26 +1977,30 @@ export default function ProjectsDashboard({
               </div>
               <div className="dash-store-masonry" role="list">
                 {storeTiles.map((tile) => {
-                  const template = getCompositionTemplate(tile.templateId);
+                  const template = resolveStoreTemplate(tile.templateId);
                   if (!template) return null;
                   const pack = TEMPLATE_STORE_PACKS[tile.packId];
                   const unlocked = canDownloadPack(tile.packId);
                   const installed = installedIdSet.has(tile.templateId) || isTemplateInstalled(tile.templateId);
-                  const actionLabel = installed
-                    ? 'Open'
-                    : unlocked
-                      ? 'Download'
-                      : pack.tier === 'pro_max'
-                        ? (licensingDisabled ? 'View plans' : 'Buy Pro Max')
-                        : pack.tier === 'free'
-                          ? 'Download'
-                          : (licensingDisabled ? 'View plans' : 'Buy Pro');
+                  const downloading = cloudDownloadingId === tile.templateId;
+                  const actionLabel = downloading
+                    ? 'Downloading…'
+                    : installed
+                      ? 'Open'
+                      : unlocked
+                        ? 'Download'
+                        : pack.tier === 'pro_max'
+                          ? (licensingDisabled ? 'View plans' : 'Buy Pro Max')
+                          : pack.tier === 'free'
+                            ? 'Download'
+                            : (licensingDisabled ? 'View plans' : 'Buy Pro');
                   return (
                     <button
                       key={`${tile.packId}:${tile.templateId}`}
                       type="button"
                       role="listitem"
                       className={`dash-store-pack is-${tile.masonry}${installed ? ' is-owned' : ''}`}
+                      disabled={downloading}
                       onClick={() => {
                         if (!unlocked) {
                           onExplorePro();
@@ -1947,7 +2010,7 @@ export default function ProjectsDashboard({
                           onStartTemplate(template);
                           return;
                         }
-                        downloadStoreTemplate(tile.templateId, tile.packId);
+                        void downloadStoreTemplate(tile.templateId, tile.packId);
                       }}
                     >
                       <span className="dash-store-pack-media" aria-hidden>
@@ -1963,8 +2026,10 @@ export default function ProjectsDashboard({
                           ))}
                         </ul>
                       </span>
-                      <span className={`dash-store-pack-cta${installed || !unlocked ? '' : ' is-primary'}`}>
-                        <Download size={13} aria-hidden />
+                      <span className={`dash-store-pack-cta${installed || !unlocked || downloading ? '' : ' is-primary'}`}>
+                        {downloading
+                          ? <LoaderCircle size={13} aria-hidden className="spin" />
+                          : <Download size={13} aria-hidden />}
                         {actionLabel}
                       </span>
                     </button>

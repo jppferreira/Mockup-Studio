@@ -12,7 +12,9 @@ export type StorePackId =
   | 'multi-device'
   | 'art-director'
   | 'social-studio'
-  | 'desk-set';
+  | 'desk-set'
+  | 'studio-published-free'
+  | 'studio-published-pro';
 
 export type StorePackMeta = {
   id: StorePackId;
@@ -140,7 +142,38 @@ export const TEMPLATE_STORE_PACKS: Record<StorePackId, StorePackMeta> = {
       'concrete-lean',
     ],
   },
+  /** Dynamic cloud publishes — templateIds stay empty; tiles use these packs one-by-one. */
+  'studio-published-free': {
+    id: 'studio-published-free',
+    name: 'Studio Templates',
+    priceLabel: 'Free download',
+    tier: 'free',
+    includes: [
+      'Published by Mok Studio',
+      'Download when you need it',
+      'Updates without an app update',
+    ],
+    templateIds: [],
+  },
+  'studio-published-pro': {
+    id: 'studio-published-pro',
+    name: 'Studio Pro Templates',
+    priceLabel: 'Included with Pro',
+    tier: 'pro',
+    includes: [
+      'Published by Mok Studio',
+      'Pro layouts & compositions',
+      'Download when you need it',
+    ],
+    templateIds: [],
+  },
 };
+
+export function storePackForCloudTemplate(accessTier: 'free' | 'pro' | undefined): StorePackMeta {
+  return accessTier === 'pro'
+    ? TEMPLATE_STORE_PACKS['studio-published-pro']
+    : TEMPLATE_STORE_PACKS['studio-published-free'];
+}
 
 const PACK_BY_TEMPLATE = (() => {
   const map = new Map<string, StorePackId>();

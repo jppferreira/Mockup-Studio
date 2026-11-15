@@ -1059,9 +1059,11 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         /* ignore pack parse errors */
       }
     }
-    // Versioned published library — available without an app update.
-    const published = await syncPublishedTemplatesIntoLibrary().catch(() => ({ ok: false, count: 0 }));
-    if (applied || (published.ok && published.count > 0)) {
+    // Published store catalog (metadata) + hydrate only already-installed cloud scenes.
+    const published = await syncPublishedTemplatesIntoLibrary().catch(
+      (): { ok: boolean; count: number; hydrated?: number } => ({ ok: false, count: 0 }),
+    );
+    if (applied || (published.ok && (published.count > 0 || (published.hydrated ?? 0) > 0))) {
       setTemplatesTick((n) => n + 1);
       return true;
     }
@@ -6728,6 +6730,12 @@ export default function App({ onShowOnboarding }: { onShowOnboarding?: () => voi
         return;
       }
       setLinkedPublishedTemplateId(result.template.id);
+      // Drop stale baked card covers (slug + uuid) so library cards refresh.
+      const composition = toCompositionTemplate(result.template);
+      invalidateTemplateThumb(composition.id, projectFromTemplate(composition));
+      if (result.template.id !== composition.id) {
+        invalidateTemplateThumb(result.template.id, projectFromTemplate(composition));
+      }
       setTemplatesTick((n) => n + 1);
       setPublishModalOpen(false);
       setEditingPublishedTemplate(null);

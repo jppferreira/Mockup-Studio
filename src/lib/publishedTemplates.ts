@@ -11,6 +11,10 @@ import {
   registerRuntimePromoted,
 } from './shippedTemplates';
 import {
+  installTemplates,
+  loadInstalledTemplateIds,
+} from './installedTemplates';
+import {
   compositionFromProject,
 } from './userLibrary';
 import type { CompositionTemplate, ShippedTemplateCategory } from './templates';
@@ -126,6 +130,55 @@ type VersionRow = {
 let publishedCache: { at: number; items: PublishedTemplateRecord[] } | null = null;
 const CACHE_MS = 45_000;
 
+/** Lightweight store browse entries — scenes load only after download / hydrate. */
+let catalogStubs: CompositionTemplate[] = [];
+const catalogListeners = new Set<() => void>();
+
+function notifyCatalogListeners() {
+  catalogListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {
+      /* ignore subscriber errors */
+    }
+  });
+}
+
+function setCatalogStubs(next: CompositionTemplate[]) {
+  catalogStubs = next;
+  notifyCatalogListeners();
+}
+
+export function getPublishedCatalogStubs(): CompositionTemplate[] {
+  return catalogStubs;
+}
+
+export function subscribePublishedCatalog(listener: () => void) {
+  catalogListeners.add(listener);
+  return () => {
+    catalogListeners.delete(listener);
+  };
+}
+
+export function upsertPublishedCatalogStub(template: CompositionTemplate) {
+  const byId = new Map(catalogStubs.map((item) => [item.id, item]));
+  byId.set(template.id, template);
+  setCatalogStubs([...byId.values()]);
+}
+
+function compositionIdForRecord(record: PublishedTemplateRecord): string {
+  return record.slug || record.id;
+}
+
+function findPublishedRecord(
+  templates: PublishedTemplateRecord[],
+  templateId: string,
+): PublishedTemplateRecord | undefined {
+  return templates.find(
+    (item) => compositionIdForRecord(item) === templateId || item.id === templateId,
+  );
+}
+
 function isPublishCategory(value: string): value is PublishTemplateCategory {
   return (PUBLISH_TEMPLATE_CATEGORIES as readonly string[]).includes(value);
 }
@@ -199,7 +252,10 @@ export function parseTagInput(raw: string): string[] {
   return parseTags(raw);
 }
 
-function publicThumbUrl(path: string | null | undefined): string | null {
+function publicThumbUrl(
+  path: string | null | undefined,
+  cacheBust?: string | number | null,
+): string | null {
   if (!path) return null;
   const sb = getSupabase();
   if (!sb) return null;
@@ -207,7 +263,13 @@ function publicThumbUrl(path: string | null | undefined): string | null {
     ? path.slice(THUMB_BUCKET.length + 1)
     : path;
   const { data } = sb.storage.from(THUMB_BUCKET).getPublicUrl(relative);
-  return data.publicUrl || null;
+  const base = data.publicUrl || null;
+  if (!base) return null;
+  const bust = cacheBust == null || cacheBust === ''
+    ? ''
+    : `v=${encodeURIComponent(String(cacheBust))}`;
+  if (!bust) return base;
+  return `${base}${base.includes('?') ? '&' : '?'}${bust}`;
 }
 
 function mapRow(row: TemplateRow, extras?: {
@@ -227,7 +289,10 @@ function mapRow(row: TemplateRow, extras?: {
     category,
     tags: parseTags(row.tags),
     thumbnailPath: row.thumbnail_path,
-    thumbnailUrl: publicThumbUrl(row.thumbnail_path),
+    thumbnailUrl: publicThumbUrl(
+      row.thumbnail_path,
+      row.updated_at || row.published_at || row.current_version_id,
+    ),
     accessTier,
     status,
     currentVersionId: row.current_version_id,
@@ -355,7 +420,8 @@ async function uploadThumbnail(
   const { error } = await sb.storage.from(THUMB_BUCKET).upload(objectPath, blob, {
     contentType: blob.type || 'image/webp',
     upsert: true,
-    cacheControl: '3600',
+    // Short browser/CDN cache — cards also cache-bust via updated_at query param.
+    cacheControl: '60',
   });
   if (error) return { error: error.message || 'Could not upload preview.' };
   return { path: `${THUMB_BUCKET}/${objectPath}` };
@@ -520,9 +586,12 @@ export async function publishTemplate(input: PublishTemplateInput): Promise<Publ
     versionNumber,
   });
 
-  // Surface published templates in the live library without an app update.
-  if (record.status === 'published' && record.scene) {
-    registerRuntimePromoted([toCompositionTemplate(record)]);
+  // Store catalog gets a lightweight stub; full scene stays local until others download.
+  if (record.status === 'published') {
+    upsertPublishedCatalogStub(toCompositionTemplate({ ...record, scene: null }));
+    if (record.scene) {
+      registerRuntimePromoted([toCompositionTemplate(record)]);
+    }
   }
 
   return { ok: true, template: record };
@@ -551,6 +620,7 @@ export function toCompositionTemplate(record: PublishedTemplateRecord): Composit
     category: record.libraryCategory,
     cloudPublished: true,
     accessTier: record.accessTier,
+    thumbnailUrl: record.thumbnailUrl || null,
     // Free cloud publishes stay available on Free; Pro ones need Pro/Pro Max.
     proMaxPack: record.accessTier === 'pro',
   }, record.libraryCategory);
@@ -823,8 +893,11 @@ export async function deletePublishedTemplate(
   return { ok: true };
 }
 
-/** Pull published scenes into the in-memory library (customers + admin). */
-export async function syncPublishedTemplatesIntoLibrary(): Promise<{
+/**
+ * Prefetch published template metadata for the Template Store (no scene JSON).
+ * Keeps sign-in / catalog refresh fast.
+ */
+export async function prefetchPublishedCatalog(): Promise<{
   ok: boolean;
   count: number;
   error?: string;
@@ -834,11 +907,35 @@ export async function syncPublishedTemplatesIntoLibrary(): Promise<{
     return { ok: false, count: 0, error: listed.error };
   }
 
+  const stubs = listed.templates.map((item) => (
+    toCompositionTemplate({ ...item, scene: null })
+  ));
+  setCatalogStubs(stubs);
+  return { ok: true, count: stubs.length };
+}
+
+/**
+ * Load scene JSON only for cloud templates the user has already installed.
+ */
+export async function hydrateInstalledCloudTemplates(
+  installedIds?: readonly string[],
+): Promise<{ ok: boolean; count: number; error?: string }> {
+  const ids = new Set(installedIds ?? loadInstalledTemplateIds());
+  if (!ids.size) return { ok: true, count: 0 };
+
+  const listed = await listPublishedTemplates({ force: false, status: 'published' });
+  if (!listed.ok) {
+    return { ok: false, count: 0, error: listed.error };
+  }
+
+  if (!catalogStubs.length && listed.templates.length) {
+    setCatalogStubs(listed.templates.map((item) => toCompositionTemplate({ ...item, scene: null })));
+  }
+
   const scenes: CompositionTemplate[] = [];
   for (const item of listed.templates) {
-    if (item.accessTier === 'pro') {
-      // Metadata-only for locked tiles; still register a stub for browse if scene readable.
-    }
+    const compositionId = compositionIdForRecord(item);
+    if (!ids.has(compositionId) && !ids.has(item.id)) continue;
     const loaded = await loadTemplateWithScene(item.id);
     if (loaded.ok && loaded.template?.scene) {
       scenes.push(toCompositionTemplate(loaded.template));
@@ -849,6 +946,58 @@ export async function syncPublishedTemplatesIntoLibrary(): Promise<{
     registerRuntimePromoted(scenes);
   }
   return { ok: true, count: scenes.length };
+}
+
+/** Download one cloud template scene, register it, and mark it installed. */
+export async function installCloudTemplate(templateId: string): Promise<{
+  ok: boolean;
+  installedIds?: string[];
+  template?: CompositionTemplate;
+  error?: string;
+}> {
+  const listed = await listPublishedTemplates({ status: 'published' });
+  if (!listed.ok) {
+    return { ok: false, error: listed.error || 'Could not reach the template catalog.' };
+  }
+
+  const match = findPublishedRecord(listed.templates, templateId);
+  if (!match) {
+    return { ok: false, error: 'Template not found in the catalog.' };
+  }
+
+  const loaded = await loadTemplateWithScene(match.id);
+  if (!loaded.ok || !loaded.template?.scene) {
+    return { ok: false, error: loaded.error || 'Could not download template.' };
+  }
+
+  const composition = toCompositionTemplate(loaded.template);
+  registerRuntimePromoted([composition]);
+  upsertPublishedCatalogStub(composition);
+  const installedIds = installTemplates([composition.id]);
+  return { ok: true, installedIds, template: composition };
+}
+
+/**
+ * Catalog metadata for everyone + scene hydrate for installed ids only.
+ * Replaces the old “load every published scene on sign-in” path.
+ */
+export async function syncPublishedTemplatesIntoLibrary(): Promise<{
+  ok: boolean;
+  count: number;
+  hydrated?: number;
+  error?: string;
+}> {
+  const catalog = await prefetchPublishedCatalog();
+  if (!catalog.ok) {
+    return { ok: false, count: 0, error: catalog.error };
+  }
+  const hydrated = await hydrateInstalledCloudTemplates();
+  return {
+    ok: true,
+    count: catalog.count,
+    hydrated: hydrated.count,
+    error: hydrated.ok ? undefined : hydrated.error,
+  };
 }
 
 export function clearPublishedTemplateCache(): void {

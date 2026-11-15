@@ -190,6 +190,14 @@ interface Window {
     convertBlend?: (payload: {
       fileName: string;
       dataBase64: string;
+      /** Drop-relative path so sidecar texture folders line up with // links. */
+      relativePath?: string;
+      /** Texture / material sidecars selected with the .blend. */
+      sidecars?: Array<{
+        fileName: string;
+        relativePath?: string;
+        dataBase64: string;
+      }>;
     }) => Promise<
       | { ok: true; dataBase64: string; fileName: string }
       | { ok: false; error: string }

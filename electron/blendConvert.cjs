@@ -86,13 +86,85 @@ function scriptPath() {
   return path.join(__dirname, 'blend-to-glb.py');
 }
 
+/** Prevent path traversal when recreating drop-relative texture folders. */
+function safeRelativePath(raw, fallbackName) {
+  const cleaned = String(raw || fallbackName || 'file').replace(/\\/g, '/');
+  const parts = cleaned.split('/').filter((part) => part && part !== '.' && part !== '..');
+  const joined = parts.join('/');
+  return joined || (fallbackName || 'file');
+}
+
 /**
- * @param {{ fileName?: string, dataBase64?: string }} payload
+ * Place a sidecar next to the .blend, preserving relative folders from the drop
+ * so Blender `//textures/...` links still resolve.
+ */
+async function writeSidecar(tmpRoot, blendRelDir, sidecar) {
+  const fileName = typeof sidecar?.fileName === 'string' ? sidecar.fileName : '';
+  const dataBase64 = typeof sidecar?.dataBase64 === 'string' ? sidecar.dataBase64 : '';
+  if (!fileName || !dataBase64) return 0;
+  let bytes;
+  try {
+    bytes = Buffer.from(dataBase64, 'base64');
+  } catch {
+    return 0;
+  }
+  if (!bytes.length) return 0;
+
+  const relRaw = typeof sidecar.relativePath === 'string' && sidecar.relativePath
+    ? sidecar.relativePath
+    : fileName;
+  const rel = safeRelativePath(relRaw, fileName);
+  let targetRel = rel;
+  if (blendRelDir) {
+    const prefix = `${blendRelDir}/`;
+    if (rel.toLowerCase().startsWith(prefix.toLowerCase())) {
+      targetRel = rel.slice(prefix.length);
+    } else if (rel.includes('/')) {
+      // Different folder tree — still keep basename next to the blend.
+      targetRel = path.posix.basename(rel);
+    }
+  } else if (rel.includes('/')) {
+    // Keep nested texture folders under the temp root.
+    targetRel = rel.includes('/') ? rel.replace(/^[^/]+\//, '') : rel;
+    if (!targetRel || targetRel === rel) targetRel = rel;
+  }
+
+  const target = path.join(tmpRoot, ...safeRelativePath(targetRel, fileName).split('/'));
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await fsp.writeFile(target, bytes);
+  // Also drop a basename copy next to the blend for absolute / loose refs.
+  const baseCopy = path.join(tmpRoot, path.basename(fileName));
+  if (path.resolve(baseCopy) !== path.resolve(target)) {
+    try {
+      await fsp.writeFile(baseCopy, bytes);
+    } catch {
+      /* ignore duplicate basename write */
+    }
+  }
+  return bytes.byteLength;
+}
+
+/**
+ * @param {{
+ *   fileName?: string,
+ *   dataBase64?: string,
+ *   relativePath?: string,
+ *   sidecars?: Array<{ fileName?: string, relativePath?: string, dataBase64?: string }>,
+ * }} payload
  * @returns {Promise<{ ok: true, dataBase64: string, fileName: string } | { ok: false, error: string }>}
  */
 async function convertBlendToGlb(payload) {
   const fileName = typeof payload?.fileName === 'string' ? payload.fileName : 'model.blend';
   const dataBase64 = typeof payload?.dataBase64 === 'string' ? payload.dataBase64 : '';
+  const blendRel = safeRelativePath(
+    typeof payload?.relativePath === 'string' && payload.relativePath
+      ? payload.relativePath
+      : fileName,
+    fileName,
+  );
+  const blendRelDir = blendRel.includes('/')
+    ? blendRel.slice(0, blendRel.lastIndexOf('/'))
+    : '';
   if (!dataBase64) return { ok: false, error: 'No Blender file data received.' };
   if (!/\.blend$/i.test(fileName)) {
     return { ok: false, error: 'Only .blend files can be converted this way.' };
@@ -107,6 +179,17 @@ async function convertBlendToGlb(payload) {
   if (!buffer.length) return { ok: false, error: 'The .blend file is empty.' };
   if (buffer.byteLength > MAX_BLEND_BYTES) {
     return { ok: false, error: 'Blender file is too large (max 80 MB).' };
+  }
+
+  const sidecars = Array.isArray(payload?.sidecars) ? payload.sidecars : [];
+  let sidecarBytes = 0;
+  for (const side of sidecars) {
+    const b64 = typeof side?.dataBase64 === 'string' ? side.dataBase64 : '';
+    // Rough size from base64 length before decoding everything.
+    sidecarBytes += Math.floor((b64.length * 3) / 4);
+  }
+  if (buffer.byteLength + sidecarBytes > MAX_BLEND_BYTES * 1.5) {
+    return { ok: false, error: 'Blender file and textures are too large together (max ~120 MB).' };
   }
 
   const py = scriptPath();
@@ -128,6 +211,9 @@ async function convertBlendToGlb(payload) {
 
   try {
     await fsp.writeFile(inputPath, buffer);
+    for (const side of sidecars.slice(0, 64)) {
+      await writeSidecar(tmpRoot, blendRelDir, side);
+    }
     await execFileAsync(blender, [
       '--background',
       '--python',

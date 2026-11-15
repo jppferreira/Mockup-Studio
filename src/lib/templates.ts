@@ -63,11 +63,16 @@ export interface CompositionTemplate {
   category: TemplateCategory;
   /**
    * Admin-published global template from Supabase.
-   * These skip the Template Store install gate and reach every signed-in user.
+   * Browse in the Template Store; scenes load only after download.
    */
   cloudPublished?: boolean;
   /** Availability for cloud-published templates. */
   accessTier?: 'free' | 'pro';
+  /**
+   * Cloud preview URL (Supabase storage). When set, cards prefer this over a
+   * locally baked WebGL thumb so admin re-publishes update immediately.
+   */
+  thumbnailUrl?: string | null;
   /**
    * Pro Max template / motion pack entry.
    * Scene compositions are the pack by default; device layouts stay on Pro.
@@ -1032,7 +1037,7 @@ export function isProMaxPackTemplate(template: Pick<CompositionTemplate, 'catego
 /**
  * Templates visible for a license tier + local installs.
  * - Catalog templates are downloadable from the Template Store (not pre-installed)
- * - Admin cloud-published templates skip the install gate and reach all signed-in users
+ * - Admin cloud-published templates also require download; scenes are not auto-loaded
  * - free → free cloud publishes + downloaded starter layouts
  * - pro → above + Pro cloud publishes + device layouts / social (when installed)
  * - pro_max → above + scene compositions (when installed)
@@ -1056,8 +1061,7 @@ export function templatesVisibleForTier(
       : new Set(options.installedIds))
     : null;
   if (installed) {
-    // Cloud-published templates are pushed by admin to everyone — no install step.
-    list = list.filter((item) => item.cloudPublished || installed.has(item.id));
+    list = list.filter((item) => installed.has(item.id));
   }
   const tier = options.tier;
   if (tier === 'free') {

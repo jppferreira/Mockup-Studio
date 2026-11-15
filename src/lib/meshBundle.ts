@@ -60,11 +60,34 @@ function base64ToBytes(base64: string): ArrayBuffer {
   return out.buffer;
 }
 
-async function convertBlendViaDesktop(file: File): Promise<ArrayBuffer> {
+const BLEND_SIDECAR_EXT = new Set([
+  'png', 'jpg', 'jpeg', 'webp', 'tga', 'bmp', 'gif', 'tif', 'tiff', 'exr', 'hdr', 'mtl', 'bin',
+]);
+
+async function convertBlendViaDesktop(mesh: File, companions: File[]): Promise<ArrayBuffer> {
   const api = window.mockupDesktop?.convertBlend;
   if (!api) throw dccError('blend');
-  const dataBase64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
-  const result = await api({ fileName: file.name, dataBase64 });
+  const dataBase64 = bytesToBase64(new Uint8Array(await mesh.arrayBuffer()));
+  const sidecars: Array<{ fileName: string; relativePath: string; dataBase64: string }> = [];
+  for (const file of companions) {
+    if (file === mesh) continue;
+    const ext = extensionOf(file);
+    if (!BLEND_SIDECAR_EXT.has(ext) && !TEXTURE_EXT.test(file.name)) continue;
+    // Skip other mesh/DCC files — only textures and material sidecars.
+    if (MESH_EXT.has(ext) || DCC_EXT.has(ext)) continue;
+    sidecars.push({
+      fileName: file.name,
+      relativePath: file.webkitRelativePath || file.name,
+      dataBase64: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+    });
+    if (sidecars.length >= 64) break;
+  }
+  const result = await api({
+    fileName: mesh.name,
+    relativePath: mesh.webkitRelativePath || mesh.name,
+    dataBase64,
+    sidecars,
+  });
   if (!result.ok) throw new Error(result.error || 'Could not convert this .blend file.');
   return base64ToBytes(result.dataBase64);
 }
@@ -624,6 +647,10 @@ async function refinePackedGlb(
 ): Promise<{ buffer: ArrayBuffer; sceneLights: SceneLight[] }> {
   if (!options?.keepLights) return { buffer, sceneLights: [] };
 
+  // Parse only to pull luminaires into the Light panel. Keep the source GLB
+  // bytes intact — re-exporting through Three strips Blender composition
+  // materials (transmission, clearcoat maps, packed textures). DeviceCanvas
+  // already calls stripSceneHelpers on mount so embedded lights do not double-light.
   const loader = new GLTFLoader();
   let root: THREE.Object3D | null = null;
   try {
@@ -633,12 +660,9 @@ async function refinePackedGlb(
       });
     });
     root = gltf.scene;
-    const sceneLights = extractSceneLights(root);
-    stripSceneHelpers(root);
-    prepareMaterials(root);
     if (!meshCount(root)) throw new Error('This file has no mesh.');
-    const packed = await exportGlb(holdRootTransform(root), 'GLB');
-    return { buffer: packed, sceneLights };
+    const sceneLights = extractSceneLights(root);
+    return { buffer, sceneLights };
   } finally {
     if (root) disposeRoot(root);
   }
@@ -664,7 +688,7 @@ export async function bundleMeshFiles(
   const keepLights = options?.keepLights === true;
 
   if (format === 'Blender') {
-    const converted = await convertBlendViaDesktop(mesh);
+    const converted = await convertBlendViaDesktop(mesh, files);
     const refined = await refinePackedGlb(converted, { keepLights: true });
     return {
       buffer: refined.buffer,

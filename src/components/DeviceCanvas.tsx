@@ -1413,9 +1413,11 @@ function GltfDeviceContent({
       : findScreenMaterial(root, device.screenMat);
     if (found && device.lockMaterials) {
       const name = found.name || '';
+      // Exact display slots only — Blender composition mats like "Screen_Wall"
+      // must keep their authored finish when lockMaterials is on.
       const looksLikeScreen = Boolean(found.userData?.isolatedDisplay)
         || isDisplayScreenMaterialName(name)
-        || (/screen|display|oled|lcd/i.test(name) && !/glass/i.test(name));
+        || name === device.screenMat;
       if (!looksLikeScreen) found = null;
     }
     if (found) {

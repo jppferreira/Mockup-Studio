@@ -138,7 +138,11 @@ export default function AdminPublishedTemplatesPanel({
               <article key={item.id} className="admin-published-row" role="listitem">
                 <div className={`admin-published-thumb${item.thumbnailUrl ? '' : ' is-empty'}`}>
                   {item.thumbnailUrl ? (
-                    <img src={item.thumbnailUrl} alt="" />
+                    <img
+                      src={item.thumbnailUrl}
+                      alt=""
+                      key={`${item.id}:${item.updatedAt}:${item.thumbnailPath || ''}`}
+                    />
                   ) : (
                     <span>No preview</span>
                   )}

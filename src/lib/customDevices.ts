@@ -317,11 +317,11 @@ export async function inspectGltfBuffer(buffer: ArrayBuffer): Promise<InspectedM
     }
   });
   const materialNames = [...names].sort((a, b) => a.localeCompare(b));
-  // Only trust an explicit display slot — never fall back to the first material
-  // (that rewrote random body finishes into a black emissive "screen").
+  // Only trust an exact display slot name — never match Blender composition
+  // finishes like "Screen_Wall" / "DisplayPlastic" (that rewrote them into a
+  // black emissive screenshot plate).
   const suggestedScreenMat =
-    materialNames.find((n) => /screen|display|oled|lcd/i.test(n) && !/glass/i.test(n))
-    ?? materialNames.find((n) => /^(screen|display|oled|lcd)([._-]?\d+)?$/i.test(n))
+    materialNames.find((n) => /^(screen|display|oled|lcd)([._-]?\d+)?$/i.test(n))
     ?? null;
   const suggestedGlassMats = materialNames.filter((n) => {
     if (suggestedScreenMat && n === suggestedScreenMat) return false;

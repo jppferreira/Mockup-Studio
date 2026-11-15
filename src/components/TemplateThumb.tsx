@@ -340,6 +340,7 @@ export default function TemplateThumb({ template }: { template: CompositionTempl
     [template],
   );
   const whiteStudio = hasWhiteStudioSet(project);
+  const cloudSrc = template.thumbnailUrl?.trim() || null;
   const src = useSyncExternalStore(
     subscribe,
     () => cache.get(cacheId(template.id)) ?? null,
@@ -347,13 +348,22 @@ export default function TemplateThumb({ template }: { template: CompositionTempl
   );
 
   useEffect(() => {
+    // Cloud-published covers come from Supabase — skip the local bake queue.
+    if (cloudSrc) {
+      releaseThumb(template.id);
+      return;
+    }
     requestThumb(template.id, project);
     return () => releaseThumb(template.id);
-  }, [template.id, project]);
+  }, [template.id, project, cloudSrc]);
+
+  const displaySrc = cloudSrc || src;
 
   return (
     <span className={`template-shot${whiteStudio ? ' is-white-studio' : ''}`}>
-      {src ? <img src={src} alt="" /> : <TemplatePreview layout={template.preview} />}
+      {displaySrc
+        ? <img src={displaySrc} alt="" key={displaySrc} />
+        : <TemplatePreview layout={template.preview} />}
     </span>
   );
 }
