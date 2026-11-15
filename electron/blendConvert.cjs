@@ -208,22 +208,41 @@ async function convertBlendToGlb(payload) {
   const safeStem = path.basename(fileName, path.extname(fileName)).replace(/[^\w.-]+/g, '_').slice(0, 64) || 'model';
   const inputPath = path.join(tmpRoot, `${safeStem}.blend`);
   const outputPath = path.join(tmpRoot, `${safeStem}.glb`);
+  // Copy the exporter into tmp. Blender is a separate process and cannot read
+  // scripts from app.asar, nor from macOS TCC-protected folders (Downloads /
+  // Desktop) when the repo or drop lives there — Node can, Blender cannot.
+  const pyTmp = path.join(tmpRoot, 'blend-to-glb.py');
 
   try {
+    // readFile+writeFile (not copyFile) so asar-packed builds still work —
+    // Electron can read the virtual asar path; Blender cannot.
+    await fsp.writeFile(pyTmp, await fsp.readFile(py));
     await fsp.writeFile(inputPath, buffer);
     for (const side of sidecars.slice(0, 64)) {
       await writeSidecar(tmpRoot, blendRelDir, side);
     }
-    await execFileAsync(blender, [
+    const { stdout, stderr } = await execFileAsync(blender, [
       '--background',
       '--python',
-      py,
+      pyTmp,
       '--',
       '--input',
       inputPath,
       '--output',
       outputPath,
     ]);
+    // Blender often exits 0 even when --python failed to open (TCC / missing
+    // file). Prefer an explicit missing-output message over a raw ENOENT.
+    if (!fs.existsSync(outputPath)) {
+      const detail = (stderr || stdout || '').trim();
+      const clipped = detail.length > 500 ? `${detail.slice(0, 500)}…` : detail;
+      return {
+        ok: false,
+        error: clipped
+          ? `Could not extract this .blend with Blender. ${clipped}`
+          : 'Could not extract this .blend with Blender. No GLB was written.',
+      };
+    }
     const glb = await fsp.readFile(outputPath);
     if (glb.byteLength < 12) {
       return { ok: false, error: 'Blender did not produce a valid GLB.' };

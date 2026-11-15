@@ -74,6 +74,9 @@
       "electron/**/*",
       "package.json"
     ],
+    "asarUnpack": [
+      "electron/blend-to-glb.py"
+    ],
     "afterSign": "scripts/notarize.cjs",
     "fileAssociations": [
       {

@@ -10,6 +10,9 @@
     "electron/**/*",
     "package.json"
   ],
+  "asarUnpack": [
+    "electron/blend-to-glb.py"
+  ],
   "protocols": [
     {
       "name": "mokstudio Auth",
